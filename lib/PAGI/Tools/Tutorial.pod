@@ -47,13 +47,13 @@ in this distribution simply make the common cases shorter. Here is the same
 response built as a L<PAGI::Response> value:
 
   use Future::AsyncAwait;
-  use PAGI::Response qw(text_response json_response);
+  use PAGI::Response qw(response);
   use PAGI::Utils qw(invoke_app);
 
   my $app = async sub {
       my ($scope, $receive, $send) = @_;
       await invoke_app(
-          text_response('Hello, world!'),
+          response('Text', 'Hello, world!'),
           $scope, $receive, $send,
       );
   };
@@ -63,7 +63,7 @@ application protocol as any other PAGI component. Returning JSON is just as
 short:
 
   await invoke_app(
-      json_response({ hello => 'world' }),
+      response('JSON', { hello => 'world' }),
       $scope, $receive, $send,
   );
 
@@ -92,16 +92,16 @@ handlers receive their direct protocol objects:
 
   use Future::AsyncAwait;
   use PAGI::Routing qw(:routes);
-  use PAGI::Response qw(html_response json_response);
+  use PAGI::Response qw(response);
 
   async sub home {
       my ($request) = @_;
-      return html_response('<h1>Home</h1>');
+      return response('HTML', '<h1>Home</h1>');
   }
 
   async sub user {
       my ($request) = @_;
-      return json_response({ id => $request->path_param('id') });
+      return response('JSON', { id => $request->path_param('id') });
   }
 
   my $routing = router(
@@ -307,7 +307,7 @@ route. When an ordinary application class owns several paths, have a
 C<routing()> method return an immutable Router:
 
   package MyApp::People;
-  use PAGI::Response qw(text_response);
+  use PAGI::Response qw(response);
   use PAGI::Routing qw(route router);
 
   sub new {
@@ -315,11 +315,11 @@ C<routing()> method return an immutable Router:
       return bless {}, $class;
   }
 
-  sub index { return text_response('People') }
+  sub index { return response('Text', 'People') }
 
   sub show {
       my ($self, $request) = @_;
-      return text_response('Person ' . $request->path_param('id'));
+      return response('Text', 'Person ' . $request->path_param('id'));
   }
 
   sub routing {
@@ -567,14 +567,11 @@ trusted selected path and uses a PAGI C<file> event. Stream runs a fresh
 producer and Writer for each invocation. Nothing consumes a source merely to
 guess whether it is finite.
 
-  use PAGI::Response qw(
-      response text_response html_response json_response
-      redirect_response empty_response file_response stream_response
-  );
+  use PAGI::Response qw(response);
   use PAGI::Response::Text ();
 
   my $text = PAGI::Response::Text->new('Hello'); # class form
-  my $json = json_response({ ok => \1 });          # factory form
+  my $json = response('JSON', { ok => \1 });          # factory form
 
 The base C<< PAGI::Response->new($bytes) >> accepts already encoded bytes. Text and HTML
 strictly encode Unicode as UTF-8; JSON serializes one finite Perl value and
@@ -599,7 +596,7 @@ Response object is the common case:
 
   route('/health' => sub {
       my ($request) = @_;
-      return json_response(
+      return response('JSON',
           { ok => \1 },
           status  => 200,
           headers => ['X-Request-ID' => request_id($request)],
@@ -612,7 +609,7 @@ A native PAGI application owns all three channels and delegates explicitly:
 
   my $app = async sub {
       my ($scope, $receive, $send) = @_;
-      my $response = json_response({ created => \1 }, status => 201);
+      my $response = response('JSON', { created => \1 }, status => 201);
       await invoke_app($response, $scope, $receive, $send);
   };
 
@@ -630,7 +627,7 @@ only a valid client Range produces 206 and Content-Range.
 
 Stream backpressure is the Future returned by each write:
 
-  return stream_response(async sub {
+  return response('Stream', async sub {
       my ($writer) = @_;
       await $writer->write("one\n");
       await $writer->write("two\n");
@@ -652,13 +649,13 @@ factories return deferred HTTP, WebSocket-refusal, and SSE-refusal
 applications:
 
   use PAGI::Pages qw(welcome gone);
-  use PAGI::Response qw(json_response);
+  use PAGI::Response qw(response);
 
   route('/items/{id}' => async sub {
       my ($request) = @_;
       my $item = await find_item($request->path_param('id'));
       return PAGI::Pages->not_found(detail => 'Item not found') unless $item;
-      return json_response($item);
+      return response('JSON', $item);
   });
 
 A native app delegates the deferred Pages application through the ordinary
@@ -758,10 +755,10 @@ L<PAGI::WebSocket> simplifies WebSocket connections:
 Before C<accept>, a concrete Response or another application can deny the
 handshake:
 
-  use PAGI::Response qw(text_response);
+  use PAGI::Response qw(response);
 
   await $ws->deny(
-      text_response('Unauthorized', status => 401),
+      response('Text', 'Unauthorized', status => 401),
   );
   return;
 
@@ -809,10 +806,10 @@ L<PAGI::SSE> simplifies Server-Sent Events:
 
 Before C<start>, decline with the same Response vocabulary:
 
-  use PAGI::Response qw(problem_response);
+  use PAGI::Response qw(response);
 
   await $sse->decline(
-      problem_response({ title => 'Not Found', status => 404 }),
+      response('Problem', { title => 'Not Found', status => 404 }),
   );
   return;
 
@@ -965,11 +962,11 @@ Apply middleware to all routes using the C<builder> function:
 
   use PAGI::Compose qw(compose);
   use PAGI::Middleware::Builder;
-  use PAGI::Response qw(text_response);
+  use PAGI::Response qw(response);
   use PAGI::Routing qw(route);
 
   my $routing = compose(routes => [
-      route('/' => sub { return text_response('Hello World') }),
+      route('/' => sub { return response('Text', 'Hello World') }),
   ]);
 
   # Wrap with middleware using builder; the block's final value can be
@@ -1156,12 +1153,12 @@ Catch and format errors:
 C<ErrorHandler>'s built-in response negotiates through L<PAGI::Pages>. Supply
 a concrete Response through the existing handler seam to fix its representation:
 
-  use PAGI::Response qw(problem_response);
+  use PAGI::Response qw(response);
 
   enable 'ErrorHandler',
       handler => sub {
           my ($request, $error) = @_;
-          return problem_response({
+          return response('Problem', {
               title  => 'Internal Server Error',
               status => 500,
           });
@@ -1255,14 +1252,14 @@ passing a configured instance (parentheses required):
 
 Or per-route:
 
-  use PAGI::Response qw(text_response);
+  use PAGI::Response qw(response);
 
   my $auth = MyApp::Middleware::Auth->new(secret => 'secret-key');
   use PAGI::Routing qw(middleware route);
 
   route('/admin' => sub {
       my ($request) = @_;
-      return text_response('admin');
+      return response('Text', 'admin');
   }, middleware => [middleware($auth)]);
 
 =head3 Middleware Patterns
@@ -1523,13 +1520,13 @@ mounts and its C<default>, L<PAGI::App::Cascade> entries, and the
 C<app> argument to L<PAGI::Test::Client>, L<PAGI::Lifespan/new>, and
 L<PAGI::Lifespan/wrap>. Put together:
 
-  use PAGI::Response qw(text_response);
+  use PAGI::Response qw(response);
 
   my $app = builder {
       enable 'AccessLog';
       mount '/static' => PAGI::App::File->new(root => 'public');
       mount '/api'    => MyApp::API->new;
-      text_response('no such page', status => 404);
+      response('Text', 'no such page', status => 404);
   };
 
 Compilation happens exactly once, when the composition point receives

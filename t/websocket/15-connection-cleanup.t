@@ -8,7 +8,7 @@ use Scalar::Util qw(weaken);
 use PAGI::WebSocket;
 use PAGI::SSE;
 use PAGI::Test::ConnectionState;
-use PAGI::Response qw(text_response);
+use PAGI::Response qw(response);
 
 for my $kind (qw(websocket sse)) {
     my $class = $kind eq 'websocket' ? 'PAGI::WebSocket' : 'PAGI::SSE';

@@ -92,10 +92,10 @@ content type and cache policy unchanged.
 
 Use the handler seam to force a fixed representation:
 
-    use PAGI::Response qw(problem_response);
+    use PAGI::Response qw(response);
     handler => sub {
         my ($request, $error) = @_;
-        return problem_response({
+        return response('Problem', {
             title  => 'Internal Server Error',
             status => 500,
         });

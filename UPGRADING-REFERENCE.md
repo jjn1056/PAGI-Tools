@@ -196,7 +196,7 @@ use strict;
 use warnings;
 use Future::AsyncAwait;
 use PAGI::Request;
-use PAGI::Response qw(json_response);
+use PAGI::Response qw(response);
 use PAGI::Routing qw(middleware mount route router websocket);
 use PAGI::Stash qw(stash);
 use PAGI::Utils qw(as_app_object);
@@ -235,7 +235,7 @@ sub require_auth {
 
 async sub show_person {
     my ($self, $request) = @_;
-    return json_response({ id => $request->path_param('id') });
+    return response('JSON', { id => $request->path_param('id') });
 }
 ```
 
@@ -271,7 +271,7 @@ sub find {
 
 package MyApp::Person;
 use parent 'PAGI::Endpoint::HTTP';
-use PAGI::Response qw(json_response);
+use PAGI::Response qw(response);
 
 sub new {
     my ($class, %args) = @_;
@@ -280,7 +280,7 @@ sub new {
 
 sub get {
     my ($self, $request) = @_;
-    return json_response(
+    return response('JSON',
         $self->{repo}->find($request->path_param('id')),
     );
 }
@@ -402,11 +402,11 @@ sub on_disconnect    { my ($self, $ctx) = @_; ... }
 **After:** use `PAGI::Request`, `PAGI::WebSocket`, and `PAGI::SSE` directly.
 
 ```perl
-use PAGI::Response qw(json_response);
+use PAGI::Response qw(response);
 
 async sub get {
     my ($self, $request) = @_;
-    return json_response({ path => $request->path });
+    return response('JSON', { path => $request->path });
 }
 
 async sub on_receive {
@@ -444,14 +444,14 @@ await $ctx->respond($response);
 application, delegate with `invoke_app`.
 
 ```perl
-use PAGI::Response qw(json_response redirect_response text_response);
+use PAGI::Response qw(response);
 use PAGI::Utils qw(invoke_app);
 
-return text_response('Created', status => 201);
-return json_response($data, status => 201);
-return redirect_response('/items');
+return response('Text', 'Created', status => 201);
+return response('JSON', $data, status => 201);
+return response('Redirect', '/items');
 
-await invoke_app(json_response($data), $scope, $receive, $send);
+await invoke_app(response('JSON', $data), $scope, $receive, $send);
 ```
 
 ### The two former `send` meanings
@@ -492,7 +492,7 @@ $ctx->on_drain(\&resume);
 
 ```perl
 use PAGI::CSRF qw(csrf);
-use PAGI::Response qw(text_response);
+use PAGI::Response qw(response);
 use PAGI::Session qw(session);
 use PAGI::Stash qw(stash);
 use PAGI::State qw(app_state);
@@ -502,7 +502,7 @@ my $user  = session($request)->get('user');
 my $db    = app_state($request)->get('db');
 stash($request)->set(result => $result);
 
-return text_response('Forbidden', status => 403)
+return response('Text', 'Forbidden', status => 403)
     unless csrf($request)->verify($submitted);
 
 my $flow = transport($request);
@@ -529,11 +529,11 @@ handler => sub {
 an explicit status wins over ErrorHandler's fallback.
 
 ```perl
-use PAGI::Response qw(json_response);
+use PAGI::Response qw(response);
 
 handler => sub {
     my ($request, $error) = @_;
-    return json_response({ error => 'request failed' }, status => 503);
+    return response('JSON', { error => 'request failed' }, status => 503);
 }
 ```
 
@@ -563,16 +563,16 @@ values; `ref($response)` names the representation.
 | --- | --- |
 | `$request->response` | construct the desired concrete Response directly |
 | `PAGI::Response->new($scope)` as a mutable builder | construct a complete response; pass the Request to Session, Stash, State, CSRF, URL or Transport helpers |
-| `PAGI::Response->text($s)` | `text_response($s)` |
-| `PAGI::Response->html($s)` | `html_response($s)` |
-| `PAGI::Response->json($v)` | `json_response($v)` |
+| `PAGI::Response->text($s)` | `response('Text', $s)` |
+| `PAGI::Response->html($s)` | `response('HTML', $s)` |
+| `PAGI::Response->json($v)` | `response('JSON', $v)` |
 | `PAGI::Response->send($s, charset => $name)` | encode explicitly and pass bytes plus Content-Type to `PAGI::Response->new(...)` |
 | `PAGI::Response->send_raw($b)` | `PAGI::Response->new($b)` |
-| `PAGI::Response->redirect($uri)` | `redirect_response($uri)` |
-| `PAGI::Response->empty(...)` | `empty_response(...)` |
-| `PAGI::Response->send_file($p)` with immediate `-f`/`-r` checks | `file_response($p)`; checks happen at request time, so check at startup yourself if you need to |
-| `PAGI::Response->stream($cb)` | `stream_response($cb)` |
-| `$response->writer($send)` | `stream_response(async sub ($writer) { ... })` |
+| `PAGI::Response->redirect($uri)` | `response('Redirect', $uri)` |
+| `PAGI::Response->empty(...)` | `response('Empty', ...)` |
+| `PAGI::Response->send_file($p)` with immediate `-f`/`-r` checks | `response('File', $p)`; checks happen at request time, so check at startup yourself if you need to |
+| `PAGI::Response->stream($cb)` | `response('Stream', $cb)` |
+| `$response->writer($send)` | `response('Stream', async sub ($writer) { ... })` |
 | `$response->respond($send)` | `invoke_app($response, $scope, $receive, $send)` |
 | `is_response($value)` (`PAGI::Utils`) | no replacement; any value with `to_app` is an application |
 | `$response->scope` | use the Request/protocol object, or raw `$scope` |
@@ -593,9 +593,9 @@ return $response->status(201)->json($item);
 **After:** choose the class at construction.
 
 ```perl
-use PAGI::Response qw(json_response);
+use PAGI::Response qw(response);
 
-return json_response(
+return response('JSON',
     $item,
     status  => 201,
     headers => ['Location' => $location],
@@ -630,10 +630,10 @@ await $response->respond($send);
 **After:** a Response holds no request state; deliver it as an application.
 
 ```perl
-use PAGI::Response qw(json_response);
+use PAGI::Response qw(response);
 use PAGI::Utils qw(invoke_app);
 
-my $response = json_response($data, status => 201);
+my $response = response('JSON', $data, status => 201);
 await invoke_app($response, $scope, $receive, $send);
 ```
 
@@ -645,7 +645,7 @@ value) and the Route delivers it.
 **Before:**
 
 ```perl
-return text_response('ok')->cors(
+return response('Text', 'ok')->cors(
     origin      => 'https://app.example',
     credentials => 1,
 );
@@ -668,9 +668,9 @@ my $app = builder {
 
 ```perl
 use Future::AsyncAwait;
-use PAGI::Response qw(stream_response);
+use PAGI::Response qw(response);
 
-return stream_response(async sub ($writer) {
+return response('Stream', async sub ($writer) {
     await $writer->write("id,name\n");
     for my $row (@rows) {
         await $writer->write($row);  # one outstanding write
@@ -686,16 +686,16 @@ connection's state instead.
 
 ```perl
 use PAGI::Auth qw(www_authenticate);
-use PAGI::Response qw(problem_response);
+use PAGI::Response qw(response);
 
 await $websocket->deny(
-    problem_response({ title => 'Unauthorized', status => 401 },
+    response('Problem', { title => 'Unauthorized', status => 401 },
         headers => ['WWW-Authenticate' => www_authenticate('Bearer', realm => 'api')]),
 );
 
 await $sse->decline(sub {
     my ($request) = @_;
-    return problem_response({
+    return response('Problem', {
         title => 'Not Found', status => 404, detail => $request->path,
     });
 });
@@ -833,12 +833,12 @@ text. To fix one representation, use `handler`:
 enable 'ErrorHandler', content_type => 'application/json';
 
 # After
-use PAGI::Response qw(problem_response);
+use PAGI::Response qw(response);
 
 enable 'ErrorHandler',
     handler => sub {
         my ($request, $error) = @_;
-        return problem_response({ title => 'Internal Server Error', status => 500 });
+        return response('Problem', { title => 'Internal Server Error', status => 500 });
     };
 ```
 
@@ -865,7 +865,7 @@ my $not_found_app = not_found(detail => 'No such page');
 
 It negotiates HTML, RFC 9457 problem JSON or text and sends
 `Cache-Control: no-store`. For a literal body use a Response:
-`text_response('No such page', status => 404)`.
+`response('Text', 'No such page', status => 404)`.
 
 ### Replace the removed Redirect application
 

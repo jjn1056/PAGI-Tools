@@ -27,7 +27,7 @@ use Future::IO;    # pagi-server binds the implementation
 
 use PAGI::Compose qw(compose);
 use PAGI::Routing qw(route websocket);
-use PAGI::Response qw(html_response json_response);
+use PAGI::Response qw(response);
 
 #---------------------------------------------------------
 # PATTERN 1: Async I/O (Non-Blocking)
@@ -150,7 +150,7 @@ sub async_tasks {
 
     quick_sync_task("Logging request");
 
-    return json_response({
+    return response('JSON', {
         status  => 'ok',
         message => 'Response sent! Async tasks running in background.',
     });
@@ -164,7 +164,7 @@ sub blocking_tasks {
     run_blocking_task("heavy_computation", 3);
     run_blocking_task("image_processing", 2);
 
-    return json_response({
+    return response('JSON', {
         status  => 'ok',
         message => 'Response sent! Heavy computation running in subprocess.',
     });
@@ -186,7 +186,7 @@ async sub signup {
     # For CPU-intensive work (e.g., generating PDF):
     # run_blocking_task("generate_welcome_pdf", 5);
 
-    return json_response({
+    return response('JSON', {
         status  => 'created',
         message => "Account created! Check $email for welcome email.",
     }, status => 201);
@@ -217,7 +217,7 @@ compose(routes => [
 
 # Index page
 route('/' => sub {
-    return html_response(<<'HTML');
+    return response('HTML', <<'HTML');
 <!DOCTYPE html>
 <html>
 <head><title>Background Tasks Demo</title></head>

@@ -47,7 +47,7 @@ compose(
 ```
 
 - **`ChatApp::HTTP::routing()`** returns an immutable Router. Its handlers take
-  a `PAGI::Request` and return `json_response(...)`, or a negotiated
+  a `PAGI::Request` and return `response('JSON', ...)`, or a negotiated
   `not_found(detail => ...)` from `PAGI::Pages`, which is HTML for a browser
   and a problem document for an API client.
 - **`ChatApp::WebSocket::chat($ws)`** reads the session from `$ws->query`,

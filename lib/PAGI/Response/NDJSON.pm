@@ -17,9 +17,9 @@ PAGI::Response::NDJSON - reusable backpressured newline-delimited JSON response
 =head1 SYNOPSIS
 
     use Future::AsyncAwait;
-    use PAGI::Response qw(ndjson_response);
+    use PAGI::Response qw(response);
 
-    return ndjson_response(async sub ($writer) {
+    return response('NDJSON', async sub ($writer) {
         my $cursor = await $database->people_cursor;
         $writer->on_close(sub { return $cursor->close });
 
@@ -63,7 +63,7 @@ default content type is C<application/x-ndjson>.
 
 =head2 ndjson_response
 
-    my $response = ndjson_response($producer, %common_response_options);
+    my $response = response('NDJSON', $producer, %common_response_options);
 
 Optional export shorthand for the same constructor. C<PAGI::Response> also
 exports it on request or through C<:all>.

@@ -3,7 +3,7 @@ package MyApp::Person::Blogs;
 use v5.40;
 use Types::Standard qw(Int);
 use PAGI::Pages qw(not_found);
-use PAGI::Response qw(html_response);
+use PAGI::Response qw(response);
 use PAGI::Routing qw(router route);
 use PAGI::Routing::URL qw(path_for url_for);
 use MyApp::View ();
@@ -20,7 +20,7 @@ sub list_blogs($request) {
     my $person = $data->person($person_id);
 
     unless ($person) {
-        return html_response(
+        return response('HTML',
             MyApp::View->document(
                 'Blogs not found',
                 '    <h1>Blogs not found</h1>',
@@ -42,7 +42,7 @@ sub list_blogs($request) {
     # ../show resolves from /person/blog to /person/show and inherits person_id.
     my $person_path = path_for($request, '../show');
 
-    return html_response(MyApp::View->document(
+    return response('HTML', MyApp::View->document(
         "Blogs by $person->{name}",
         qq{    <a href="$person_path">$person->{name}</a>\n}
             . "    <h1>Blogs</h1>\n    <ul>\n"
@@ -58,7 +58,7 @@ sub show_blog($request) {
 
     unless ($blog) {
         my $blogs_path = path_for($request, 'index');
-        return html_response(
+        return response('HTML',
             MyApp::View->document(
                 'Blog not found',
                 qq{    <a href="$blogs_path">Blogs</a>\n}
@@ -76,7 +76,7 @@ sub show_blog($request) {
         fragment => 'comments',
     );
 
-    return html_response(MyApp::View->document(
+    return response('HTML', MyApp::View->document(
         $blog->{title},
         qq{    <a href="$home_path">Home</a> / }
             . qq{<a href="$person_path">Person</a> / }

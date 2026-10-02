@@ -3,12 +3,12 @@ use Future::AsyncAwait;
 use PAGI::Auth qw(auth auth_result unauth_result www_authenticate);
 use PAGI::Auth::SimpleUser;
 use PAGI::Compose qw(compose);
-use PAGI::Response qw(json_response);
+use PAGI::Response qw(response);
 use PAGI::Routing qw(route websocket sse middleware request_response);
 
 my $refusal = request_response(sub ($request) {
     my $failure = auth($request)->failure;
-    return json_response({ error => $failure->message },
+    return response('JSON', { error => $failure->message },
         status => 401,
         headers => ['WWW-Authenticate' => www_authenticate('Bearer', realm => 'demo')]);
 });
@@ -23,7 +23,7 @@ compose(
     routes => [
         route('/http' => sub ($request) {
             return $refusal unless auth($request)->user->is_authenticated;
-            return json_response({ identity => auth($request)->user->identity });
+            return response('JSON', { identity => auth($request)->user->identity });
         }),
         websocket('/socket' => async sub ($ws) {
             my $cleaned = 0;

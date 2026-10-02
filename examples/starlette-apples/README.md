@@ -89,7 +89,7 @@ use AppleApp::Middleware qw(with_apples_api_header);
 use AppleApp::Model qw(apple_model);
 use PAGI::Compose qw(compose);
 use PAGI::Pages qw(welcome not_found status);
-use PAGI::Response qw(file_response json_response ndjson_response);
+use PAGI::Response qw(response);
 use PAGI::Routing qw(route mount middleware);
 use PAGI::Routing::URL qw(url_for path_for);
 use PAGI::Utils qw(app_path);
@@ -110,7 +110,7 @@ sub apples($request) {
 async sub list_apples($request) {
     my $apples = apples($request);
 
-    return json_response([
+    return response('JSON', [
         map {
             +{
                 %$_,
@@ -127,7 +127,7 @@ async sub list_apples($request) {
 async sub export_apples($request) {
     my $items = apples($request)->all;
 
-    return ndjson_response(async sub ($writer) {
+    return response('NDJSON', async sub ($writer) {
         for my $apple (@$items) {
             last if $writer->is_disconnected;
             await $writer->write_item($apple);
@@ -147,8 +147,8 @@ async sub read_apple($request) {
     my $id = $request->path_param('apple_id');
     my $apple = apples($request)->find($id);
 
-    return json_response($apple) if $apple;
-    return json_response(
+    return response('JSON', $apple) if $apple;
+    return response('JSON',
         { error => 'Apple not found' },
         status => 404,
     );
@@ -158,7 +158,7 @@ async sub create_apple($request) {
     my $data = await $request->json;
     my $apple = apples($request)->create($data);
 
-    return json_response(
+    return response('JSON',
         $apple,
         status  => 201,
         headers => [
@@ -175,7 +175,7 @@ async sub update_apple($request) {
     my $id = $request->path_param('apple_id');
     my $apples = apples($request);
 
-    return json_response(
+    return response('JSON',
         { error => 'Apple not found' },
         status => 404,
     ) unless $apples->find($id);
@@ -183,24 +183,24 @@ async sub update_apple($request) {
     my $data = await $request->json;
     my $apple = $apples->update($id, $data);
 
-    return json_response(
+    return response('JSON',
         { error => 'Apple not found' },
         status => 404,
     ) unless $apple;
 
-    return json_response($apple);
+    return response('JSON', $apple);
 }
 
 async sub delete_apple($request) {
     my $id = $request->path_param('apple_id');
     my $apple = apples($request)->delete($id);
 
-    return json_response(
+    return response('JSON',
         { error => 'Apple not found' },
         status => 404,
     ) unless $apple;
 
-    return json_response({
+    return response('JSON', {
         success => \1,
         deleted => $apple,
     });
@@ -208,7 +208,7 @@ async sub delete_apple($request) {
 
 compose(
     routes => [
-        route('/' => file_response($manager_file, inline => 1),
+        route('/' => response('File', $manager_file, inline => 1),
             name => 'home',
             desc => 'Apple manager SPA',
         ),
@@ -262,12 +262,12 @@ swallowing the 405 for a known path such as `PUT /welcome`.
 
 | Starlette | PAGI::Tools |
 | --- | --- |
-| `JSONResponse(value)` | `json_response($value)` |
-| `FileResponse(path)` | `file_response($path)` |
+| `JSONResponse(value)` | `response('JSON', $value)` |
+| `FileResponse(path)` | `response('File', $path)` |
 | response is ASGI-callable | response implements `to_app` |
 | `Route('/', endpoint)` | exact `route('/' => handler-or-component)` |
 | `Mount('/x', app=...)` | subtree-owning `mount('/x', app => ...)` |
-| `StreamingResponse(iterator)` | `stream_response(async sub ($writer) { ... })` |
+| `StreamingResponse(iterator)` | `response('Stream', async sub ($writer) { ... })` |
 
 These APIs are related, but they are not identical. The PAGI mount creates an
 explicit namespace boundary that the flat Python route list does not have.

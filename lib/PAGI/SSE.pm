@@ -1099,11 +1099,11 @@ C<on_connect> runs), C<start> arms it immediately after sending C<sse.start>
 =head2 decline
 
     use Future::AsyncAwait;
-    use PAGI::Response qw(text_response);
+    use PAGI::Response qw(response);
 
     async sub unavailable {
         my ($sse) = @_;
-        await $sse->decline(text_response('Unavailable', status => 503));
+        await $sse->decline(response('Text', 'Unavailable', status => 503));
         return;
     }
 
@@ -1111,7 +1111,7 @@ C<on_connect> runs), C<start> arms it immediately after sending C<sse.start>
         my ($sse) = @_;
         await $sse->decline(sub {
             my ($request) = @_;
-            return text_response('Unavailable: ' . $request->path, status => 503);
+            return response('Text', 'Unavailable: ' . $request->path, status => 503);
         });
         return;
     }

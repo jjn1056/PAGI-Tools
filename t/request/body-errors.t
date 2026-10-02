@@ -8,7 +8,7 @@ use lib "$Bin/../../lib";
 
 use PAGI::Compose qw(compose);
 use PAGI::Request;
-use PAGI::Response qw(json_response);
+use PAGI::Response qw(response);
 use PAGI::Routing qw(middleware route);
 use PAGI::Test::Client;
 
@@ -84,8 +84,8 @@ subtest 'the existing messages are kept, so code matching them still works' => s
 
 subtest 'a Compose application answers 400 or 413, and logs nothing' => sub {
     my $app = compose(routes => [
-        route('/json' => async sub { my ($r) = @_; json_response(await $r->json) }, methods => ['POST']),
-        route('/form' => async sub { my ($r) = @_; await $r->form_params(max_field_size => 10); json_response({}) },
+        route('/json' => async sub { my ($r) = @_; response('JSON', await $r->json) }, methods => ['POST']),
+        route('/form' => async sub { my ($r) = @_; await $r->form_params(max_field_size => 10); response('JSON', {}) },
             methods => ['POST']),
     ]);
     my $client = PAGI::Test::Client->new(app => $app);
@@ -108,11 +108,11 @@ subtest 'an application can render body errors its own way' => sub {
     my $app = compose(
         middleware => [middleware('ErrorHandler', handler => sub {
             my ($request, $error) = @_;
-            return json_response({ error => $error->message }, status => $error->status_code)
+            return response('JSON', { error => $error->message }, status => $error->status_code)
                 if ref $error && $error->isa('PAGI::Request::BodyError');
-            return json_response({ error => 'Something went wrong.' }, status => 500);
+            return response('JSON', { error => 'Something went wrong.' }, status => 500);
         })],
-        routes => [route('/json' => async sub { my ($r) = @_; json_response(await $r->json) },
+        routes => [route('/json' => async sub { my ($r) = @_; response('JSON', await $r->json) },
             methods => ['POST'])],
     );
     my $res = PAGI::Test::Client->new(app => $app)->post('/json', body => '{not json',

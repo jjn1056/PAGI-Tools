@@ -1076,11 +1076,11 @@ propagate to the server without publishing a synthetic terminal outcome.
 =head2 deny
 
     use Future::AsyncAwait;
-    use PAGI::Response qw(text_response);
+    use PAGI::Response qw(response);
 
     async sub unavailable {
         my ($ws) = @_;
-        await $ws->deny(text_response('Unavailable', status => 503));
+        await $ws->deny(response('Text', 'Unavailable', status => 503));
         return;
     }
 
@@ -1088,7 +1088,7 @@ propagate to the server without publishing a synthetic terminal outcome.
         my ($ws) = @_;
         await $ws->deny(sub {
             my ($request) = @_;
-            return text_response('Unavailable: ' . $request->path, status => 503);
+            return response('Text', 'Unavailable: ' . $request->path, status => 503);
         });
         return;
     }
@@ -1132,7 +1132,7 @@ because no peer Close frame was received. This value is local metadata; no
 WebSocket Close frame is sent. Use scope completion to distinguish successful
 refusal delivery from an interrupted response.
 
-    use PAGI::Response qw(text_response);
+    use PAGI::Response qw(response);
     my $connection = $scope->{'pagi.connection'};
     $connection->on_complete(sub {
         # The HTTP refusal completed successfully.
@@ -1141,7 +1141,7 @@ refusal delivery from an interrupted response.
         my ($code, $reason, $detail) = @_;
         # After this refusal: 1006, undef, undef.
     });
-    await $ws->deny(text_response('Access denied', status => 403));
+    await $ws->deny(response('Text', 'Access denied', status => 403));
 
 The sending environment requires WebSocket refusal status 300 or greater.
 Request metadata is available, but WebSocket Request body APIs reject access

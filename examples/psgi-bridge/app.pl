@@ -13,7 +13,7 @@ use strict;
 use warnings;
 use PAGI::App::WrapPSGI;
 use PAGI::Compose qw(compose);
-use PAGI::Response qw(json_response);
+use PAGI::Response qw(response);
 use PAGI::Routing qw(route);
 
 my $psgi_app = sub {
@@ -24,7 +24,7 @@ my $psgi_app = sub {
 
 compose(routes => [
     # New code is written natively...
-    route('/health' => sub { return json_response({ ok => 1 }) }),
+    route('/health' => sub { return response('JSON', { ok => 1 }) }),
     # ...while everything else is still served by the PSGI application.
     route('/*path' => PAGI::App::WrapPSGI->new(psgi_app => $psgi_app), methods => '*'),
 ]);

@@ -33,7 +33,7 @@ PAGI::Middleware::Session - Session management middleware with pluggable State/S
 =head1 SYNOPSIS
 
     use PAGI::Compose qw(compose);
-    use PAGI::Response qw(json_response);
+    use PAGI::Response qw(response);
     use PAGI::Routing qw(middleware route);
     use PAGI::Session qw(session);
 
@@ -49,7 +49,7 @@ PAGI::Middleware::Session - Session management middleware with pluggable State/S
         my ($request) = @_;
         my $session = session($request);
         $session->set(visits => $session->get('visits', 0) + 1);
-        return json_response({ visits => $session->get('visits') });
+        return response('JSON', { visits => $session->get('visits') });
     }
 
     # Several workers, or sessions that survive a restart: keep the whole

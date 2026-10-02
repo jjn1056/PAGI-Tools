@@ -5,7 +5,7 @@ use Future::AsyncAwait;
 use Future::IO;    # pagi-server binds the implementation
 
 use PAGI::Compose qw(compose);
-use PAGI::Response qw(json_response ndjson_response response stream_response text_response);
+use PAGI::Response qw(response);
 use PAGI::Routing qw(route websocket sse);
 use PAGI::Routing::URL qw(path_for url_for);
 
@@ -21,7 +21,7 @@ my @routes = (
 
 # Hello World endpoint
 route('/' => sub {
-    return text_response('Hello, World!');
+    return response('Text', 'Hello, World!');
 }, name => 'hello'),
 
 # POST Echo - echoes back the request body
@@ -51,7 +51,7 @@ route('/stream' => sub {
         "Stream complete!\n",
     );
 
-    return stream_response(
+    return response('Stream',
         async sub {
             my ($writer) = @_;
             for my $i (0 .. $#chunks) {
@@ -67,7 +67,7 @@ route('/stream' => sub {
 # waits for the client to keep up, and the loop stops if the client leaves.
 route('/export' => sub {
     my ($request) = @_;
-    return ndjson_response(async sub {
+    return response('NDJSON', async sub {
         my ($writer) = @_;
         for my $n (1 .. 3) {
             last if $writer->is_disconnected;
@@ -80,7 +80,7 @@ route('/export' => sub {
 # in exactly one place.
 route('/routes' => sub {
     my ($request) = @_;
-    return json_response({
+    return response('JSON', {
         paths => {
             map { $_ => path_for($request, $_) }
                 qw(hello echo http_stream export ws_echo sse_events)

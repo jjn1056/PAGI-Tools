@@ -8,7 +8,7 @@ use PAGI::Auth qw(auth auth_result unauth_result www_authenticate);
 use PAGI::Auth::SimpleUser;
 use PAGI::Compose qw(compose);
 use PAGI::Middleware::Authentication;
-use PAGI::Response qw(json_response);
+use PAGI::Response qw(response);
 use PAGI::Response::Stream;
 use PAGI::Routing qw(route mount middleware websocket sse request_response);
 use PAGI::Session qw(session);
@@ -59,7 +59,7 @@ subtest 'mounted Auth retains real protocol scopes and ordinary refusal applicat
                 my ($source) = @_;
                 $observe_shared->($source);
                 push @refusal_contexts, snapshot($source);
-                return json_response({ error => 'Sign in', %{snapshot($source)} },
+                return response('JSON', { error => 'Sign in', %{snapshot($source)} },
                     status => 401,
                     headers => [
                         'WWW-Authenticate' => www_authenticate('Basic', realm => 'staff'),
@@ -108,7 +108,7 @@ subtest 'mounted Auth retains real protocol scopes and ordinary refusal applicat
                     route('/http' => sub {
                         my ($request) = @_;
                         return $http_refusal unless $check->($request);
-                        return json_response({ accepted => snapshot($request) });
+                        return response('JSON', { accepted => snapshot($request) });
                     }),
                     websocket('/socket' => async sub {
                         my ($ws) = @_;

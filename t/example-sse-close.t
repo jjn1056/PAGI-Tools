@@ -13,7 +13,7 @@ my $file = "$Bin/../examples/sse-close/app.pl";
 my $source = do { open my $fh, '<', $file or die "$file: $!"; local $/; <$fh> };
 
 like($source, qr/sse\('\/jobs'\s*=>\s*\\&jobs\)/, 'an SSE route takes the one-$sse handler');
-like($source, qr/route\('\/'\s*=>\s*html_response\(\$PAGE\)\)/, 'the page is a Response value on a route');
+like($source, qr/route\('\/'\s*=>\s*response\('HTML', \$PAGE\)\)/, 'the page is a Response value on a route');
 unlike($source, qr/Future::IO::Impl/, 'the application binds no Future::IO implementation');
 unlike($source, qr/PAGI::SSE->new|\(\$scope,\s*\$receive,\s*\$send\)|type\s*=>\s*'http\.response/,
     'no raw PAGI application or hand-built response');

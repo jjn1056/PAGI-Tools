@@ -429,7 +429,7 @@ teaching fixture; replace it with application-owned verification.
   use PAGI::Auth qw(auth auth_result unauth_result www_authenticate);
   use PAGI::Auth::SimpleUser;
   use PAGI::Compose qw(compose);
-  use PAGI::Response qw(text_response);
+  use PAGI::Response qw(response);
   use PAGI::Routing qw(route mount middleware);
   use PAGI::Utils qw(invoke_app);
 
@@ -466,7 +466,7 @@ teaching fixture; replace it with application-owned verification.
               my @params = (realm => 'example');
               push @params, error => ($malformed
                   ? 'invalid_request' : 'invalid_token') if $failure;
-              my $response = text_response(
+              my $response = response('Text',
                   $malformed ? 'Malformed Authorization header.' : 'Sign in',
                   status => $malformed ? 400 : 401,
                   headers => ['WWW-Authenticate' =>
@@ -485,14 +485,14 @@ teaching fixture; replace it with application-owned verification.
           middleware(\&require_login),
       ],
       routes => [
-          route('/one' => sub { text_response('one') }),
-          route('/two' => sub { text_response('two') }),
+          route('/one' => sub { response('Text', 'one') }),
+          route('/two' => sub { response('Text', 'two') }),
       ],
   );
 
   compose(
       routes => [
-          route('/public' => sub { text_response('public') }),
+          route('/public' => sub { response('Text', 'public') }),
           mount('/', app => $protected),
       ],
       lifespan => {

@@ -3,7 +3,7 @@ use PAGI::Auth qw(auth unauth_result www_authenticate);
 use PAGI::Auth::SimpleUser;
 use PAGI::Compose qw(compose);
 use PAGI::Middleware::Authentication;
-use PAGI::Response qw(json_response);
+use PAGI::Response qw(response);
 use PAGI::Routing qw(route middleware);
 
 {
@@ -53,13 +53,13 @@ compose(
         my $context = auth($request);
         unless ($context->user->is_authenticated) {
             my $failure = $context->failure;
-            return json_response({
+            return response('JSON', {
                 error => $failure ? $failure->message : 'Basic credentials are required.',
             }, status => 401, headers => [
                 'WWW-Authenticate' => www_authenticate('Basic', realm => 'staff'),
             ]);
         }
-        return json_response({
+        return response('JSON', {
             identity => $context->user->identity,
             can_read => $context->credentials->has('staff:read') ? 1 : 0,
         });

@@ -4,7 +4,7 @@ use Test2::V0;
 use Future;
 use Future::AsyncAwait;
 use Scalar::Util qw(weaken);
-use PAGI::Response qw(stream_response);
+use PAGI::Response qw(response);
 use PAGI::Test::ConnectionState;
 
 for my $stage (qw(start body terminal cleanup)) {
@@ -18,7 +18,7 @@ for my $stage (qw(start body terminal cleanup)) {
             ++$aborts;
             $pending->done unless $pending->is_ready;
         });
-        my $response = stream_response(sub {
+        my $response = response('Stream', sub {
             ($writer) = @_;
             $weak_writer = $writer; weaken($weak_writer);
             ++$produced;

@@ -8,7 +8,7 @@ use File::Spec;
 
 use PAGI::App::File;
 use PAGI::Compose qw(compose);
-use PAGI::Response qw(json_response);
+use PAGI::Response qw(response);
 use PAGI::Routing qw(route);
 
 # Writable uploads keep an explicit path beside this file; only the read-only
@@ -82,14 +82,14 @@ async sub submit {
 
     # Return errors if any
     if (@errors) {
-        return json_response({
+        return response('JSON', {
             success => 0,
             errors  => \@errors,
         }, status => 400);
     }
 
     # Success response
-    return json_response({
+    return response('JSON', {
         success => 1,
         message => 'Thank you for your message!',
         data    => {

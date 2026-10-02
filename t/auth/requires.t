@@ -9,7 +9,7 @@ use lib "$Bin/../../lib";
 use PAGI::Auth qw(auth auth_result unauth_result requires);
 use PAGI::Auth::SimpleUser;
 use PAGI::Compose qw(compose);
-use PAGI::Response qw(json_response);
+use PAGI::Response qw(response);
 use PAGI::Routing qw(middleware mount route sse websocket);
 use PAGI::Test::Client;
 
@@ -30,7 +30,7 @@ my $authentication = middleware('Authentication', backend => sub {
     );
 });
 
-sub ok_response { json_response({ ok => 1, who => auth($_[0])->user->identity }) }
+sub ok_response { response('JSON', { ok => 1, who => auth($_[0])->user->identity }) }
 
 my $app = compose(
     middleware => [$authentication],
@@ -46,15 +46,15 @@ my $app = compose(
             redirect => ['login', {}, { next => '/dashboard' }])),
         route('/named-args' => requires([], \&ok_response,
             redirect => ['login', query => { lang => 'en' }])),
-        route('/login'   => sub { json_response({ login => 1 }) }, name => 'login'),
+        route('/login'   => sub { response('JSON', { login => 1 }) }, name => 'login'),
         # Nested: the target's {org} is filled from the current route's {org}.
         route('/orgs/{org}/settings' => requires([], \&ok_response, redirect => ['org_login'])),
         route('/orgs/{org}/billing' => requires([], \&ok_response,
             redirect => ['org_login', {}, { reason => 'billing' }])),
-        route('/orgs/{org}/login' => sub { json_response({ login => 1 }) }, name => 'org_login'),
+        route('/orgs/{org}/login' => sub { response('JSON', { login => 1 }) }, name => 'org_login'),
         mount('/admin', routes => [
             route('/reports' => requires([], \&ok_response, redirect => ['admin_login'])),
-            route('/login' => sub { json_response({ login => 1 }) }, name => 'admin_login'),
+            route('/login' => sub { response('JSON', { login => 1 }) }, name => 'admin_login'),
         ]),
         route('/async'   => requires([], async sub { my ($r) = @_; return ok_response($r) })),
         websocket('/ws'  => requires(['notes:read'], async sub {

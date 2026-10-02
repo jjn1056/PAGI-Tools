@@ -4,7 +4,7 @@ use v5.40;
 use PAGI::App::File;
 use PAGI::Compose qw(compose);
 use PAGI::Pages qw(welcome not_found);
-use PAGI::Response qw(html_response);
+use PAGI::Response qw(response);
 use PAGI::Routing qw(router route mount);
 use PAGI::Routing::URL qw(path_for);
 use MyApp::Data;
@@ -28,7 +28,7 @@ sub home($request) {
     my $pagi_path = path_for($request, '/pagi');
     my $count = scalar @{$state->get('data')->people};
 
-    return html_response(MyApp::View->document(
+    return response('HTML', MyApp::View->document(
         'My PAGI People',
         qq{    <h1>My PAGI People</h1>\n}
             . qq{    <p>This application contains $count people.</p>\n}

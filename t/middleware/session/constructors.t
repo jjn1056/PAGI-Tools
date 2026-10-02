@@ -6,7 +6,7 @@ use lib "$Bin/../../lib";
 
 use PAGI::Compose qw(compose);
 use PAGI::Middleware::Session qw(session_state session_store);
-use PAGI::Response qw(json_response);
+use PAGI::Response qw(response);
 use PAGI::Routing qw(middleware route);
 use PAGI::Session qw(session);
 use PAGI::Test::Client;
@@ -52,7 +52,7 @@ subtest 'they plug straight into the middleware' => sub {
             my ($request) = @_;
             my $session = session($request);
             $session->set(visits => $session->get('visits', 0) + 1);
-            return json_response({ visits => $session->get('visits') });
+            return response('JSON', { visits => $session->get('visits') });
         })],
     );
     my $client = PAGI::Test::Client->new(app => $app);

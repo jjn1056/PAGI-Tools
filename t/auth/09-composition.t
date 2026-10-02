@@ -5,7 +5,7 @@ use Future::AsyncAwait;
 use PAGI::Auth qw(auth auth_result unauth_result www_authenticate);
 use PAGI::Auth::SimpleUser;
 use PAGI::Compose qw(compose);
-use PAGI::Response qw(json_response);
+use PAGI::Response qw(response);
 use PAGI::Routing qw(route mount middleware);
 use PAGI::Test::Client;
 use PAGI::Utils qw(invoke_app);
@@ -28,7 +28,7 @@ sub require_login {
             my @params = (realm => 'api');
             push @params, error => ($malformed ? 'invalid_request' : 'invalid_token')
                 if $failure;
-            await invoke_app(json_response(
+            await invoke_app(response('JSON',
                 { error => $malformed ? 'Malformed Authorization header.'
                     : 'Please sign in to access this API.' },
                 status => $malformed ? 400 : 401,
@@ -78,9 +78,9 @@ subtest 'factory, object, and class policies protect groups and bypass lifespan'
                 ],
                 routes => [
                     route('/me' => sub {
-                        return json_response({ user_id => auth($_[0])->user->identity });
+                        return response('JSON', { user_id => auth($_[0])->user->identity });
                     }),
-                    route('/catalog' => async sub { return json_response({ items => [] }) }),
+                    route('/catalog' => async sub { return response('JSON', { items => [] }) }),
                 ],
                 lifespan => {
                     startup => sub { push @lifecycle, 'startup'; return },
@@ -101,7 +101,7 @@ subtest 'factory, object, and class policies protect groups and bypass lifespan'
 
             my $client = PAGI::Test::Client->new(app => compose(routes => [
                 mount('/private', app => $protected),
-                route('/public' => sub { json_response({ public => 1 }) }),
+                route('/public' => sub { response('JSON', { public => 1 }) }),
             ]));
             for my $path (qw(/me /catalog)) {
                 my $accepted = $client->get('/private' . $path,
@@ -161,7 +161,7 @@ subtest 'nested authentication replaces all context fields and preserves outer o
             }),
             middleware($observe, seen => \@inner),
         ],
-        routes => [route('/' => sub { json_response(context_values($_[0])) })],
+        routes => [route('/' => sub { response('JSON', context_values($_[0])) })],
     );
     my $client = PAGI::Test::Client->new(app => compose(
         middleware => [
@@ -198,7 +198,7 @@ subtest 'custom native installation uses the same context and guest continuation
         middleware => [middleware($custom)],
         routes => [route('/notes' => sub {
             my ($request) = @_;
-            return json_response({
+            return response('JSON', {
                 authenticated => auth($request)->user->is_authenticated ? 1 : 0,
                 can_read => auth($request)->credentials->has('notes:read') ? 1 : 0,
                 failed => auth($request)->failure ? 1 : 0,

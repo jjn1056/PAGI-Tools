@@ -4,7 +4,7 @@ use Test2::V0;
 use Future;
 use Future::AsyncAwait;
 use PAGI::Routing qw(router websocket sse);
-use PAGI::Response qw(text_response);
+use PAGI::Response qw(response);
 use PAGI::Endpoint::WebSocket;
 use PAGI::Endpoint::SSE;
 use PAGI::Test::ConnectionState;
@@ -29,7 +29,7 @@ for my $kind (qw(websocket sse)) {
                     my ($h) = @_;
                     return if $outcome eq 'pending';
                     if ($outcome eq 'refusal') {
-                        my $response = text_response('no', status => 403);
+                        my $response = response('Text', 'no', status => 403);
                         await ($kind eq 'websocket' ? $h->deny($response) : $h->decline($response));
                         return;
                     }

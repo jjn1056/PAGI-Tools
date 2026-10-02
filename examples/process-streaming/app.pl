@@ -7,7 +7,7 @@ use Fcntl qw(F_GETFL F_SETFL O_NONBLOCK);
 
 use PAGI::Compose  qw(compose);
 use PAGI::Pages    qw(not_found);
-use PAGI::Response qw(stream_response text_response);
+use PAGI::Response qw(response);
 use PAGI::Routing  qw(route);
 
 # ---------------------------------------------------------------------------
@@ -67,7 +67,7 @@ async sub run_report ($request) {
 
     my ($fh, $pid) = spawn_reader(@$command);
 
-    return stream_response(
+    return response('Stream',
         async sub ($writer) {
             # Runs exactly once, however this stream ends: normal completion,
             # a producer error, or the client vanishing mid-stream. That is
@@ -91,7 +91,7 @@ sub index_page ($request) {
         'Try: curl -N http://localhost:5000/reports/ticker',
         'Then press Ctrl-C and watch the server stop the child process.',
         '';
-    return text_response($body);
+    return response('Text', $body);
 }
 
 compose(

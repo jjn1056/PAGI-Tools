@@ -77,7 +77,7 @@ Compose owns the application root and lifespan.
 
     use PAGI::Routing qw(:routes :middleware);
     use PAGI::Compose qw(compose);
-    use PAGI::Response qw(json_response);
+    use PAGI::Response qw(response);
 
     use Future::AsyncAwait;
     use MyApp::Routes::Home ();
@@ -97,7 +97,7 @@ Compose owns the application root and lifespan.
                 routes => [
                     route('/users/{id}' => async sub {
                         my ($request) = @_;
-                        return json_response({
+                        return response('JSON', {
                             id => $request->path_param('id'),
                         });
                     },
@@ -203,12 +203,12 @@ The usual HTTP default is a source-free Pages application:
 
 When the response depends on the Request, use a bare one-Request handler:
 
-    use PAGI::Response qw(problem_response);
+    use PAGI::Response qw(response);
 
     router(
         routes => \@routes,
         http_default => sub ($request) {
-            return problem_response({
+            return response('Problem', {
                 title  => 'Not Found',
                 status => 404,
                 detail => "No route matched " . $request->path,

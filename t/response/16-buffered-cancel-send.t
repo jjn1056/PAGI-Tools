@@ -11,7 +11,7 @@ for my $scope_type (qw(http websocket sse)) {
         my $pending = Future->new;
         my @events;
         my $operation = PAGI::Utils::invoke_app(
-            PAGI::Response::text_response('no', status => 403),
+            PAGI::Response::response('Text', 'no', status => 403),
             { type => $scope_type }, sub { die 'unexpected receive' },
             sub { push @events, $_[0]; return $pending },
         );
@@ -27,7 +27,7 @@ for my $scope_type (qw(http websocket sse)) {
         my $pending = Future->new;
         my @events;
         my $operation = invoke_app(
-            PAGI::Response::text_response('no', status => 403),
+            PAGI::Response::response('Text', 'no', status => 403),
             { type => $scope_type }, sub { die 'unexpected receive' },
             sub {
                 push @events, $_[0];
@@ -51,7 +51,7 @@ for my $scope_type (qw(http websocket sse)) {
 subtest 'a normal send failure still fails invocation' => sub {
     my @events;
     my $operation = invoke_app(
-        PAGI::Response::text_response('no', status => 403),
+        PAGI::Response::response('Text', 'no', status => 403),
         { type => 'http' }, sub { die 'unexpected receive' },
         sub {
             push @events, $_[0];

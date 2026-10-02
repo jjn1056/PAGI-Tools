@@ -1,7 +1,7 @@
 use strict; use warnings; use Test2::V0; use Future::AsyncAwait;
 use PAGI::Test::Client;
 use PAGI::Pages;
-use PAGI::Response qw(text_response);
+use PAGI::Response qw(response);
 use PAGI::WebSocket;
 
 async sub try_send {
@@ -181,7 +181,7 @@ subtest 'production helper observes clean refusal completion metadata' => sub {
         $conn->on_disconnect(sub { ++$disconnected });
         my $ws = PAGI::WebSocket->new($scope, $receive, $send);
         $ws->on_close(sub { push @closed, [@_]; return });
-        await $ws->deny(text_response('Access denied', status => 403));
+        await $ws->deny(response('Text', 'Access denied', status => 403));
     });
     my $session = $client->websocket('/ws');
     ok $session->refused, 'handshake refused';

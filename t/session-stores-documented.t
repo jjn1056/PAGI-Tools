@@ -7,7 +7,7 @@ use lib "$Bin/../lib";
 use PAGI::Compose qw(compose);
 use PAGI::Middleware::Session;
 use PAGI::Middleware::Session::Store::Memory;
-use PAGI::Response qw(json_response);
+use PAGI::Response qw(response);
 use PAGI::Routing qw(middleware route);
 use PAGI::Session qw(session);
 use PAGI::Test::Client;
@@ -22,7 +22,7 @@ sub visits {
     my ($request) = @_;
     my $session = session($request);
     $session->set(visits => $session->get('visits', 0) + 1);
-    return json_response({ visits => $session->get('visits') });
+    return response('JSON', { visits => $session->get('visits') });
 }
 
 sub app_with {
@@ -112,12 +112,12 @@ subtest 'header state: the application hands the client its session ID' => sub {
                 my $session = session($request);
                 $issued = $session->id;
                 $session->set(visits => $session->get('visits', 0) + 1);
-                return json_response({ visits => $session->get('visits') });
+                return response('JSON', { visits => $session->get('visits') });
             }),
             route('/login' => sub {
                 my ($request) = @_;
                 session($request)->regenerate;
-                return json_response({ ok => 1 });
+                return response('JSON', { ok => 1 });
             }, methods => ['POST']),
         ],
     );

@@ -53,7 +53,7 @@ subtest 'README preserves the comparison and current executable source' => sub {
     unlike($app_source, qr/compose\s*\(\s*router\s*=>\s*router\s*\(/s,
         'apples does not construct a redundant nested Router expression');
     like($app_source,
-        qr/async\s+sub\s+export_apples\s*\(\$request\)\s*\{.*?return\s+ndjson_response\s*\(/s,
+        qr/async\s+sub\s+export_apples\s*\(\$request\)\s*\{.*?return\s+response\('NDJSON',/s,
         'export is an ordinary Request handler returning an NDJSON Response');
     like($app_source,
         qr/route\('\/export'\s*=>\s*\\&export_apples,\s*methods\s*=>\s*\['GET'\],\s*name\s*=>\s*'export'\).*?route\('\/\{apple_id:&Int\}'/s,

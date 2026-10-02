@@ -5,7 +5,7 @@ use NotesDemo::TokenStore;
 use PAGI::Auth qw(auth auth_result unauth_result www_authenticate);
 use PAGI::Auth::SimpleUser;
 use PAGI::Compose qw(compose);
-use PAGI::Response qw(json_response);
+use PAGI::Response qw(response);
 use PAGI::Routing qw(middleware route);
 
 # The authentication backend: turns a Bearer token into a user and grants.
@@ -44,7 +44,7 @@ sub authentication_notice ($context) {
     my $malformed = $failure && ($failure->code // '') eq 'malformed_authorization';
     my @params = (realm => 'notes');
     push @params, error => ($malformed ? 'invalid_request' : 'invalid_token') if $failure;
-    return json_response(
+    return response('JSON',
         { error => $malformed ? 'Malformed Authorization header.' : 'Please authenticate.' },
         status => $malformed ? 400 : 401,
         headers => ['WWW-Authenticate' => www_authenticate('Bearer', @params)],
@@ -53,7 +53,7 @@ sub authentication_notice ($context) {
 
 # Public: anyone can read the notes; a known token only changes the viewer.
 async sub list_notes ($request, $notes) {
-    return json_response({
+    return response('JSON', {
         viewer => auth($request)->user->display_name || 'Guest',
         notes => await $notes->all_published,
     });
@@ -62,7 +62,7 @@ async sub list_notes ($request, $notes) {
 sub me ($request) {
     my $context = auth($request);
     return authentication_notice($context) unless $context->user->is_authenticated;
-    return json_response({
+    return response('JSON', {
         user_id => $context->user->identity,
         display_name => $context->user->display_name,
         scopes => $context->credentials->scopes,
@@ -73,7 +73,7 @@ async sub publish_note ($request, $notes) {
     my $context = auth($request);
     return authentication_notice($context) unless $context->user->is_authenticated;
     unless ($context->credentials->has_all('notes:read', 'notes:write')) {
-        return json_response(
+        return response('JSON',
             { error => 'Publishing requires read and write access.' },
             status => 403,
             headers => ['WWW-Authenticate' => www_authenticate('Bearer',
@@ -85,17 +85,17 @@ async sub publish_note ($request, $notes) {
     my $data = await $request->json;
     unless (ref($data) eq 'HASH' && defined($data->{text})
         && !ref($data->{text}) && $data->{text} =~ /\S/) {
-        return json_response({error => 'A nonempty text string is required.'}, status => 400);
+        return response('JSON', {error => 'A nonempty text string is required.'}, status => 400);
     }
     my $note = await $notes->publish($context->user->identity, $data);
-    return json_response($note, status => 201);
+    return response('JSON', $note, status => 201);
 }
 
 async sub export_notes ($request, $notes) {
     my $context = auth($request);
     return authentication_notice($context) unless $context->user->is_authenticated;
     unless ($context->credentials->has('notes:read')) {
-        return json_response(
+        return response('JSON',
             { error => 'Export requires read access.' },
             status => 403,
             headers => ['WWW-Authenticate' => www_authenticate('Bearer',
@@ -103,7 +103,7 @@ async sub export_notes ($request, $notes) {
             )],
         );
     }
-    return json_response({notes => await $notes->all_published});
+    return response('JSON', {notes => await $notes->all_published});
 }
 
 # The services are passed in, so a test can supply its own.

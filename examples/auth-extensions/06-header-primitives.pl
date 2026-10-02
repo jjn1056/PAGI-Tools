@@ -1,7 +1,7 @@
 use v5.40;
 use PAGI::Auth qw(www_authenticate);
 use PAGI::Headers;
-use PAGI::Response qw(json_response);
+use PAGI::Response qw(response);
 use PAGI::Utils::Headers qw(parse_authorization_bearer);
 
 # Independent utility functions also work without a Request or Headers object.
@@ -26,7 +26,7 @@ say 'digest raw: ', $headers->get('WWW-Authenticate');
 
 # This constructs a resource_metadata header only; it does not implement
 # discovery, token acquisition, OAuth, or MCP methods.
-my $response = json_response({ error => 'An access token is required.' },
+my $response = response('JSON', { error => 'An access token is required.' },
     status => 401,
 );
 $response->headers->set('WWW-Authenticate',
@@ -34,7 +34,7 @@ $response->headers->set('WWW-Authenticate',
 );
 say 'metadata: ', $response->header('WWW-Authenticate');
 
-my $denied = json_response({ error => 'Read access required.' }, status => 403);
+my $denied = response('JSON', { error => 'Read access required.' }, status => 403);
 $denied->headers->set('WWW-Authenticate',
     www_authenticate('Bearer', realm => 'notes', error => 'insufficient_scope',
         scope => 'notes:read'));

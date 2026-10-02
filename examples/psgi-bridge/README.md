@@ -5,7 +5,7 @@ routes:
 
 ```perl
 compose(routes => [
-    route('/health' => sub { return json_response({ ok => 1 }) }),
+    route('/health' => sub { return response('JSON', { ok => 1 }) }),
     route('/*path' => PAGI::App::WrapPSGI->new(psgi_app => $psgi_app), methods => '*'),
 ]);
 ```

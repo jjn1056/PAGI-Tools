@@ -6,7 +6,7 @@ use Test2::V0;
 use lib 'lib';
 use PAGI::Compose qw(compose);
 use PAGI::Pages qw(not_found);
-use PAGI::Response qw(text_response);
+use PAGI::Response qw(response);
 use PAGI::Routing qw(middleware mount route router);
 
 sub slurp_file {
@@ -28,12 +28,12 @@ subtest 'current Compose and Router topology constructs' => sub {
         http_default => not_found(detail => 'No child route'),
         middleware => [middleware($audit)],
         routes => [
-            route('/{id}' => sub { return text_response($_[0]->path_param('id')) },
+            route('/{id}' => sub { return response('Text', $_[0]->path_param('id')) },
                 name => 'show'),
         ],
     );
     my $app = compose(routes => [
-        route('/' => sub { return text_response('home') }, name => 'home'),
+        route('/' => sub { return response('Text', 'home') }, name => 'home'),
         mount('/people', app => $child, name => 'people'),
     ]);
     isa_ok $app, 'PAGI::Compose';

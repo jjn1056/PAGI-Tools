@@ -4,7 +4,7 @@ use PAGI::Auth qw(auth auth_result unauth_result www_authenticate);
 use PAGI::Auth::SimpleUser;
 use PAGI::Compose qw(compose);
 use PAGI::Pages;
-use PAGI::Response qw(json_response);
+use PAGI::Response qw(response);
 use PAGI::Routing qw(route mount middleware router);
 use PAGI::Utils qw(invoke_app);
 
@@ -21,10 +21,10 @@ my $backend = sub ($request) {
         : unauth_result(failure => { message => 'Sign in to continue.' });
 };
 my $ok = sub ($request) {
-    return json_response({ identity => auth($request)->user->identity });
+    return response('JSON', { identity => auth($request)->user->identity });
 };
 my $notice = sub ($request) {
-    return json_response({ error => auth($request)->failure->message },
+    return response('JSON', { error => auth($request)->failure->message },
         status => 401,
         headers => ['WWW-Authenticate' => www_authenticate('Bearer', realm => 'demo')]);
 };
@@ -32,7 +32,7 @@ my $notice = sub ($request) {
 my $group = sub ($next) {
     return async sub ($scope, $receive, $send) {
         unless (auth($scope)->user->is_authenticated) {
-            await invoke_app(json_response({ error => 'Group sign-in required.' },
+            await invoke_app(response('JSON', { error => 'Group sign-in required.' },
                 status => 401,
                 headers => ['WWW-Authenticate' => www_authenticate('Bearer', realm => 'demo')]),
                 $scope, $receive, $send);
@@ -55,7 +55,7 @@ compose(
             return $ok->($request);
         }),
         route('/response' => sub ($request) {
-            return json_response({ error => 'Concrete Response' },
+            return response('JSON', { error => 'Concrete Response' },
                 status => 401,
                 headers => ['WWW-Authenticate' => www_authenticate('Bearer', realm => 'demo')])
                 unless auth($request)->user->is_authenticated;

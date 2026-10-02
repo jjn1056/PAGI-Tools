@@ -7,7 +7,7 @@ use Future::AsyncAwait;
 use PAGI::Auth qw(auth auth_result unauth_result www_authenticate);
 use PAGI::Auth::SimpleUser;
 use PAGI::Compose qw(compose);
-use PAGI::Response qw(json_response file_response);
+use PAGI::Response qw(response);
 use PAGI::Routing qw(route mount middleware);
 use PAGI::Utils qw(app_path invoke_app);
 
@@ -78,7 +78,7 @@ sub login ($request) {
         },
     );
 
-    return json_response(
+    return response('JSON',
         { token => $token },
         headers => ['Cache-Control' => 'no-store'],
     );
@@ -100,7 +100,7 @@ sub require_login ($next) {
             my @params = (realm => 'jwt-sandbox');
             push @params, error => ($malformed ? 'invalid_request' : 'invalid_token')
                 if $failure;
-            my $response = json_response(
+            my $response = response('JSON',
                 { error => $malformed ? 'Malformed Authorization header.'
                          : 'Please sign in to access the vault.' },
                 status  => $malformed ? 400 : 401,
@@ -122,7 +122,7 @@ sub protected_route ($request) {
     my $context = auth($request);
     my $user = $context->user;
 
-    return json_response({
+    return response('JSON', {
         message            => 'Success! You accessed the vault.',
         user_authenticated => $user->is_authenticated ? \1 : \0,
         username           => $user->identity,
@@ -131,12 +131,12 @@ sub protected_route ($request) {
 }
 
 sub catalog ($request) {
-    return json_response({ items => ['Notebook', 'Pencil'] });
+    return response('JSON', { items => ['Notebook', 'Pencil'] });
 }
 
 compose(
     routes => [
-        route('/' => file_response(
+        route('/' => response('File',
             $page,
             content_type => 'text/html; charset=utf-8',
         ), methods => ['GET']),

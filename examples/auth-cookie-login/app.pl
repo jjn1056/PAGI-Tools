@@ -8,7 +8,7 @@ use PAGI::Auth::SimpleUser;
 use PAGI::Compose qw(compose);
 use PAGI::Middleware::Session qw(session_state);
 use PAGI::Pages qw(redirect not_found);
-use PAGI::Response qw(html_response);
+use PAGI::Response qw(response);
 use PAGI::Routing qw(route mount middleware);
 use PAGI::Routing::URL qw(path_for);
 use PAGI::Session qw(session);
@@ -37,7 +37,7 @@ sub login_page ($request, $next, $error = undef) {
         ? sprintf(qq{<input type="hidden" name="next" value="%s">}, html_escape($next))
         : '';
 
-    return html_response(<<"HTML");
+    return response('HTML', <<"HTML");
 <!doctype html>
 <html lang="en">
 <head><meta charset="utf-8"><title>Demo login</title></head>
@@ -57,7 +57,7 @@ HTML
 
 async sub home($request) {
     my $logout = html_escape(path_for($request, 'logout'));
-    return html_response(<<"HTML");
+    return response('HTML', <<"HTML");
 <!doctype html>
 <html lang="en">
 <head><meta charset="utf-8"><title>Demo home</title></head>

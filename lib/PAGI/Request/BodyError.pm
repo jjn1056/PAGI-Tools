@@ -42,7 +42,7 @@ PAGI::Request::BodyError - A request body the client got wrong
     unless (eval { $data = await $request->json; 1 }) {
         my $error = $@;
         die $error unless ref $error && $error->isa('PAGI::Request::BodyError');
-        return json_response({ error => 'Send a JSON object.' }, status => 400);
+        return response('JSON', { error => 'Send a JSON object.' }, status => 400);
     }
 
 =head1 DESCRIPTION

@@ -8,7 +8,7 @@ use Future;
 use Test2::V0;
 
 use lib 'lib';
-use PAGI::Response qw(file_response);
+use PAGI::Response qw(response);
 use PAGI::Response::File;
 use PAGI::Response::File::Plan;
 use PAGI::Routing::HeadBoundary;
@@ -72,7 +72,7 @@ subtest 'construction validates configuration but defers all file inspection' =>
     my $root = tempdir(CLEANUP => 1);
     my $late = File::Spec->catfile($root, 'late.txt');
 
-    my $response = file_response($late);
+    my $response = response('File', $late);
     isa_ok($response, ['PAGI::Response::File', 'PAGI::Response']);
     ok(!$response->is_buffered, 'File explicitly reports unbuffered delivery');
     like(dies { $response->body }, qr/File response.*body/i,
@@ -88,7 +88,7 @@ subtest 'construction validates configuration but defers all file inspection' =>
         'the application does not open a long-lived filehandle');
 
     my $missing = File::Spec->catfile($root, 'missing.txt');
-    my $missing_response = file_response($missing);
+    my $missing_response = response('File', $missing);
     my @missing_events;
     like(dies {
         $missing_response->to_app->(
@@ -100,7 +100,7 @@ subtest 'construction validates configuration but defers all file inspection' =>
     is(\@missing_events, [],
         'missing-path preflight fails before response start');
 
-    my $directory_response = file_response($root);
+    my $directory_response = response('File', $root);
     my @directory_events;
     like(dies {
         $directory_response->to_app->(
@@ -120,7 +120,7 @@ subtest 'construction validates configuration but defers all file inspection' =>
     } else {
         my @events;
         like(dies {
-            file_response($unreadable)->to_app->(
+            response('File', $unreadable)->to_app->(
                 http_scope(), receive(),
                 sub { push @events, $_[0]; Future->done },
             )->get;
@@ -134,34 +134,34 @@ subtest 'construction validates configuration but defers all file inspection' =>
 subtest 'File validates option shapes without consulting the filesystem' => sub {
     for my $case (
         ['missing path', sub { PAGI::Response::File->new() }, qr/requires.*path/i],
-        ['undefined path', sub { file_response(undef) }, qr/path.*defined.*nonempty.*string/i],
-        ['empty path', sub { file_response('') }, qr/path.*defined.*nonempty.*string/i],
-        ['reference path', sub { file_response([]) }, qr/path.*defined.*nonempty.*string/i],
-        ['NUL path', sub { file_response("bad\0path") }, qr/path.*NUL/i],
-        ['odd options', sub { file_response('/absent', 'offset') }, qr/name\/value pairs/i],
-        ['unknown option', sub { file_response('/absent', mystery => 1) }, qr/unknown.*mystery/i],
-        ['duplicate option', sub { file_response('/absent', offset => 1, offset => 2) }, qr/duplicate.*offset/i],
-        ['negative offset', sub { file_response('/absent', offset => -1) }, qr/offset.*nonnegative integer/i],
-        ['fractional length', sub { file_response('/absent', length => 1.5) }, qr/length.*nonnegative integer/i],
-        ['reference range flag', sub { file_response('/absent', handle_ranges => []) }, qr/handle_ranges.*boolean/i],
-        ['nonboolean inline', sub { file_response('/absent', inline => 2) }, qr/inline.*boolean/i],
-        ['reference filename', sub { file_response('/absent', filename => []) }, qr/filename.*scalar/i],
-        ['unsafe filename', sub { file_response('/absent', filename => "x\r\ny") }, qr/filename.*control/i],
-        ['undefined etag', sub { file_response('/absent', etag => undef) }, qr/etag/i],
-        ['reference etag', sub { file_response('/absent', etag => {}) }, qr/etag/i],
-        ['invalid entity tag', sub { file_response('/absent', etag => 'release-1') }, qr/entity.?tag/i],
+        ['undefined path', sub { response('File', undef) }, qr/path.*defined.*nonempty.*string/i],
+        ['empty path', sub { response('File', '') }, qr/path.*defined.*nonempty.*string/i],
+        ['reference path', sub { response('File', []) }, qr/path.*defined.*nonempty.*string/i],
+        ['NUL path', sub { response('File', "bad\0path") }, qr/path.*NUL/i],
+        ['odd options', sub { response('File', '/absent', 'offset') }, qr/name\/value pairs/i],
+        ['unknown option', sub { response('File', '/absent', mystery => 1) }, qr/unknown.*mystery/i],
+        ['duplicate option', sub { response('File', '/absent', offset => 1, offset => 2) }, qr/duplicate.*offset/i],
+        ['negative offset', sub { response('File', '/absent', offset => -1) }, qr/offset.*nonnegative integer/i],
+        ['fractional length', sub { response('File', '/absent', length => 1.5) }, qr/length.*nonnegative integer/i],
+        ['reference range flag', sub { response('File', '/absent', handle_ranges => []) }, qr/handle_ranges.*boolean/i],
+        ['nonboolean inline', sub { response('File', '/absent', inline => 2) }, qr/inline.*boolean/i],
+        ['reference filename', sub { response('File', '/absent', filename => []) }, qr/filename.*scalar/i],
+        ['unsafe filename', sub { response('File', '/absent', filename => "x\r\ny") }, qr/filename.*control/i],
+        ['undefined etag', sub { response('File', '/absent', etag => undef) }, qr/etag/i],
+        ['reference etag', sub { response('File', '/absent', etag => {}) }, qr/etag/i],
+        ['invalid entity tag', sub { response('File', '/absent', etag => 'release-1') }, qr/entity.?tag/i],
     ) {
         my ($label, $code, $error) = @$case;
         like(dies { $code->() }, $error, "$label is rejected at construction");
     }
 
-    ok(file_response('/absent', offset => 0, length => 0),
+    ok(response('File', '/absent', offset => 0, length => 0),
         'zero-valued window shapes are accepted without stat');
-    ok(file_response('/absent', etag => 0),
+    ok(response('File', '/absent', etag => 0),
         'false disables automatic ETag without stat');
-    ok(file_response('/absent', etag => 1),
+    ok(response('File', '/absent', etag => 1),
         'true requests automatic ETag without stat');
-    ok(file_response('/absent', etag => 'W/"release-1"'),
+    ok(response('File', '/absent', etag => 'W/"release-1"'),
         'a validated explicit entity tag is accepted without stat');
 };
 
@@ -170,7 +170,7 @@ subtest 'full files and configured windows have authoritative logical metadata' 
     my $path = File::Spec->catfile($root, 'large.bin');
     write_file($path, 'x' x 70_000);
 
-    my $full = run_response(file_response($path));
+    my $full = run_response(response('File', $path));
     is($full->[0]{status}, 200, 'a complete file is a 200 representation');
     is(event_header($full->[0], 'content-length'), 70_000,
         'full response owns the complete file length');
@@ -180,7 +180,7 @@ subtest 'full files and configured windows have authoritative logical metadata' 
         type => 'http.response.body', file => $path,
     }, 'full response hands one whole-file event to the server');
 
-    my $window = run_response(file_response(
+    my $window = run_response(response('File',
         $path, offset => 1024, length => 65_536,
     ));
     is($window->[0]{status}, 200,
@@ -195,8 +195,8 @@ subtest 'full files and configured windows have authoritative logical metadata' 
     }, 'window event carries the exact physical offset and length');
 
     for my $case (
-        ['offset beyond file', file_response($path, offset => 70_001)],
-        ['window beyond file', file_response($path, offset => 69_999, length => 2)],
+        ['offset beyond file', response('File', $path, offset => 70_001)],
+        ['window beyond file', response('File', $path, offset => 69_999, length => 2)],
     ) {
         my ($label, $invalid) = @$case;
         my @events;
@@ -214,17 +214,17 @@ subtest 'full files and configured windows have authoritative logical metadata' 
 subtest 'calculated fields and range status cannot acquire competing owners' => sub {
     for my $name ('Content-Length', 'content-range', 'ETag') {
         like(dies {
-            file_response('/absent', headers => [$name => 'caller']);
+            response('File', '/absent', headers => [$name => 'caller']);
         }, qr/File response.*own.*\Q$name\E/i,
             "$name is rejected in constructor headers");
     }
 
-    my $response = file_response('/absent');
+    my $response = response('File', '/absent');
     for my $name ('Content-Length', 'Content-Range', 'ETag') {
         like(dies { $response->header($name => 'caller') }, qr/File response.*own/i,
             "$name is also rejected by later header mutation");
     }
-    like(dies { file_response('/absent', status => 206) }, qr/206.*range plan/i,
+    like(dies { response('File', '/absent', status => 206) }, qr/206.*range plan/i,
         'construction cannot claim partial content without a request plan');
     like(dies { $response->status(206) }, qr/206.*range plan/i,
         'later status mutation cannot claim unplanned partial content');
@@ -232,7 +232,7 @@ subtest 'calculated fields and range status cannot acquire competing owners' => 
     my $root = tempdir(CLEANUP => 1);
     my $path = File::Spec->catfile($root, 'mutated.txt');
     write_file($path, 'mutation');
-    my $through_headers = file_response($path);
+    my $through_headers = response('File', $path);
     $through_headers->headers->add('ETag', '"caller"');
     my @events;
     like(dies {
@@ -245,7 +245,7 @@ subtest 'calculated fields and range status cannot acquire competing owners' => 
     is(\@events, [],
         'late calculated-header conflict is rejected before response start');
 
-    my $framed = run_response(file_response(
+    my $framed = run_response(response('File',
         $path, headers => ['Transfer-Encoding' => 'chunked'],
     ));
     ok(!defined event_header($framed->[0], 'transfer-encoding'),
@@ -259,7 +259,7 @@ subtest 'MIME, disposition, ETag, conditionals, and range arithmetic share one p
     my $json = File::Spec->catfile($root, 'report.json');
     write_file($json, '0123456789');
 
-    my $named = run_response(file_response(
+    my $named = run_response(response('File',
         $json, filename => 'monthly "report".json',
     ));
     is(event_header($named->[0], 'content-type'), 'application/json',
@@ -268,31 +268,31 @@ subtest 'MIME, disposition, ETag, conditionals, and range arithmetic share one p
         'attachment; filename="monthly \\"report\\".json"',
         'filename defaults to a safely quoted attachment');
 
-    my $unicode = run_response(file_response($json, filename => 'résumé.pdf'));
+    my $unicode = run_response(response('File', $json, filename => 'résumé.pdf'));
     my $disposition = event_header($unicode->[0], 'content-disposition');
     is($disposition, "attachment; filename*=UTF-8''r%C3%A9sum%C3%A9.pdf",
         'non-ASCII download filename is emitted as UTF-8 extended value');
     ok(!utf8::is_utf8($disposition), 'wire disposition is a byte string');
 
-    my $inline = run_response(file_response($json, inline => 1));
+    my $inline = run_response(response('File', $json, inline => 1));
     is(event_header($inline->[0], 'content-disposition'), 'inline',
         'inline without a filename still emits an inline disposition');
-    my $inline_named = run_response(file_response(
+    my $inline_named = run_response(response('File',
         $json, inline => 1, filename => 'report.json',
     ));
     is(event_header($inline_named->[0], 'content-disposition'),
         'inline; filename="report.json"',
         'inline filename retains both disposition instructions');
 
-    my $no_etag = run_response(file_response($json, etag => 0));
+    my $no_etag = run_response(response('File', $json, etag => 0));
     ok(!defined event_header($no_etag->[0], 'etag'),
         'false ETag policy omits the calculated field');
-    my $explicit = run_response(file_response($json, etag => '"release-1"'));
+    my $explicit = run_response(response('File', $json, etag => '"release-1"'));
     is(event_header($explicit->[0], 'etag'), '"release-1"',
         'explicit validated ETag is retained');
 
-    my $first_window = file_response($json, offset => 0, length => 6);
-    my $second_window = file_response($json, offset => 1, length => 6);
+    my $first_window = response('File', $json, offset => 0, length => 6);
+    my $second_window = response('File', $json, offset => 1, length => 6);
     my $first_full = run_response($first_window);
     my $second_full = run_response($second_window);
     my $first_tag = event_header($first_full->[0], 'etag');
@@ -335,7 +335,7 @@ subtest 'selected-file conditions use all fields and eligible HTTP representatio
     my $root = tempdir(CLEANUP => 1);
     my $path = File::Spec->catfile($root, 'conditional.txt');
     write_file($path, 'abcdef');
-    my $response = file_response($path, etag => '"a,b"',
+    my $response = response('File', $path, etag => '"a,b"',
         headers => ['Cache-Control' => 'private', 'Vary' => 'Accept']);
     my $matching = [
         ['If-None-Match', '"old"'], ['If-None-Match', 'W/"a,b"'],
@@ -350,7 +350,7 @@ subtest 'selected-file conditions use all fields and eligible HTTP representatio
         '304 retains configured cache policy');
     is(event_header($events->[0], 'Vary'), 'Accept', '304 retains configured Vary');
 
-    my $wildcard = run_response(file_response($path, etag => 0),
+    my $wildcard = run_response(response('File', $path, etag => 0),
         http_scope(headers => [['If-None-Match', '*']]));
     is($wildcard->[0]{status}, 304, 'existing selected file matches wildcard without ETag');
     ok(!defined event_header($wildcard->[0], 'ETag'),
@@ -361,13 +361,13 @@ subtest 'selected-file conditions use all fields and eligible HTTP representatio
         headers => $matching))->[0]{status}, 200, 'POST does not select 304');
     is(run_response($response, http_scope(method => 'get',
         headers => $matching))->[0]{status}, 200, 'method spelling must be exact');
-    is(run_response(file_response($path, status => 404, etag => '"a,b"'),
+    is(run_response(response('File', $path, status => 404, etag => '"a,b"'),
         http_scope(headers => [['If-None-Match', '*']]))->[0]{status}, 404,
         'file-backed error is not a cached representation');
-    is(run_response(file_response($path, status => 201, etag => '"a,b"'),
+    is(run_response(response('File', $path, status => 201, etag => '"a,b"'),
         http_scope(headers => [['If-None-Match', '*']]))->[0]{status}, 304,
         'successful selected representation remains conditionally eligible');
-    is(run_response(file_response($path, status => 302, etag => '"a,b"'),
+    is(run_response(response('File', $path, status => 302, etag => '"a,b"'),
         http_scope(headers => [['If-None-Match', '*']]))->[0]{status}, 302,
         'redirect does not select 304');
 
@@ -378,11 +378,11 @@ subtest 'selected-file conditions use all fields and eligible HTTP representatio
         is($unmatched->[0]{status}, 206,
             'unusable or nonmatching condition preserves range delivery');
     }
-    is(run_response(file_response($path, etag => '"a,b"', handle_ranges => 0),
+    is(run_response(response('File', $path, etag => '"a,b"', handle_ranges => 0),
         http_scope(headers => [['If-None-Match', '*']]))->[0]{status}, 304,
         'disabled range processing does not disable conditionals');
 
-    my $window = file_response($path, offset => 1, length => 3);
+    my $window = response('File', $path, offset => 1, length => 3);
     my $full_window = run_response($window);
     my $window_tag = event_header($full_window->[0], 'ETag');
     my $cached_window = run_response($window, http_scope(headers => [
@@ -398,7 +398,7 @@ subtest 'strict single ranges operate against full files and logical windows' =>
     my $path = File::Spec->catfile($root, 'digits.txt');
     write_file($path, '0123456789');
 
-    my $window = file_response($path, offset => 2, length => 6);
+    my $window = response('File', $path, offset => 2, length => 6);
     for my $case (
         ['bytes=1-3', 'bytes 1-3/6', 3, 3],
         ['bytes=3-',  'bytes 3-5/6', 5, 3],
@@ -420,7 +420,7 @@ subtest 'strict single ranges operate against full files and logical windows' =>
     }
 
     my $full_range = run_response(
-        file_response($path),
+        response('File', $path),
         http_scope(headers => [['range', 'bytes=2-5']]),
     );
     is(event_header($full_range->[0], 'content-range'), 'bytes 2-5/10',
@@ -429,7 +429,7 @@ subtest 'strict single ranges operate against full files and logical windows' =>
         'full-file client range becomes its physical offset');
 
     my $non_success = run_response(
-        file_response($path, status => 404),
+        response('File', $path, status => 404),
         http_scope(headers => [['range', 'bytes=2-5']]),
     );
     is($non_success->[0]{status}, 404,
@@ -463,7 +463,7 @@ subtest 'strict single ranges operate against full files and logical windows' =>
     }
 
     my $ignored = run_response(
-        file_response($path, offset => 2, length => 6, handle_ranges => 0),
+        response('File', $path, offset => 2, length => 6, handle_ranges => 0),
         http_scope(headers => [['range', 'bytes=1-2']]),
     );
     is($ignored->[0]{status}, 200,
@@ -529,7 +529,7 @@ subtest 'trusted path ownership, retained configuration, and send settlement sta
     my $start_gate = Future->new;
     my $body_gate = Future->new;
     my @events;
-    my $running = file_response($selected)->to_app->(
+    my $running = response('File', $selected)->to_app->(
         http_scope(), receive(),
         sub {
             push @events, $_[0];
@@ -549,7 +549,7 @@ subtest 'trusted path ownership, retained configuration, and send settlement sta
 
     my @failed_start_events;
     like(dies {
-        file_response($selected)->to_app->(
+        response('File', $selected)->to_app->(
             http_scope(), receive(),
             sub {
                 push @failed_start_events, $_[0];
@@ -567,7 +567,7 @@ subtest 'trusted path ownership, retained configuration, and send settlement sta
             $pending->on_cancel(sub { ++$send_cancellations });
             my @cancel_events;
 
-            my $cancelled_response = file_response($selected)->to_app->(
+            my $cancelled_response = response('File', $selected)->to_app->(
                 http_scope(), receive(),
                 sub {
                     push @cancel_events, $_[0];
@@ -615,7 +615,7 @@ subtest 'HEAD suppression remains an enclosing wire-boundary responsibility' => 
             return @wire_events == 2 ? $terminal : Future->done;
         },
     );
-    my $running = file_response($path)->to_app->(
+    my $running = response('File', $path)->to_app->(
         $scope, receive(), $send,
     );
     is($wire_events[0]{status}, 200,

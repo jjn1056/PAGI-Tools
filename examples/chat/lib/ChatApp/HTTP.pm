@@ -7,7 +7,7 @@ use strict;
 use warnings;
 
 use PAGI::Pages qw(not_found);
-use PAGI::Response qw(json_response);
+use PAGI::Response qw(response);
 use PAGI::Routing qw(route router);
 
 use ChatApp::State qw(
@@ -32,7 +32,7 @@ sub routing {
 sub rooms {
     my ($request) = @_;
     my $rooms = get_all_rooms();
-    return json_response([
+    return response('JSON', [
         map { +{
             name       => $_->{name},
             users      => scalar(keys %{$_->{users}}),
@@ -46,19 +46,19 @@ sub room_history {
     my ($request) = @_;
     my $name = $request->path_param('name');
     return not_found(detail => 'Room not found') unless get_room($name);
-    return json_response(get_room_messages($name, 100), @NO_CACHE);
+    return response('JSON', get_room_messages($name, 100), @NO_CACHE);
 }
 
 sub room_users {
     my ($request) = @_;
     my $name = $request->path_param('name');
     return not_found(detail => 'Room not found') unless get_room($name);
-    return json_response(get_room_users($name), @NO_CACHE);
+    return response('JSON', get_room_users($name), @NO_CACHE);
 }
 
 sub stats {
     my ($request) = @_;
-    return json_response(get_stats(), @NO_CACHE);
+    return response('JSON', get_stats(), @NO_CACHE);
 }
 
 1;

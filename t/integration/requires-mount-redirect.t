@@ -10,7 +10,7 @@ use PAGITest::CurrentServer qw(current_server_unavailable);
 
 use PAGI::Auth qw(unauth_result requires);
 use PAGI::Compose qw(compose);
-use PAGI::Response qw(json_response);
+use PAGI::Response qw(response);
 use PAGI::Routing qw(middleware mount route);
 
 # requires' redirect puts the requested path in next. Inside a mount the
@@ -29,8 +29,8 @@ my $app = compose(
     middleware => [middleware('Authentication', backend => sub { unauth_result() })],
     routes => [
         mount('/admin', routes => [
-            route('/reports' => requires([], sub { json_response({}) }, redirect => ['admin_login'])),
-            route('/login' => sub { json_response({}) }, name => 'admin_login'),
+            route('/reports' => requires([], sub { response('JSON', {}) }, redirect => ['admin_login'])),
+            route('/login' => sub { response('JSON', {}) }, name => 'admin_login'),
         ]),
     ],
 );

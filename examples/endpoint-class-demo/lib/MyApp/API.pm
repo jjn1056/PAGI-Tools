@@ -6,7 +6,7 @@ use Future::AsyncAwait;
 use MyApp::API::User;
 use PAGI::Pages qw(not_found unauthorized);
 use PAGI::Request;
-use PAGI::Response qw(html_response json_response);
+use PAGI::Response qw(response);
 use PAGI::Routing qw(middleware mount route router sse);
 use PAGI::Routing::URL qw(path_for);
 use PAGI::State qw(app_state);
@@ -78,7 +78,7 @@ async sub index {
 
     my $alice = path_for($request, 'show', { user_id => 1 });
     my $resource = $state->get('resource')->{name};
-    return html_response(<<"HTML");
+    return response('HTML', <<"HTML");
 <!doctype html>
 <title>Demo API</title>
 <h1>Demo API</h1>
@@ -91,7 +91,7 @@ async sub status {
     my ($self, $request) = @_;
     my $state = app_state($request)
         or die 'endpoint-class-demo requires Compose lifespan state';
-    return json_response({
+    return response('JSON', {
         status   => 'ready',
         resource => $state->get('resource')->{name},
     });

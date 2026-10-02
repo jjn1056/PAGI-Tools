@@ -111,34 +111,34 @@ builder {
 use v5.40;
 use Future::AsyncAwait;
 use PAGI::Compose qw(compose);
-use PAGI::Response qw(json_response problem_response text_response);
+use PAGI::Response qw(response);
 use PAGI::Routing qw(middleware route);
 use PAGI::Session qw(session);
 use PAGI::State qw(app_state);
 
 async sub home ($request) {
-    return text_response('My notes');
+    return response('Text', 'My notes');
 }
 
 async sub login ($request) {
     session($request)->set(user => 'ada');
-    return json_response({ ok => 1 });
+    return response('JSON', { ok => 1 });
 }
 
 async sub show_note ($request) {
     my $note = app_state($request)->get('notes')->{ $request->path_param('id') }
-        or return json_response({ error => 'no such note' }, status => 404);
-    return json_response($note);
+        or return response('JSON', { error => 'no such note' }, status => 404);
+    return response('JSON', $note);
 }
 
 async sub create_note ($request) {
-    return json_response({ error => 'login required' }, status => 401)
+    return response('JSON', { error => 'login required' }, status => 401)
         unless defined session($request)->get('user', undef);
     my $data  = await $request->json;
     my $notes = app_state($request)->get('notes');
     my $id    = keys(%$notes) + 1;
     $notes->{$id} = { id => $id, text => $data->{text} };
-    return json_response($notes->{$id}, status => 201);
+    return response('JSON', $notes->{$id}, status => 201);
 }
 
 compose(
@@ -152,7 +152,7 @@ compose(
     middleware => [
         middleware('Session'),
         middleware('ErrorHandler', handler => sub ($request, $error) {
-            return problem_response({ title => 'Internal Server Error', status => 500 });
+            return response('Problem', { title => 'Internal Server Error', status => 500 });
         }),
     ],
 );

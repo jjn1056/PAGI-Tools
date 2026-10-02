@@ -9,7 +9,7 @@ use Symbol qw(gensym);
 
 use lib 'lib';
 use PAGI::Compose qw(compose);
-use PAGI::Response qw(text_response);
+use PAGI::Response qw(response);
 use PAGI::Routing qw(middleware mount route router sse websocket);
 
 sub slurp_file {
@@ -331,10 +331,10 @@ subtest 'representative final forms construct' => sub {
         return sub { return $inner->(@_) };
     };
     my $child = router(routes => [
-        route('/' => sub { return text_response('child') }, name => 'index'),
+        route('/' => sub { return response('Text', 'child') }, name => 'index'),
     ]);
     my $root = compose(routes => [
-        route('/health' => sub { return text_response('ok') },
+        route('/health' => sub { return response('Text', 'ok') },
             middleware => [middleware($factory)]),
         mount('/child', app => $child, name => 'child'),
         websocket('/chat' => sub { return $_[0]->close }),

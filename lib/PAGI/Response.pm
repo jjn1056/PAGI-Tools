@@ -38,10 +38,10 @@ representation or delivery behavior:
 
 Use either explicit class construction or the matching optional export:
 
-    use PAGI::Response qw(json_response);
+    use PAGI::Response qw(response);
     use PAGI::Response::JSON ();
     my $one = PAGI::Response::JSON->new({ ok => \1 });
-    my $two = json_response({ ok => \1 });
+    my $two = response('JSON', { ok => \1 });
 
 C<PAGI::Response> exports nothing by default. C<:all> exports all ten
 factories. Each concrete subclass may export only its own factory. Factory
@@ -67,10 +67,10 @@ another charset, encode explicitly and provide the matching Content-Type.
 =head1 SYNOPSIS
 
     use Encode qw(encode);
-    use PAGI::Response qw(response json_response);
+    use PAGI::Response qw(response);
     use PAGI::Utils qw(invoke_app);
 
-    my $json = json_response(
+    my $json = response('JSON',
         { created => \1 },
         status  => 201,
         headers => ['X-Request-ID' => $request_id],
@@ -261,7 +261,7 @@ Delivery internals used by File and Stream are not a public subclass seam.
 
 =head2 stream_response
 
-    my $response = stream_response(
+    my $response = response('Stream',
         sub {
             my ($writer) = @_;
             return $writer->write('encoded bytes');
@@ -275,7 +275,7 @@ backpressure.
 
 =head2 ndjson_response
 
-    my $response = ndjson_response(async sub ($writer) {
+    my $response = response('NDJSON', async sub ($writer) {
         await $writer->write_item({ id => 1 });
     });
 
@@ -286,7 +286,7 @@ JSON sequence. See L<PAGI::Response::NDJSON> for framing and lifecycle details.
 
 =head2 file_response
 
-    my $response = file_response('/srv/reports/monthly.pdf');
+    my $response = response('File', '/srv/reports/monthly.pdf');
 
 Constructs a reusable L<PAGI::Response::File> for one trusted, already
 selected filesystem path. Use L<PAGI::App::File> instead when an untrusted

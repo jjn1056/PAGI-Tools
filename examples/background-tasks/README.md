@@ -14,7 +14,7 @@ async sub signup {
     my ($request) = @_;
     my $data = await $request->json;
     fire_and_forget(send_welcome_email($data->{email}));
-    return json_response({ status => 'created' }, status => 201);
+    return response('JSON', { status => 'created' }, status => 201);
 }
 
 compose(routes => [
@@ -62,7 +62,7 @@ It delays that response by however long it takes:
 
 ```perl
 quick_sync_task("log");
-return json_response({ status => 'ok' });
+return response('JSON', { status => 'ok' });
 ```
 
 **Warning:** Any blocking here blocks ALL requests! Anything slower belongs

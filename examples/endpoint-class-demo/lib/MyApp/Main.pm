@@ -5,7 +5,7 @@ use Future::AsyncAwait;
 
 use MyApp::StatusSocket;
 use PAGI::App::File;
-use PAGI::Response qw(html_response);
+use PAGI::Response qw(response);
 use PAGI::Routing qw(mount route websocket);
 use PAGI::Routing::URL qw(path_for);
 use PAGI::State qw(app_state);
@@ -42,7 +42,7 @@ async sub home {
     $state->get('metrics')->{requests}++;
 
     my $api_index = path_for($request, '/api/index');
-    return html_response(<<"HTML");
+    return response('HTML', <<"HTML");
 <!doctype html>
 <title>Endpoint Class Demo</title>
 <h1>Endpoint Class Demo</h1>

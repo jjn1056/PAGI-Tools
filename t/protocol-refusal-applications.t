@@ -7,7 +7,7 @@ use Scalar::Util qw(refaddr weaken);
 use File::Temp qw(tempfile);
 use lib 't/lib';
 use PAGITest::RefusalHarness;
-use PAGI::Response qw(text_response);
+use PAGI::Response qw(response);
 use PAGI::Response::File;
 use PAGI::Response::Stream;
 use PAGI::Pages;
@@ -53,12 +53,12 @@ for my $kind (qw(websocket sse)) {
                     isa_ok($request, ['PAGI::Request']);
                     is(refaddr($request->scope), refaddr($h->{scope}), 'handler original scope');
                     is($request->scope->{type}, $kind, 'native type');
-                    return text_response('Unavailable', status => 503);
+                    return response('Text', 'Unavailable', status => 503);
                 };
                 my $target = $form eq 'sync' ? $handler
                     : $form eq 'async' ? async sub { $handler->(@_); return PAGI::Pages->service_unavailable }
                     : $form eq 'native' ? sub { $handler->(@_); return $native }
-                    : $form eq 'buffered' ? text_response('Unavailable', status => 503)
+                    : $form eq 'buffered' ? response('Text', 'Unavailable', status => 503)
                     : $form eq 'file' ? PAGI::Response::File->new($path, status => 503)
                     : $form eq 'stream' ? PAGI::Response::Stream->new(async sub { await $_[0]->write('Unavailable') }, status => 503)
                     : $form eq 'pages' ? PAGI::Pages->service_unavailable
@@ -112,11 +112,11 @@ for my $kind (qw(websocket sse)) {
                     $h->{helper}->start->get;
                     is([map { $_->{type} } @{$h->{events}}], ['sse.start', 'sse.keepalive'], 'normal start arms saved keepalive despite response_started');
                 } else {
-                    $h->{helper}->$method(text_response('recovered', status => 503))->get;
+                    $h->{helper}->$method(response('Text', 'recovered', status => 503))->get;
                     is($h->{events}[0]{status}, 503, 'sequential retry can respond');
                 }
             } else {
-                like(dies { $h->{helper}->$method(text_response('again', status => 503))->get }, qr/(before|started|connected|pending|connecting)/i, 'sequential repeat rejected');
+                like(dies { $h->{helper}->$method(response('Text', 'again', status => 503))->get }, qr/(before|started|connected|pending|connecting)/i, 'sequential repeat rejected');
                 is($closed, $mode eq 'terminal' ? 1 : 0, 'only connection terminal runs cleanup');
                 my $before = @{$h->{events}};
                 if ($kind eq 'sse') {
@@ -145,7 +145,7 @@ for my $kind (qw(websocket sse)) {
             my $operation = $h->{helper}->$method(async sub {
                 ++$calls;
                 await $gate if $stage eq 'handler';
-                return text_response('finished', status => 503);
+                return response('Text', 'finished', status => 503);
             });
             ok(!$operation->is_ready, "$stage work pending");
             my $weak = $h->{helper}; weaken($weak);
@@ -220,7 +220,7 @@ for my $kind (qw(websocket sse)) {
                 $cause eq 'result' ? qr/handler must return.*application/ : qr/$cause failed/, "$cause error propagates");
             is($h->{events}, [], 'no replacement response');
             is($h->{helper}->connection_state, $initial, 'prestart error leaves admission available');
-            $h->{helper}->$method(text_response('retry', status => 503))->get;
+            $h->{helper}->$method(response('Text', 'retry', status => 503))->get;
             $h->deliver;
         }
         my $h = PAGITest::RefusalHarness->new($kind);
@@ -251,10 +251,10 @@ for my $kind (qw(websocket sse)) {
     subtest "$kind missing capability rejects every target before execution" => sub {
         my $calls = 0;
         my @targets = (
-            sub { ++$calls; text_response('no', status => 503) },
+            sub { ++$calls; response('Text', 'no', status => 503) },
             async sub { ++$calls; return PAGI::Pages->service_unavailable },
             sub { ++$calls; return sub { ++$calls } },
-            text_response('no', status => 503),
+            response('Text', 'no', status => 503),
             PAGI::Pages->service_unavailable,
             T::RefusalApp->new(sub { ++$calls }),
             as_app_object(sub { ++$calls }),

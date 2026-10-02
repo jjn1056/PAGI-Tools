@@ -118,7 +118,7 @@ ws.onopen = () => ws.send('Hello from browser!');
 ```perl
 # Routing with immutable declarations
 my @routes = (
-    route('/' => sub { return text_response('Hello, World!') },
+    route('/' => sub { return response('Text', 'Hello, World!') },
         name => 'hello'),
     route('/echo' => async sub {
         my ($request) = @_;

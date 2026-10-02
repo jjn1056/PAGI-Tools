@@ -15,9 +15,9 @@ PAGI::Response::Text - buffered UTF-8 plain-text response
 
 =head1 SYNOPSIS
 
-    use PAGI::Response::Text qw(text_response);
+    use PAGI::Response qw(response);
     my $response = PAGI::Response::Text->new("Hello, \x{263A}");
-    my $same = text_response("Hello, \x{263A}");
+    my $same = response('Text', "Hello, \x{263A}");
 
 =head1 DESCRIPTION
 

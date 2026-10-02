@@ -9,7 +9,7 @@ use PAGI::CSRF qw(csrf);
 use PAGI::Middleware::ErrorHandler;
 use PAGI::Pages qw(not_found);
 use PAGI::Request;
-use PAGI::Response qw(json_response problem_response);
+use PAGI::Response qw(response);
 use PAGI::Routing qw(route);
 use PAGI::Routing::URL qw(path_for url_for);
 use PAGI::SSE;
@@ -71,7 +71,7 @@ subtest 'normal HTTP handlers receive Request and return Response values' => sub
         route('/things/{id}' => sub {
             my ($request) = @_;
             $seen_request = $request;
-            return json_response({
+            return response('JSON', {
                 id   => $request->path_param('id'),
                 path => path_for($request, 'show', { id => 42 }),
                 url  => url_for($request, 'show', { id => 42 }),
@@ -219,7 +219,7 @@ subtest 'ErrorHandler custom renderers return concrete Responses' => sub {
     my $app = PAGI::Middleware::ErrorHandler->new(
         handler => sub {
             my ($request, $error) = @_;
-            return problem_response({
+            return response('Problem', {
                 title  => 'Internal Server Error',
                 status => 500,
             });

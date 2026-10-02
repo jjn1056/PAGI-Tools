@@ -109,14 +109,14 @@ subtest 'Response factories replace the mutable builder and Request bridge' => s
 
     my @matrix = (
         [PAGI::Response->new('bytes'),       'PAGI::Response'],
-        [text_response('text'),              'PAGI::Response::Text'],
-        [html_response('<b>html</b>'),       'PAGI::Response::HTML'],
-        [json_response({ ok => \1 }),         'PAGI::Response::JSON'],
-        [problem_response({ status => 409 }), 'PAGI::Response::Problem'],
-        [redirect_response('/next'),         'PAGI::Response::Redirect'],
-        [empty_response(),                   'PAGI::Response::Empty'],
-        [file_response(__FILE__),            'PAGI::Response::File'],
-        [stream_response(sub { }),           'PAGI::Response::Stream'],
+        [response('Text', 'text'),              'PAGI::Response::Text'],
+        [response('HTML', '<b>html</b>'),       'PAGI::Response::HTML'],
+        [response('JSON', { ok => \1 }),         'PAGI::Response::JSON'],
+        [response('Problem', { status => 409 }), 'PAGI::Response::Problem'],
+        [response('Redirect', '/next'),         'PAGI::Response::Redirect'],
+        [response('Empty'),                   'PAGI::Response::Empty'],
+        [response('File', __FILE__),            'PAGI::Response::File'],
+        [response('Stream', sub { }),           'PAGI::Response::Stream'],
     );
     isa_ok($_->[0], $_->[1]) for @matrix;
 };
@@ -138,14 +138,14 @@ subtest 'scope state and CORS belong to request and middleware owners' => sub {
 
     my $app = PAGI::Middleware::CORS->new(
         origins => ['https://example.test'],
-    )->wrap(text_response('ok')->to_app);
+    )->wrap(response('Text', 'ok')->to_app);
     my $events = run_http($app, $scope);
     my ($start) = grep { $_->{type} eq 'http.response.start' } @$events;
     ok(grep({ lc($_->[0]) eq 'access-control-allow-origin'
             && $_->[1] eq 'https://example.test' } @{$start->{headers}}),
         'CORS middleware applies request-origin policy');
 
-    my $literal = text_response('ok')->header(
+    my $literal = response('Text', 'ok')->header(
         'Access-Control-Expose-Headers' => 'X-Request-ID',
     );
     is($literal->header('access-control-expose-headers'), 'X-Request-ID',
@@ -154,7 +154,7 @@ subtest 'scope state and CORS belong to request and middleware owners' => sub {
 
 subtest 'Stream owns Writer creation and each write is awaited' => sub {
     my @seen;
-    my $stream = stream_response(sub {
+    my $stream = response('Stream', sub {
         my ($writer) = @_;
         push @seen, ref($writer);
         return $writer->write('chunk');
@@ -165,7 +165,7 @@ subtest 'Stream owns Writer creation and each write is awaited' => sub {
 };
 
 subtest 'Response emission is application-only' => sub {
-    my $response = text_response('created', status => 201);
+    my $response = response('Text', 'created', status => 201);
     ok(!$response->can('respond'),
         'removed public respond method has no compatibility alias');
 
@@ -235,8 +235,8 @@ subtest 'WebSocket denial and SSE decline take public applications' => sub {
             "removed $kind option list fails against the application contract");
 
         my $response = $kind eq 'websocket'
-            ? text_response('no', status => 401)
-            : problem_response({ title => 'Not Found', status => 404 });
+            ? response('Text', 'no', status => 401)
+            : response('Problem', { title => 'Not Found', status => 404 });
         $h->{helper}->$method($response)->get;
         is([map { $_->{type} } @{$h->{events}}], [
             'http.response.start', 'http.response.body',
@@ -273,7 +273,7 @@ subtest 'migration refusal example runs as documented' => sub {
 };
 
 subtest 'JSON migration asserts values, never object member order' => sub {
-    my $response = json_response({ beta => 2, alpha => 1 });
+    my $response = response('JSON', { beta => 2, alpha => 1 });
     is(decode_json($response->body), { alpha => 1, beta => 2 },
         'JSON response contract is semantic, independent of serialized key order');
 };

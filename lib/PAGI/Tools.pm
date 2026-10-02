@@ -26,17 +26,17 @@ For an ordinary HTTP application:
 
     use Future::AsyncAwait;
     use PAGI::Compose qw(compose);
-    use PAGI::Response qw(json_response);
+    use PAGI::Response qw(response);
     use PAGI::Routing qw(route);
 
     async sub home {
         my ($request) = @_;
-        return json_response({ hello => 'world' });
+        return response('JSON', { hello => 'world' });
     }
 
     async sub user {
         my ($request) = @_;
-        return json_response({ id => $request->path_param('id') });
+        return response('JSON', { id => $request->path_param('id') });
     }
 
     my $app = compose(
@@ -93,19 +93,19 @@ handler gets a L<PAGI::WebSocket>; an SSE handler gets a L<PAGI::SSE>:
 
     use Future::AsyncAwait;
     use PAGI::Compose qw(compose);
-    use PAGI::Response qw(json_response ndjson_response);
+    use PAGI::Response qw(response);
     use PAGI::Routing qw(route websocket);
 
     async sub user {
         my ($request) = @_;
-        return json_response({ id => $request->path_param('id') });
+        return response('JSON', { id => $request->path_param('id') });
     }
 
     # Stream records as they are produced. Each write waits for the
     # client to keep up, and the loop stops if the client goes away.
     async sub export {
         my ($request) = @_;
-        return ndjson_response(async sub {
+        return response('NDJSON', async sub {
             my ($writer) = @_;
             for my $n (1 .. 3) {
                 last if $writer->is_disconnected;

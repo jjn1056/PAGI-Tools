@@ -18,12 +18,12 @@ PAGI::CSRF - Strict access to an issued CSRF token
 =head1 SYNOPSIS
 
     use PAGI::CSRF qw(csrf);
-    use PAGI::Response qw(text_response);
+    use PAGI::Response qw(response);
 
     my $guard = csrf($request);
     my $token = $guard->token;
 
-    return text_response('CSRF validation failed', status => 403)
+    return response('Text', 'CSRF validation failed', status => 403)
         unless $guard->verify($submitted_token);
 
 =head1 DESCRIPTION

@@ -58,12 +58,12 @@ ordinary custom 404:
 
 When the response depends on the Request, use a bare one-Request handler:
 
-  use PAGI::Response qw(problem_response);
+  use PAGI::Response qw(response);
 
   my $routing = router(
       routes => \@routes,
       http_default => sub ($request) {
-          return problem_response({
+          return response('Problem', {
               title  => 'Not Found',
               status => 404,
               detail => 'No route matched ' . $request->path,
@@ -90,7 +90,7 @@ guessing:
 
   async sub home {
       my ($request) = @_;
-      return PAGI::Response::html_response('<h1>Home</h1>');
+      return PAGI::Response::response('HTML', '<h1>Home</h1>');
   }
 
   1;
@@ -119,7 +119,7 @@ adding another routing engine. Build a named helper from C<request_response>
 and return an ordinary Route:
 
   use v5.40;
-  use PAGI::Response qw(text_response);
+  use PAGI::Response qw(response);
   use PAGI::Routing qw(route request_response);
 
   package MyCompany::Request {
@@ -150,7 +150,7 @@ and return an ordinary Route:
   MyCompany::Routing->import('my_special_route');
 
   sub reports($request) {
-      return text_response($request->company_name . ' reports');
+      return response('Text', $request->company_name . ' reports');
   }
 
   my $route = my_special_route('/reports' => \&reports,
@@ -305,14 +305,14 @@ the prefix. Test it as it will be served, requesting the browser's URL:
 
   use v5.40;
   use PAGI::Compose qw(compose);
-  use PAGI::Response qw(json_response);
+  use PAGI::Response qw(response);
   use PAGI::Routing qw(route);
   use PAGI::Routing::URL qw(path_for);
   use PAGI::Test::Client;
 
   my $app = compose(routes => [
       route('/reports' => sub ($request) {
-          json_response({
+          response('JSON', {
               path      => $request->path,                # /reports
               root_path => $request->scope->{root_path},  # /app
               here      => $request->request_uri,         # /app/reports?x=1
@@ -351,7 +351,7 @@ This is the complete runnable shape from F<examples/starlette-apples/app.pl>:
   use AppleApp::Model qw(apple_model);
   use PAGI::Compose qw(compose);
   use PAGI::Pages qw(welcome not_found status);
-  use PAGI::Response qw(file_response json_response ndjson_response);
+  use PAGI::Response qw(response);
   use PAGI::Routing qw(route mount middleware);
   use PAGI::Routing::URL qw(url_for path_for);
   use PAGI::Utils qw(app_path);
@@ -372,7 +372,7 @@ This is the complete runnable shape from F<examples/starlette-apples/app.pl>:
   async sub list_apples($request) {
       my $apples = apples($request);
 
-      return json_response([
+      return response('JSON', [
           map {
               +{
                   %$_,
@@ -389,7 +389,7 @@ This is the complete runnable shape from F<examples/starlette-apples/app.pl>:
   async sub export_apples($request) {
       my $items = apples($request)->all;
 
-      return ndjson_response(async sub ($writer) {
+      return response('NDJSON', async sub ($writer) {
           for my $apple (@$items) {
               last if $writer->is_disconnected;
               await $writer->write_item($apple);
@@ -409,8 +409,8 @@ This is the complete runnable shape from F<examples/starlette-apples/app.pl>:
       my $id = $request->path_param('apple_id');
       my $apple = apples($request)->find($id);
 
-      return json_response($apple) if $apple;
-      return json_response(
+      return response('JSON', $apple) if $apple;
+      return response('JSON',
           { error => 'Apple not found' },
           status => 404,
       );
@@ -420,7 +420,7 @@ This is the complete runnable shape from F<examples/starlette-apples/app.pl>:
       my $data = await $request->json;
       my $apple = apples($request)->create($data);
 
-      return json_response(
+      return response('JSON',
           $apple,
           status  => 201,
           headers => [
@@ -437,7 +437,7 @@ This is the complete runnable shape from F<examples/starlette-apples/app.pl>:
       my $id = $request->path_param('apple_id');
       my $apples = apples($request);
 
-      return json_response(
+      return response('JSON',
           { error => 'Apple not found' },
           status => 404,
       ) unless $apples->find($id);
@@ -445,24 +445,24 @@ This is the complete runnable shape from F<examples/starlette-apples/app.pl>:
       my $data = await $request->json;
       my $apple = $apples->update($id, $data);
 
-      return json_response(
+      return response('JSON',
           { error => 'Apple not found' },
           status => 404,
       ) unless $apple;
 
-      return json_response($apple);
+      return response('JSON', $apple);
   }
 
   async sub delete_apple($request) {
       my $id = $request->path_param('apple_id');
       my $apple = apples($request)->delete($id);
 
-      return json_response(
+      return response('JSON',
           { error => 'Apple not found' },
           status => 404,
       ) unless $apple;
 
-      return json_response({
+      return response('JSON', {
           success => \1,
           deleted => $apple,
       });
@@ -470,7 +470,7 @@ This is the complete runnable shape from F<examples/starlette-apples/app.pl>:
 
   compose(
       routes => [
-          route('/' => file_response($manager_file, inline => 1),
+          route('/' => response('File', $manager_file, inline => 1),
               name => 'home',
               desc => 'Apple manager SPA',
           ),
@@ -675,12 +675,12 @@ handled request and falls back to safe production output if resolution fails.
 The built-in renderer negotiates through Pages. To fix one representation, use
 the existing handler seam:
 
-  use PAGI::Response qw(problem_response);
+  use PAGI::Response qw(response);
 
   middleware('ErrorHandler',
       handler => sub {
           my ($request, $error) = @_;
-          return problem_response({
+          return response('Problem', {
               title  => 'Internal Server Error',
               status => 500,
           });
@@ -888,7 +888,7 @@ the single emission:
 
   route('/normal' => async sub {
       my ($request) = @_;
-      return PAGI::Response::text_response('Hello');
+      return PAGI::Response::response('Text', 'Hello');
   });
 
 A native application endpoint owns every event and receives all channels:
@@ -1144,11 +1144,11 @@ Router grammar. This complete shape keeps topology declarative:
 
   package MessageAPI;
   use parent 'PAGI::Endpoint::HTTP';
-  use PAGI::Response qw(json_response);
+  use PAGI::Response qw(response);
 
   sub get {
       my ($self, $request) = @_;
-      return json_response($self->{store}->all);
+      return response('JSON', $self->{store}->all);
   }
 
   package ChatEndpoint;
@@ -1381,7 +1381,7 @@ options, give the semantic source a documented shape, as C<items>, C<meta>,
 and C<links> do above, rather than intercepting the base response option list.
 
 If the only requirement is a convenience function that wraps data in a hash,
-a local factory returning C<json_response(...)> may be enough. Use a subclass
+a local factory returning C<response('JSON', ...)> may be enough. Use a subclass
 when the document shape, validation, media type, or further extension is an
 application-level type worth naming.
 
@@ -1394,12 +1394,12 @@ PAGI. C<pipe_from> requests the next input chunk only after the previous output
 write settles:
 
   use Future::AsyncAwait;
-  use PAGI::Response qw(stream_response);
+  use PAGI::Response qw(response);
 
   async sub echo_upload($request) {
       my $input = $request->body_stream(max_bytes => 100 * 1024 * 1024);
 
-      return stream_response(
+      return response('Stream',
           async sub ($writer) {
               await $writer->pipe_from($input);
               die 'upload was truncated' if $input->truncated;
@@ -1479,15 +1479,15 @@ HEAD normally executes the whole producer behind the outer suppression
 boundary. Put a cheap explicit HEAD Route before an expensive GET Route:
 
   route('/export' => \&head_export, methods => ['HEAD']);
-  route('/export' => stream_response(\&produce_export), methods => ['GET']);
+  route('/export' => response('Stream', \&produce_export), methods => ['GET']);
 
 =head2 Send One Selected File
 
 C<file_response> receives a trusted path selected by the application:
 
-  use PAGI::Response qw(file_response);
+  use PAGI::Response qw(response);
 
-  route('/report' => file_response(
+  route('/report' => response('File',
       '/srv/reports/monthly.pdf',
       filename => 'monthly.pdf',
   ));
@@ -1511,7 +1511,7 @@ C</events/E<lt>formE<gt>> requests:
   use Future::AsyncAwait;
   use PAGI::Compose qw(compose);
   use PAGI::Pages ();
-  use PAGI::Response qw(json_response text_response);
+  use PAGI::Response qw(response);
   use PAGI::Routing qw(sse websocket);
   use PAGI::Utils qw(as_app_object);
 
@@ -1550,7 +1550,7 @@ C</events/E<lt>formE<gt>> requests:
   my $notices = MyApp::NoticeService->new(label => 'notice-service');
   my $handler = sub {
       my ($request) = @_;
-      return json_response(
+      return response('JSON',
           { error => 'Unavailable', path => $request->path },
           status => 503,
       );
@@ -1558,7 +1558,7 @@ C</events/E<lt>formE<gt>> requests:
   my $async_handler = async sub {
       my ($request) = @_;
       my $notice = await $notices->notice_for($request);
-      return json_response(
+      return response('JSON',
           { error => 'Unavailable', notice => $notice },
           status => 503,
       );
@@ -1583,12 +1583,12 @@ C</events/E<lt>formE<gt>> requests:
       # 1. A concrete Response: text on WebSocket, JSON on SSE.
       websocket('/ws/response' => async sub {
           my ($ws) = @_;
-          await $ws->deny(text_response('Scheduled maintenance', status => 503));
+          await $ws->deny(response('Text', 'Scheduled maintenance', status => 503));
           return;
       }),
       sse('/events/response' => async sub {
           my ($sse) = @_;
-          await $sse->decline(json_response(
+          await $sse->decline(response('JSON',
               { error => 'Unavailable', form => 'response' }, status => 503,
           ));
           return;
@@ -1789,7 +1789,7 @@ middleware in front of the route.
   use PAGI::Auth qw(auth auth_result unauth_result requires);
   use PAGI::Auth::SimpleUser;
   use PAGI::Compose qw(compose);
-  use PAGI::Response qw(json_response);
+  use PAGI::Response qw(response);
   use PAGI::Routing qw(middleware route);
 
   my %grants = (reader => ['notes:read'], editor => ['notes:read', 'notes:write']);
@@ -1806,21 +1806,21 @@ middleware in front of the route.
       routes => [
           # Any authenticated user.
           route('/me' => requires([], sub ($request) {
-              json_response({ me => auth($request)->user->identity });
+              response('JSON', { me => auth($request)->user->identity });
           })),
           # Every listed scope.
           route('/notes' => requires(['notes:read', 'notes:write'], async sub ($request) {
-              json_response({ saved => await $request->json }, status => 201);
+              response('JSON', { saved => await $request->json }, status => 201);
           }), methods => ['POST']),
           # Hide the route's existence from those without access.
           route('/audit' => requires(['admin'], sub ($request) {
-              json_response({ audit => [] });
+              response('JSON', { audit => [] });
           }, status => 404)),
           # Browsers: go to the route named 'login', with ?next= set.
           route('/home' => requires([], sub ($request) {
-              json_response({ home => 1 });
+              response('JSON', { home => 1 });
           }, redirect => ['login'])),
-          route('/login' => sub ($request) { json_response({ login => 1 }) }, name => 'login'),
+          route('/login' => sub ($request) { response('JSON', { login => 1 }) }, name => 'login'),
       ],
   );
 
@@ -2060,7 +2060,7 @@ that hashref with a convenient (and typo-catching) API.
   use PAGI::Middleware::Builder;
   use PAGI::Middleware::Session qw(session_state);
   use PAGI::Session qw(session);
-  use PAGI::Response qw(text_response);
+  use PAGI::Response qw(response);
   use PAGI::Routing qw(route router);
 
   my @routes;
@@ -2073,7 +2073,7 @@ that hashref with a convenient (and typo-catching) API.
       $session->set(user_id => 123);
       $session->set(username => 'alice');
 
-      return text_response('Logged in!');
+      return response('Text', 'Logged in!');
   });
 
   push @routes, route('/profile' => sub {
@@ -2083,7 +2083,7 @@ that hashref with a convenient (and typo-catching) API.
       my $session = session($request);
       my $username = $session->get('username', 'Guest');
 
-      return text_response("Hello, $username!");
+      return response('Text', "Hello, $username!");
   });
 
   push @routes, route('/logout' => sub {
@@ -2092,7 +2092,7 @@ that hashref with a convenient (and typo-catching) API.
       # Clear session data
       session($request)->clear;
 
-      return text_response('Logged out!');
+      return response('Text', 'Logged out!');
   });
 
   my $routing = router(routes => \@routes);
@@ -2114,15 +2114,15 @@ that hashref with a convenient (and typo-catching) API.
   use warnings;
   use PAGI::Auth qw(auth auth_result unauth_result www_authenticate);
   use PAGI::Middleware::Builder;
-  use PAGI::Response qw(text_response);
+  use PAGI::Response qw(response);
   use PAGI::Routing qw(route router);
 
   my $routing = router(routes => [
       route('/' => sub {
           my ($request) = @_;
-          return text_response('Protected content')
+          return response('Text', 'Protected content')
               if auth($request)->user->is_authenticated;
-          my $response = text_response('Credentials required', status => 401);
+          my $response = response('Text', 'Credentials required', status => 401);
           $response->headers->set('WWW-Authenticate',
               www_authenticate('Basic', realm => 'Admin Area'));
           return $response;
@@ -2163,7 +2163,7 @@ These are this application's token rules, not policy imposed by PAGI::Auth.
   use PAGI::Auth qw(auth auth_result unauth_result www_authenticate);
   use PAGI::Auth::SimpleUser;
   use PAGI::Middleware::Builder;
-  use PAGI::Response qw(json_response);
+  use PAGI::Response qw(response);
   use PAGI::Routing qw(route router);
 
   my $secret = $ENV{JWT_SECRET} // die 'Configure JWT_SECRET';
@@ -2173,7 +2173,7 @@ These are this application's token rules, not policy imposed by PAGI::Auth.
   route('/api/me' => sub {
       my ($request) = @_;
       my $result = auth($request);
-      return json_response({ user => $result->user->identity })
+      return response('JSON', { user => $result->user->identity })
           if $result->user->is_authenticated;
       my $failure = $result->failure;
       my $malformed = $failure
@@ -2181,7 +2181,7 @@ These are this application's token rules, not policy imposed by PAGI::Auth.
       my @challenge = (realm => 'api');
       push @challenge, error => ($malformed ? 'invalid_request' : 'invalid_token')
           if $failure;
-      my $response = json_response({ error => 'authentication_required' },
+      my $response = response('JSON', { error => 'authentication_required' },
           status => $malformed ? 400 : 401);
       $response->headers->set('WWW-Authenticate',
           www_authenticate('Bearer', @challenge));
@@ -2450,7 +2450,7 @@ good.
 =back
 
   # Tell EventSource to stop reconnecting: a bare 204.
-  await $sse->decline(PAGI::Response::empty_response(status => 204));
+  await $sse->decline(PAGI::Response::response('Empty', status => 204));
   return;
 
 A normally completed decline is a clean end, not an abnormal disconnect. The
@@ -2493,7 +2493,7 @@ use C<< ->on_fail() >> to handle errors, then C<< ->retain() >> to prevent
   use Future::AsyncAwait;
   use Future::IO;
   use PAGI::Compose qw(compose);
-  use PAGI::Response qw(json_response);
+  use PAGI::Response qw(response);
   use PAGI::Routing qw(route);
 
   # Simulated async email service
@@ -2515,7 +2515,7 @@ use C<< ->on_fail() >> to handle errors, then C<< ->retain() >> to prevent
           ->on_fail(sub { warn "Email send failed: @_" })
           ->retain();
 
-      return json_response({ status => 'created' }, status => 201);
+      return response('JSON', { status => 'created' }, status => 201);
   }, methods => ['POST']),
   ])->to_app;
 
@@ -2539,7 +2539,7 @@ For blocking or CPU-intensive work, use L<IO::Async::Function> to run in a child
   use IO::Async::Function;
   use IO::Async::Loop;
   use PAGI::Compose qw(compose);
-  use PAGI::Response qw(json_response);
+  use PAGI::Response qw(response);
   use PAGI::Routing qw(route);
 
   my $loop = IO::Async::Loop->new;
@@ -2562,14 +2562,14 @@ For blocking or CPU-intensive work, use L<IO::Async::Function> to run in a child
 
       # Option A: Wait for result (blocks this request only)
       my $result = await $pdf_worker->call(args => ['report']);
-      return json_response({ result => $result });
+      return response('JSON', { result => $result });
 
       # Option B: start the work, then return immediately
       # my $f = $pdf_worker->call(args => ['report']);
       # $f->on_done(sub { warn "PDF ready: $_[0]\n" });
       # $f->on_fail(sub { warn "PDF failed: $_[0]\n" });
       # $f->retain();
-      # return json_response({ status => 'processing' }, status => 202);
+      # return response('JSON', { status => 'processing' }, status => 202);
   }, methods => ['POST']),
   ])->to_app;
 
@@ -2600,12 +2600,12 @@ See C<examples/background-tasks/> for complete working examples.
 
           # Validate and process...
           await invoke_app(
-              PAGI::Response::redirect_response('/dashboard'),
+              PAGI::Response::response('Redirect', '/dashboard'),
               $scope, $receive, $send,
           );
       }
       else {
-          my $response = PAGI::Response::html_response(<<'HTML');
+          my $response = PAGI::Response::response('HTML', <<'HTML');
   <form method="POST">
       <input name="username" placeholder="Username">
       <input name="password" type="password" placeholder="Password">
@@ -2651,14 +2651,14 @@ See C<examples/background-tasks/> for complete working examples.
           }
 
           await invoke_app(
-              PAGI::Response::json_response({
+              PAGI::Response::response('JSON', {
                   uploaded => scalar(@files),
               }),
               $scope, $receive, $send,
           );
       }
       else {
-          my $response = PAGI::Response::html_response(<<'HTML');
+          my $response = PAGI::Response::response('HTML', <<'HTML');
   <form method="POST" enctype="multipart/form-data">
       <input type="file" name="file" multiple>
       <button type="submit">Upload</button>
@@ -2684,14 +2684,14 @@ it; one that wants its own response catches the error:
   use v5.40;
   use Future::AsyncAwait;
   use PAGI::Compose qw(compose);
-  use PAGI::Response qw(json_response);
+  use PAGI::Response qw(response);
   use PAGI::Routing qw(middleware route);
 
   # No code: a body that is not JSON becomes a negotiated 400
   # (application/problem+json for API clients, an HTML page for browsers).
   async sub create_note ($request) {
       my $data = await $request->json;
-      return json_response({ created => $data }, status => 201);
+      return response('JSON', { created => $data }, status => 201);
   }
 
   # Its own response: catch the BodyError, and rethrow anything else.
@@ -2700,12 +2700,12 @@ it; one that wants its own response catches the error:
       unless (eval { $data = await $request->json; 1 }) {
           my $error = $@;
           die $error unless ref $error && $error->isa('PAGI::Request::BodyError');
-          return json_response(
+          return response('JSON',
               { error => 'Send a JSON object, like {"text": "..."}.' },
               status => 400,
           );
       }
-      return json_response({ created => $data }, status => 201);
+      return response('JSON', { created => $data }, status => 201);
   }
 
   my $app = compose(routes => [
@@ -2719,9 +2719,9 @@ send; C<cause> holds the underlying error for logs:
 
   my $uniform = compose(
       middleware => [middleware('ErrorHandler', handler => sub ($request, $error) {
-          return json_response({ error => $error->message }, status => $error->status_code)
+          return response('JSON', { error => $error->message }, status => $error->status_code)
               if ref $error && $error->isa('PAGI::Request::BodyError');
-          return json_response({ error => 'Something went wrong.' }, status => 500);
+          return response('JSON', { error => 'Something went wrong.' }, status => 500);
       })],
       routes => [route('/notes' => \&create_note, methods => ['POST'])],
   );
@@ -2771,7 +2771,7 @@ tests or one-liners:
 
   # Quick redirect
   pagi-server -MPAGI::Response \
-      -e 'PAGI::Response::redirect_response("https://example.com")->to_app'
+      -e 'PAGI::Response::response('Redirect', "https://example.com")->to_app'
 
 =head2 Loading Modules with -M
 
@@ -3036,13 +3036,13 @@ A normal handler returns the value:
   async sub create_item {
       my ($request) = @_;
       my $item = await create_from($request);
-      return PAGI::Response::json_response($item, status => 201);
+      return PAGI::Response::response('JSON', $item, status => 201);
   }
 
 A native application owns the full triplet and one explicit delegation:
 
   use PAGI::Utils qw(invoke_app);
-  my $res = PAGI::Response::json_response($data, status => 200);
+  my $res = PAGI::Response::response('JSON', $data, status => 200);
   await invoke_app($res, $scope, $receive, $send);
 
 Do not emit inside a normal Request handler and then return the same value to

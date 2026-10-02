@@ -198,7 +198,7 @@ my @params = (realm => 'jwt-sandbox');
 push @params, error => ($malformed ? 'invalid_request' : 'invalid_token')
     if $failure;
 
-my $response = json_response(
+my $response = response('JSON',
     { error => $malformed ? 'Malformed Authorization header.'
                          : 'Please sign in to access the vault.' },
     status  => $malformed ? 400 : 401,

@@ -24,11 +24,6 @@ use PAGI::Test::ConnectionState;
 }
 
 {
-    package T::NDJSONConcreteImport;
-    use PAGI::Response::NDJSON qw(ndjson_response);
-}
-
-{
     package T::NDJSONTransport;
 
     sub new {
@@ -98,18 +93,15 @@ sub terminal_events {
     } @$events];
 }
 
-PAGI::Response->import('ndjson_response');
-my $factory = __PACKAGE__->can('ndjson_response');
-isa_ok($factory->(sub { }), 'PAGI::Response::NDJSON');
+PAGI::Response->import('response');
+isa_ok(response('NDJSON', sub { }), 'PAGI::Response::NDJSON');
 ok(!PAGI::Response::NDJSON->new(sub { })->is_buffered,
     'NDJSON is a streaming Response');
-ok(T::ResponseAllImport->can('ndjson_response'),
-    ':all imports the NDJSON response factory');
+ok(T::ResponseAllImport->can('response'),
+    ':all imports the Response builder');
 
-subtest 'the concrete NDJSON module exports its factory and retains content-type overrides' => sub {
-    my $concrete_factory = T::NDJSONConcreteImport->can('ndjson_response');
-    ok($concrete_factory, 'concrete module imports its NDJSON response factory into the caller package');
-    my $response = $concrete_factory->(
+subtest 'NDJSON retains content-type overrides' => sub {
+    my $response = response('NDJSON',
         sub { },
         content_type => 'application/vnd.pagi.audit+ndjson',
     );
@@ -130,7 +122,7 @@ subtest 'the concrete NDJSON module exports its factory and retains content-type
 subtest 'NDJSON construction writes one JSON record per item' => sub {
     my @events;
     my @writers;
-    my $response = ndjson_response(
+    my $response = response('NDJSON',
         async sub {
             my ($writer) = @_;
             push @writers, $writer;
@@ -173,7 +165,7 @@ subtest 'NDJSON records are unflagged UTF-8 bytes with exactly one LF' => sub {
         undef,
         "caf\x{e9}",
     );
-    my $response = ndjson_response(async sub {
+    my $response = response('NDJSON', async sub {
         my ($writer) = @_;
         for my $value (@values) {
             await $writer->write_item($value);
@@ -207,7 +199,7 @@ subtest 'NDJSON records are unflagged UTF-8 bytes with exactly one LF' => sub {
 
 subtest 'NDJSON preserves explicit framing and does not create an empty record' => sub {
     my @empty_events;
-    ndjson_response(sub { }, headers => ['Content-Length' => 99])->to_app->(
+    response('NDJSON', sub { }, headers => ['Content-Length' => 99])->to_app->(
         http_scope(), receive(), sub { push @empty_events, $_[0]; Future->done },
     )->get;
 
@@ -224,7 +216,7 @@ subtest 'NDJSON preserves explicit framing and does not create an empty record' 
 
 subtest 'NDJSON has a narrow Writer API and retains common construction validation' => sub {
     my $writer;
-    ndjson_response(sub { $writer = $_[0]; return })->to_app->(
+    response('NDJSON', sub { $writer = $_[0]; return })->to_app->(
         http_scope(), receive(), sub { Future->done },
     )->get;
 
@@ -244,7 +236,7 @@ subtest 'NDJSON has a narrow Writer API and retains common construction validati
 subtest 'JSON encoding failure enters the inherited producer failure path' => sub {
     my @events;
     my $cleanup_calls = 0;
-    my $response = ndjson_response(sub {
+    my $response = response('NDJSON', sub {
         my ($writer) = @_;
         $writer->on_close(sub { ++$cleanup_calls });
         return $writer->write_item(bless {}, 'T::Unencodable');
@@ -306,7 +298,7 @@ subtest 'write_item inherits real send backpressure and encoded byte accounting'
     my @events;
     my $body_send = Future->new;
     my ($writer, $write);
-    my $response = ndjson_response(sub {
+    my $response = response('NDJSON', sub {
         ($writer) = @_;
         $write = $writer->write_item({ id => 1 });
         return $write;
@@ -335,7 +327,7 @@ subtest 'an unchanged NDJSON Response creates independent Writers per invocation
     my @writers;
     my @gates;
     my $calls = 0;
-    my $response = ndjson_response(sub {
+    my $response = response('NDJSON', sub {
         my ($writer) = @_;
         ++$calls;
         push @writers, $writer;
@@ -362,7 +354,7 @@ subtest 'disconnect waits for a server-owned NDJSON send and cleans up once' => 
     my $body_send = Future->new;
     my @events;
     my ($writer, $write, $cleanup_calls) = (undef, undef, 0);
-    my $response = ndjson_response(sub {
+    my $response = response('NDJSON', sub {
         ($writer) = @_;
         $writer->on_close(sub { ++$cleanup_calls });
         $write = $writer->write_item({ id => 1 });
@@ -390,7 +382,7 @@ subtest 'disconnect waits for a server-owned NDJSON send and cleans up once' => 
 subtest 'failure and caller cancellation retain Stream lifecycle behavior' => sub {
     my @sync_events;
     my $sync_cleanup = 0;
-    my $sync = ndjson_response(sub {
+    my $sync = response('NDJSON', sub {
         $_[0]->on_close(sub { ++$sync_cleanup });
         die "synchronous producer failure\n";
     })->to_app->(http_scope(), receive(), sub { push @sync_events, $_[0]; Future->done });
@@ -401,7 +393,7 @@ subtest 'failure and caller cancellation retain Stream lifecycle behavior' => su
 
     my @future_events;
     my $failed = Future->fail("Future producer failure\n");
-    my $future = ndjson_response(sub { return $failed })->to_app->(
+    my $future = response('NDJSON', sub { return $failed })->to_app->(
         http_scope(), receive(), sub { push @future_events, $_[0]; Future->done },
     );
     like(dies { $future->get }, qr/Future producer failure/,
@@ -411,7 +403,7 @@ subtest 'failure and caller cancellation retain Stream lifecycle behavior' => su
     my $body_send = Future->new;
     my @cancel_events;
     my $cancel_cleanup = 0;
-    my $cancelled = ndjson_response(sub {
+    my $cancelled = response('NDJSON', sub {
         my ($writer) = @_;
         $writer->on_close(sub { ++$cancel_cleanup });
         return $writer->write_item({ pending => 1 });

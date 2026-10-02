@@ -4,7 +4,7 @@ use PAGI::Auth qw(auth auth_result unauth_result);
 use PAGI::Auth::SimpleUser;
 use PAGI::Compose qw(compose);
 use PAGI::Middleware::Authentication;
-use PAGI::Response qw(json_response);
+use PAGI::Response qw(response);
 use PAGI::Routing qw(router route mount middleware);
 use PAGI::Utils qw(invoke_app);
 use PAGI::Utils::Middleware qw(clone_scope);
@@ -57,7 +57,7 @@ my $inner_router = router(
     routes => [route('/item' => sub ($request) {
         my $context = auth($request);
         my $owner_id = 'inner'; # The resource's trusted owner, not a client claim.
-        return json_response({
+        return response('JSON', {
             identity => $context->user->identity,
             outer => $request->scope->{'auth.extensions.outer_identity'},
             outer_grant_visible => $context->credentials->has('outer:read') ? 1 : 0,
@@ -72,7 +72,7 @@ compose(
     middleware => [middleware($outer)],
     routes => [
         route('/outer' => sub ($request) {
-            return json_response({identity => auth($request)->user->identity});
+            return response('JSON', {identity => auth($request)->user->identity});
         }),
         mount('/inner', app => $inner_router,
             middleware => [middleware($inner_auth)]),

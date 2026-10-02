@@ -6,7 +6,7 @@ use Future;
 use Future::AsyncAwait;
 use PAGI::Compose qw(compose);
 use PAGI::Pages ();
-use PAGI::Response qw(json_response text_response);
+use PAGI::Response qw(response);
 use PAGI::Routing qw(sse websocket);
 use PAGI::Utils qw(as_app_object);
 
@@ -57,7 +57,7 @@ my $notices = ProtocolRefusal::NoticeService->new(
 sub unavailable_handler {
     return sub {
         my ($request) = @_;
-        return json_response(
+        return response('JSON',
             {error => 'Unavailable', path => $request->path},
             status => 503,
         );
@@ -69,7 +69,7 @@ sub async_unavailable_handler {
     return async sub {
         my ($request) = @_;
         my $notice = await $service->notice_for($request);
-        return json_response(
+        return response('JSON',
             {error => 'Unavailable', notice => $notice},
             status => 503,
         );
@@ -101,12 +101,12 @@ my $native = as_app_object(async sub {
 compose(routes => [
     websocket('/ws/response' => async sub {
         my ($ws) = @_;
-        await $ws->deny(text_response('Scheduled maintenance', status => 503));
+        await $ws->deny(response('Text', 'Scheduled maintenance', status => 503));
         return;
     }),
     sse('/events/response' => async sub {
         my ($sse) = @_;
-        await $sse->decline(json_response(
+        await $sse->decline(response('JSON',
             {error => 'Unavailable', form => 'response'},
             status => 503,
         ));

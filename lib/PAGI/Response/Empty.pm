@@ -15,9 +15,9 @@ PAGI::Response::Empty - buffered zero-byte response
 
 =head1 SYNOPSIS
 
-    use PAGI::Response::Empty qw(empty_response);
+    use PAGI::Response qw(response);
     my $response = PAGI::Response::Empty->new;
-    my $same = empty_response(status => 205);
+    my $same = response('Empty', status => 205);
 
 =head1 DESCRIPTION
 

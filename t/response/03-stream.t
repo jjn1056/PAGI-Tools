@@ -4,7 +4,7 @@ use warnings;
 use Future;
 use Test2::V0;
 
-use PAGI::Response qw(stream_response);
+use PAGI::Response qw(response);
 use PAGI::Response::Stream;
 
 {
@@ -36,7 +36,7 @@ sub receive {
 subtest 'Stream is a reusable Response value with one fresh Writer per invocation' => sub {
     my @writers;
     my $producer_calls = 0;
-    my $stream = stream_response(
+    my $stream = response('Stream',
         sub {
             my ($writer) = @_;
             ++$producer_calls;
@@ -262,7 +262,7 @@ subtest 'a stream checks the connection methods it will use before sending' => s
         my ($missing, $message) = @$case;
         my @events;
         like(dies {
-            stream_response(sub { })->to_app->(
+            response('Stream', sub { })->to_app->(
                 http_scope('pagi.connection' => T::PartialConnection->new($missing)),
                 receive(),
                 sub { push @events, $_[0]; Future->done },
@@ -272,7 +272,7 @@ subtest 'a stream checks the connection methods it will use before sending' => s
     }
 
     my @events;
-    stream_response(sub { my ($writer) = @_; $writer->write('ok') })->to_app->(
+    response('Stream', sub { my ($writer) = @_; $writer->write('ok') })->to_app->(
         http_scope('pagi.connection' => T::PartialConnection->new),
         receive(),
         sub { push @events, $_[0]; Future->done },

@@ -147,14 +147,14 @@ Because the stream has not started yet, C<on_connect> is also the supported
 place to reject the request outright with a real HTTP response instead of
 streaming -- an auth gate, for example:
 
-    use PAGI::Response qw(text_response);
+    use PAGI::Response qw(response);
 
     async sub on_connect {
         my ($self, $sse) = @_;
 
         unless (authorized($sse)) {
             await $sse->decline(
-                text_response('Unauthorized', status => 401),
+                response('Text', 'Unauthorized', status => 401),
             );
             return;
         }

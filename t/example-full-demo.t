@@ -12,7 +12,7 @@ use PAGI::Test::Client;
 my $file = "$Bin/../examples/full-demo/app.pl";
 my $source = do { open my $fh, '<', $file or die "$file: $!"; local $/; <$fh> };
 
-like($source, qr/ndjson_response\(/, 'it streams NDJSON');
+like($source, qr/response\('NDJSON',/, 'it streams NDJSON');
 like($source, qr/path_for\(\$request/, 'it builds links from route names');
 unlike($source, qr/maybe_sleep|HAS_FUTURE_IO/, 'no fallback for a missing Future::IO');
 unlike($source, qr/\)->to_app;\s*\z/, 'returns the Compose application object');

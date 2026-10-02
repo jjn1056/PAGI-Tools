@@ -1173,7 +1173,7 @@ A handler that wants its own response catches it:
     unless (eval { $data = await $request->json; 1 }) {
         my $error = $@;
         die $error unless ref $error && $error->isa('PAGI::Request::BodyError');
-        return json_response({ error => 'Send a JSON object.' }, status => 400);
+        return response('JSON', { error => 'Send a JSON object.' }, status => 400);
     }
 
 An application that wants one style for every route gives ErrorHandler a
@@ -1287,11 +1287,11 @@ Request owns HTTP input and remains the scope source for request-local helpers;
 it does not manufacture or cache a Response. Construct the desired concrete
 L<PAGI::Response> value directly and return it from a normal handler:
 
-    use PAGI::Response qw(json_response);
+    use PAGI::Response qw(response);
 
     sub create_item {
         my ($request) = @_;
-        return json_response({ created => \1 }, status => 201);
+        return response('JSON', { created => \1 }, status => 201);
     }
 
 Only a native application owns response emission. Invoke the application value

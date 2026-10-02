@@ -21,9 +21,9 @@ PAGI::Response::File - reusable response for one trusted selected file
 
 =head1 SYNOPSIS
 
-    use PAGI::Response qw(file_response);
+    use PAGI::Response qw(response);
 
-    my $response = file_response(
+    my $response = response('File',
         '/srv/reports/monthly.pdf',
         filename => 'monthly.pdf',
     );
@@ -269,9 +269,9 @@ sub _boolean {
 
 =head1 CONSTRUCTOR AND FACTORY CONTRACT
 
-    use PAGI::Response qw(file_response);
+    use PAGI::Response qw(response);
 
-    my $response = file_response($path,
+    my $response = response('File', $path,
         status        => 200,
         content_type  => 'application/pdf',
         headers       => ['Cache-Control' => 'private'],
@@ -283,7 +283,7 @@ sub _boolean {
         etag          => 1,
     );
 
-C<file_response($path, %options)> and
+C<response('File', $path, %options)> and
 C<< PAGI::Response::File->new($path, %options) >> accept the same contract.
 The class form requires an explicit C<use PAGI::Response::File ();>; importing
 the base factory alone does not eagerly load concrete subclasses.

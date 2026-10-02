@@ -246,12 +246,12 @@ Put a source-free Pages application directly in C<http_default> for the usual
 custom 404. When the result depends on the request, pass a bare one-Request
 handler instead:
 
-    use PAGI::Response qw(problem_response);
+    use PAGI::Response qw(response);
 
     compose(
         routes => \@nodes,
         http_default => sub ($request) {
-            return problem_response({
+            return response('Problem', {
                 title  => 'Not Found',
                 status => 404,
                 detail => 'No route matched ' . $request->path,
@@ -520,7 +520,7 @@ The completion guard never replaces an inner exception.
 Install ordinary author middleware for the application's official error
 policy:
 
-    use PAGI::Response qw(problem_response);
+    use PAGI::Response qw(response);
 
     middleware => [
         middleware('RequestId'),
@@ -529,7 +529,7 @@ policy:
         middleware('ErrorHandler',
             handler  => sub {
                 my ($request, $error) = @_;
-                return problem_response({
+                return response('Problem', {
                     title  => 'Internal Server Error',
                     status => 500,
                 });

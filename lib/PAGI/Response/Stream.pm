@@ -19,9 +19,9 @@ PAGI::Response::Stream - reusable backpressured HTTP streaming response
 =head1 SYNOPSIS
 
     use Future::AsyncAwait;
-    use PAGI::Response qw(stream_response);
+    use PAGI::Response qw(response);
 
-    my $response = stream_response(
+    my $response = response('Stream',
         async sub {
             my ($writer) = @_;
             await $writer->write("one\n");
@@ -57,7 +57,7 @@ A later request receives a fresh Writer and producer invocation.
 A request-body source can be relayed without raw PAGI:
 
     my $input = $request->body_stream(max_bytes => 100 * 1024 * 1024);
-    return stream_response(async sub {
+    return response('Stream', async sub {
         my ($writer) = @_;
         await $writer->pipe_from($input);
         die 'upload was truncated' if $input->truncated;
@@ -362,7 +362,7 @@ lightweight HEAD route before the GET route when producer work should be
 avoided:
 
     route('/export' => \&head_export, methods => ['HEAD']);
-    route('/export' => stream_response(\&produce_export), methods => ['GET']);
+    route('/export' => response('Stream', \&produce_export), methods => ['GET']);
 
 Declaration order matters because a GET route also supplies automatic HEAD.
 

@@ -22,7 +22,7 @@ use Future::AsyncAwait;
 use Future::IO;
 
 use PAGI::Compose qw(compose);
-use PAGI::Response qw(html_response);
+use PAGI::Response qw(response);
 use PAGI::Routing qw(route sse);
 
 my $PAGE = <<'HTML';
@@ -69,6 +69,6 @@ async sub jobs {
 }
 
 compose(routes => [
-    route('/' => html_response($PAGE)),    # a Response is a reusable value
+    route('/' => response('HTML', $PAGE)),    # a Response is a reusable value
     sse('/jobs' => \&jobs),
 ]);
