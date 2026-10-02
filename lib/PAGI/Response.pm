@@ -23,30 +23,31 @@ PAGI::Response - reusable HTTP response values and response factories
 Every response is a complete value. Its concrete class identifies its
 representation or delivery behavior:
 
-    Class                             Factory
-    --------------------------------  -----------------
-    PAGI::Response                    response
-    PAGI::Response::Text              text_response
-    PAGI::Response::HTML              html_response
-    PAGI::Response::JSON              json_response
-    PAGI::Response::Problem           problem_response
-    PAGI::Response::Redirect          redirect_response
-    PAGI::Response::Empty             empty_response
-    PAGI::Response::File              file_response
-    PAGI::Response::Stream            stream_response
-    PAGI::Response::NDJSON            ndjson_response
+    Class                             Built by name
+    --------------------------------  ---------------------
+    PAGI::Response                    (PAGI::Response->new)
+    PAGI::Response::Text              response('Text', ...)
+    PAGI::Response::HTML              response('HTML', ...)
+    PAGI::Response::JSON              response('JSON', ...)
+    PAGI::Response::Problem           response('Problem', ...)
+    PAGI::Response::Redirect          response('Redirect', ...)
+    PAGI::Response::Empty             response('Empty', ...)
+    PAGI::Response::File              response('File', ...)
+    PAGI::Response::Stream            response('Stream', ...)
+    PAGI::Response::NDJSON            response('NDJSON', ...)
 
-Use either explicit class construction or the matching optional export:
+Construct a class directly, or build it by name with L</response>:
 
     use PAGI::Response qw(response);
     use PAGI::Response::JSON ();
     my $one = PAGI::Response::JSON->new({ ok => \1 });
     my $two = response('JSON', { ok => \1 });
 
-C<PAGI::Response> exports nothing by default. C<:all> exports all ten
-factories. Each concrete subclass may export only its own factory. Factory
-functions have fixed class mappings; they do not inspect the caller or choose
-an application subclass.
+C<PAGI::Response> exports nothing by default; C<response> is its only export,
+on request or through C<:all>. The Response subclasses export nothing.
+C<response> resolves a name the way C<middleware()> and C<session_store()>
+resolve theirs, so a Response class from another distribution is built the
+same way, with a leading C<+>.
 
 =head1 MEMORY AND DELIVERY
 
@@ -259,7 +260,9 @@ should not be hidden inside an encoder.
 
 Delivery internals used by File and Stream are not a public subclass seam.
 
-=head2 stream_response
+=head1 STREAMING AND FILE RESPONSES
+
+=head2 Stream
 
     my $response = response('Stream',
         sub {
@@ -273,7 +276,7 @@ Constructs a reusable L<PAGI::Response::Stream>. The callback receives a fresh
 per-invocation L<PAGI::Response::Writer>; await every write Future to preserve
 backpressure.
 
-=head2 ndjson_response
+=head2 NDJSON
 
     my $response = response('NDJSON', async sub ($writer) {
         await $writer->write_item({ id => 1 });
@@ -281,10 +284,10 @@ backpressure.
 
 Constructs a reusable L<PAGI::Response::NDJSON>. It streams each value through
 the specialized Writer as UTF-8 JSON followed by one LF. Buffered
-C<json_response> serializes one finite Perl value; it is not an incremental
+C<response('JSON', ...)> serializes one finite Perl value; it is not an incremental
 JSON sequence. See L<PAGI::Response::NDJSON> for framing and lifecycle details.
 
-=head2 file_response
+=head2 File
 
     my $response = response('File', '/srv/reports/monthly.pdf');
 
@@ -303,10 +306,7 @@ application.
 =cut
 
 my %KNOWN_OPTIONS = map { $_ => 1 } qw(status content_type headers);
-our @EXPORT_OK = qw(
-    response text_response html_response json_response problem_response
-    redirect_response empty_response file_response stream_response ndjson_response
-);
+our @EXPORT_OK = qw(response);
 our %EXPORT_TAGS = (all => \@EXPORT_OK);
 
 # Resolve NAME under PAGI::Response:: (or exactly, with a leading '+'), load
@@ -327,51 +327,6 @@ sub response {
     croak "response('$name'): $class is not a PAGI::Response"
         unless $class->isa('PAGI::Response');
     return $class->new(@arguments);
-}
-
-sub text_response {
-    require PAGI::Response::Text;
-    return PAGI::Response::Text->new(@_);
-}
-
-sub html_response {
-    require PAGI::Response::HTML;
-    return PAGI::Response::HTML->new(@_);
-}
-
-sub json_response {
-    require PAGI::Response::JSON;
-    return PAGI::Response::JSON->new(@_);
-}
-
-sub problem_response {
-    require PAGI::Response::Problem;
-    return PAGI::Response::Problem->new(@_);
-}
-
-sub redirect_response {
-    require PAGI::Response::Redirect;
-    return PAGI::Response::Redirect->new(@_);
-}
-
-sub empty_response {
-    require PAGI::Response::Empty;
-    return PAGI::Response::Empty->new(@_);
-}
-
-sub file_response {
-    require PAGI::Response::File;
-    return PAGI::Response::File->new(@_);
-}
-
-sub stream_response {
-    require PAGI::Response::Stream;
-    return PAGI::Response::Stream->new(@_);
-}
-
-sub ndjson_response {
-    require PAGI::Response::NDJSON;
-    return PAGI::Response::NDJSON->new(@_);
 }
 
 sub new {

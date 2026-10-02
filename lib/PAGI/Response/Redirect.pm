@@ -5,7 +5,6 @@ use warnings;
 
 use Carp qw(croak);
 use Encode qw(encode FB_CROAK);
-use Exporter qw(import);
 use parent 'PAGI::Response';
 
 =encoding UTF-8
@@ -32,8 +31,6 @@ container, while deriving the invocation's delivery values before emission.
 
 =cut
 
-our @EXPORT_OK = qw(redirect_response);
-
 my %REDIRECT_STATUS = map { $_ => 1 } qw(301 302 303 307 308);
 my %REDIRECT_TITLE = (
     301 => 'Moved Permanently',
@@ -42,10 +39,6 @@ my %REDIRECT_TITLE = (
     307 => 'Temporary Redirect',
     308 => 'Permanent Redirect',
 );
-
-sub redirect_response {
-    return PAGI::Response::Redirect->new(@_);
-}
 
 sub new {
     my ($class, $location, @pairs) = @_;

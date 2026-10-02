@@ -4,7 +4,6 @@ use strict;
 use warnings;
 
 use Carp qw(croak);
-use Exporter qw(import);
 use Future;
 use Future::AsyncAwait;
 use Scalar::Util qw(blessed);
@@ -56,17 +55,11 @@ terminal state remain authoritative while the file send is in flight.
 
 =cut
 
-our @EXPORT_OK = qw(file_response);
-
 my %KNOWN_OPTIONS = map { $_ => 1 } qw(
     status content_type headers filename inline offset length handle_ranges etag
 );
 my %CALCULATED_HEADERS = map { $_ => 1 }
     qw(content-length content-range etag);
-
-sub file_response {
-    return PAGI::Response::File->new(@_);
-}
 
 sub new {
     my ($class, $path, @pairs) = @_;

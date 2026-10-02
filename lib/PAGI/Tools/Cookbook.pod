@@ -1483,7 +1483,7 @@ boundary. Put a cheap explicit HEAD Route before an expensive GET Route:
 
 =head2 Send One Selected File
 
-C<file_response> receives a trusted path selected by the application:
+C<response('File', ...)> receives a trusted path selected by the application:
 
   use PAGI::Response qw(response);
 

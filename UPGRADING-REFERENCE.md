@@ -542,20 +542,20 @@ handler => sub {
 `PAGI::Response` is now the base of a family of complete, reusable response
 values; `ref($response)` names the representation.
 
-| Class | Factory | Memory/delivery |
+| Class | Built by name | Memory/delivery |
 | --- | --- | --- |
-| `PAGI::Response` | `response` | buffers caller-supplied encoded bytes |
-| `PAGI::Response::Text` | `text_response` | buffers strict UTF-8 text |
-| `PAGI::Response::HTML` | `html_response` | buffers strict UTF-8 HTML |
-| `PAGI::Response::JSON` | `json_response` | buffers one serialized finite Perl value |
-| `PAGI::Response::Problem` | `problem_response` | buffers validated RFC 9457 JSON |
-| `PAGI::Response::Redirect` | `redirect_response` | buffers a small redirect document |
-| `PAGI::Response::Empty` | `empty_response` | buffers zero body bytes |
-| `PAGI::Response::File` | `file_response` | request-time preflight and a server-owned `file` event |
-| `PAGI::Response::Stream` | `stream_response` | fresh producer and sequential Writer per invocation |
+| `PAGI::Response` | (`PAGI::Response->new`) | buffers caller-supplied encoded bytes |
+| `PAGI::Response::Text` | `response('Text', ...)` | buffers strict UTF-8 text |
+| `PAGI::Response::HTML` | `response('HTML', ...)` | buffers strict UTF-8 HTML |
+| `PAGI::Response::JSON` | `response('JSON', ...)` | buffers one serialized finite Perl value |
+| `PAGI::Response::Problem` | `response('Problem', ...)` | buffers validated RFC 9457 JSON |
+| `PAGI::Response::Redirect` | `response('Redirect', ...)` | buffers a small redirect document |
+| `PAGI::Response::Empty` | `response('Empty', ...)` | buffers zero body bytes |
+| `PAGI::Response::File` | `response('File', ...)` | request-time preflight and a server-owned `file` event |
+| `PAGI::Response::Stream` | `response('Stream', ...)` | fresh producer and sequential Writer per invocation |
 
-`PAGI::Response` exports nothing by default; import the factories you use or
-`:all`.
+`PAGI::Response` exports only `response`, on request or through `:all`; it
+resolves a class name the way `middleware()` does (`+` for an exact class).
 
 ### Complete spelling map
 
@@ -842,7 +842,7 @@ enable 'ErrorHandler',
     };
 ```
 
-Use `html_response` or `text_response` the same way for the other two.
+Use `response('HTML', ...)` or `response('Text', ...)` the same way for the other two.
 Without a handler, an exception's `status_code` is kept only for a
 registered error status that needs no extra protocol facts; bare 401, 405,
 407 and 426, and anything malformed, fall back to 500.
@@ -880,7 +880,7 @@ my $redirect_app = redirect('/new', status => 308, preserve_query => 1);
 
 App::Redirect preserved the query by default; Pages defaults
 `preserve_query` to `0`. Only 301, 302, 303, 307 and 308 are accepted. For a
-literal empty redirect use `redirect_response`.
+literal empty redirect use `response('Redirect', ...)`.
 
 ### Audit changed first-party defaults
 

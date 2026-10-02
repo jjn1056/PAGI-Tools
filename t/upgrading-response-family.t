@@ -83,7 +83,7 @@ subtest 'documented class form explicitly loads its concrete subclass' => sub {
     open my $fh, '<', 'lib/PAGI/Response.pm' or die $!;
     my $pod = do { local $/; <$fh> };
     my ($indented) = $pod =~ /
-        Use\ either\ explicit\ class\ construction\ or\ the\ matching\ optional\ export:\n\n
+        Construct\ a\ class\ directly,\ or\ build\ it\ by\ name\ with\ L<\/response>:\n\n
         ((?:[ ]{4}[^\n]*\n)+)
     /x;
     ok(defined $indented, 'primary class/factory example is present');

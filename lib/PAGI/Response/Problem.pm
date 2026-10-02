@@ -4,7 +4,6 @@ use strict;
 use warnings;
 
 use Carp qw(croak);
-use Exporter qw(import);
 use Scalar::Util qw(blessed);
 use parent 'PAGI::Response::JSON';
 
@@ -37,12 +36,6 @@ an incompatible status mutation is rejected, and each invocation validates
 the agreement again before any event can be emitted.
 
 =cut
-
-our @EXPORT_OK = qw(problem_response);
-
-sub problem_response {
-    return PAGI::Response::Problem->new(@_);
-}
 
 sub new {
     my ($class, $problem, @pairs) = @_;

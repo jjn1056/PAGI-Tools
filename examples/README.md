@@ -49,7 +49,7 @@ HTTP:
 - `contact-form` - a POST handler parsing form fields and file uploads
 - `static-files` - static file serving with `PAGI::App::File`
 - `pages` - Compose-rooted `PAGI::Pages` demo covering class/configured/export factories, direct application Routes and Mount, a request-derived application return, negotiation, and lifespan
-- `process-streaming` - streams an external command's output through `stream_response`/`pipe_from` with a four-line loop-agnostic `Future::IO` source, real pipe backpressure, and `on_close` cleanup that stops the child when the client disconnects
+- `process-streaming` - streams an external command's output through `response('Stream', ...)`/`pipe_from` with a four-line loop-agnostic `Future::IO` source, real pipe backpressure, and `on_close` cleanup that stops the child when the client disconnects
 - `psgi-bridge` - a legacy PSGI application on a catch-all route beside native routes (via `PAGI::App::WrapPSGI`)
 - `starlette-apples` - Perl 5.40 single-file apples CRUD application for direct comparison with the original Starlette version, using `Types::Standard` path constraints, Router-owned routing outcomes, and a PAGI-only NDJSON export
 

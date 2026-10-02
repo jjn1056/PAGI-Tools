@@ -4,7 +4,6 @@ use strict;
 use warnings;
 
 use Carp qw(croak);
-use Exporter qw(import);
 use parent 'PAGI::Response';
 
 =encoding UTF-8
@@ -26,12 +25,6 @@ added or permitted. Flat headers are accepted; framing fields forbidden by a
 1xx, 204, or 304 status are omitted on emission.
 
 =cut
-
-our @EXPORT_OK = qw(empty_response);
-
-sub empty_response {
-    return PAGI::Response::Empty->new(@_);
-}
 
 sub new {
     my ($class, @pairs) = @_;

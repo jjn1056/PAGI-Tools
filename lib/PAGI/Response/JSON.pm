@@ -3,7 +3,6 @@ package PAGI::Response::JSON;
 use strict;
 use warnings;
 
-use Exporter qw(import);
 use JSON::MaybeXS ();
 use parent 'PAGI::Response';
 
@@ -29,13 +28,7 @@ need an application Response subclass with an explicitly canonical encoder.
 
 =cut
 
-our @EXPORT_OK = qw(json_response);
-
 my $JSON = JSON::MaybeXS->new(utf8 => 1);
-
-sub json_response {
-    return PAGI::Response::JSON->new(@_);
-}
 
 sub default_content_type { 'application/json' }
 

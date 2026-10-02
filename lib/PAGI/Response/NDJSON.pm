@@ -4,7 +4,6 @@ use strict;
 use warnings;
 
 use Carp qw(croak);
-use Exporter qw(import);
 use parent 'PAGI::Response::Stream';
 use PAGI::Response::NDJSON::Writer ();
 
@@ -61,20 +60,10 @@ Constructs the response. The producer must be a coderef. Common C<status>,
 C<content_type>, and flat C<headers> options use the Response contract; the
 default content type is C<application/x-ndjson>.
 
-=head2 ndjson_response
-
-    my $response = response('NDJSON', $producer, %common_response_options);
-
-Optional export shorthand for the same constructor. C<PAGI::Response> also
-exports it on request or through C<:all>.
+Also built by name: C<< response('NDJSON', $producer, %options) >> (see
+L<PAGI::Response/response>).
 
 =cut
-
-our @EXPORT_OK = qw(ndjson_response);
-
-sub ndjson_response {
-    return PAGI::Response::NDJSON->new(@_);
-}
 
 sub default_content_type { 'application/x-ndjson' }
 

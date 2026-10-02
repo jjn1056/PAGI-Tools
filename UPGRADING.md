@@ -15,7 +15,7 @@ in [UPGRADING-REFERENCE.md](UPGRADING-REFERENCE.md).
 | `PAGI::App::Router` (`get`, `group`, `as`, `uri_for`, `not_found`) | `PAGI::Routing`: `router`, `route`, `mount`, `path_for`, `http_default` ([details](UPGRADING-REFERENCE.md#migrate-app-router-declarations)) |
 | `PAGI::Endpoint::Router` (`routes($self, $r)`, string targets, `$self->state`) | a class whose `routing` returns a Router; lifespan state ([details](UPGRADING-REFERENCE.md#migrate-endpoint-router-classes)) |
 | Handlers receive a Context (`$ctx`) | handlers receive the `PAGI::Request`, `PAGI::WebSocket` or `PAGI::SSE` ([details](UPGRADING-REFERENCE.md#breaking-replace-the-pagi-context-family-with-the-protocol-owner)) |
-| `$ctx->json`/`text`/`html`/`redirect`, `$request->response`, the mutable Response builder | return `json_response`, `text_response`, ... ([details](UPGRADING-REFERENCE.md#breaking-choose-a-concrete-response-class)) |
+| `$ctx->json`/`text`/`html`/`redirect`, `$request->response`, the mutable Response builder | return `response('JSON', ...)`, `response('Text', ...)`, ... ([details](UPGRADING-REFERENCE.md#breaking-choose-a-concrete-response-class)) |
 | `$ctx->stash`, `session`, `state`, `csrf_verify`, `on_drain` | `stash($request)`, `session($request)`, `app_state($request)`, `csrf($request)`, `transport($request)` ([details](UPGRADING-REFERENCE.md#import-optional-capabilities-from-their-owners)) |
 | App::Router handlers as native `($scope, $receive, $send)` apps | Route CODE gets one Request; wrap natives with `as_app_object` ([details](UPGRADING-REFERENCE.md#migrate-app-router-declarations)) |
 | `PAGI::App::NotFound`, `PAGI::App::Redirect` | `PAGI::Pages` `not_found`, `redirect` ([details](UPGRADING-REFERENCE.md#pages-replaces-the-stock-response-applications)) |
@@ -163,7 +163,7 @@ What changed, line by line:
 - The `PAGI::Endpoint::Router` class became plain subs and one `compose`
   call; string targets became `\&handler` references.
 - Each handler receives the `PAGI::Request` and returns a Response
-  (`json_response`, `text_response`) instead of calling `$ctx->json`.
+  (`response('JSON', ...)`, `response('Text', ...)`) instead of calling `$ctx->json`.
 - The `require_login` middleware method became a check inside the one
   handler that needs it; a check shared by many routes could be a
   `middleware(...)` description on a `mount`, or `PAGI::Auth`'s `requires`.

@@ -58,7 +58,7 @@ the toolkit turns that into one cleanup callback.
 any conforming PAGI server, whatever loop it is built on. Application code that
 reaches for `IO::Async` directly gives that up.
 
-**Handlers return applications.** `run_report` returns a `stream_response` on
+**Handlers return applications.** `run_report` returns a `response('Stream', ...)` on
 the happy path and a `not_found` page for an unknown report. Both are ordinary
 PAGI applications, so neither needs an adapter.
 

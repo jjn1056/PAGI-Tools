@@ -548,19 +548,19 @@ outbound watermark and drain operations live on C<transport($request)>.
 =head2 4.1 PAGI::Response - Concrete Response Values
 
 L<PAGI::Response> is a class family, not a mutable body-mode builder. The class
-or factory name tells you what is buffered and how it is delivered:
+name tells you what is buffered and how it is delivered:
 
-  Class                             Factory
-  --------------------------------  -----------------
-  PAGI::Response                    response
-  PAGI::Response::Text              text_response
-  PAGI::Response::HTML              html_response
-  PAGI::Response::JSON              json_response
-  PAGI::Response::Problem           problem_response
-  PAGI::Response::Redirect          redirect_response
-  PAGI::Response::Empty             empty_response
-  PAGI::Response::File              file_response
-  PAGI::Response::Stream            stream_response
+  Class                             Built by name
+  --------------------------------  ---------------------
+  PAGI::Response                    (PAGI::Response->new)
+  PAGI::Response::Text              response('Text', ...)
+  PAGI::Response::HTML              response('HTML', ...)
+  PAGI::Response::JSON              response('JSON', ...)
+  PAGI::Response::Problem           response('Problem', ...)
+  PAGI::Response::Redirect          response('Redirect', ...)
+  PAGI::Response::Empty             response('Empty', ...)
+  PAGI::Response::File              response('File', ...)
+  PAGI::Response::Stream            response('Stream', ...)
 
 The first seven hold their complete encoded bytes in memory. File keeps one
 trusted selected path and uses a PAGI C<file> event. Stream runs a fresh
@@ -571,7 +571,7 @@ guess whether it is finite.
   use PAGI::Response::Text ();
 
   my $text = PAGI::Response::Text->new('Hello'); # class form
-  my $json = response('JSON', { ok => \1 });          # factory form
+  my $json = response('JSON', { ok => \1 });      # built by name
 
 The base C<< PAGI::Response->new($bytes) >> accepts already encoded bytes. Text and HTML
 strictly encode Unicode as UTF-8; JSON serializes one finite Perl value and
@@ -1164,7 +1164,7 @@ a concrete Response through the existing handler seam to fix its representation:
           });
       };
 
-Use C<html_response> or C<text_response> for other fixed forms. Ordinary
+Use C<response('HTML', ...)> or C<response('Text', ...)> for other fixed forms. Ordinary
 construction has static C<development =E<gt> 0> behavior and
 does not consult C<PAGI_ENV>. Its optional C<handler> receives
 C<($request, $error)> and returns an immediate or Future-backed Response.

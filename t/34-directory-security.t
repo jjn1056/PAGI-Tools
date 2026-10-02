@@ -192,9 +192,9 @@ subtest 'Directory adds only eligible listings over File request handling' => su
         'directory Result is the only Result intercepted before serve');
 
     $component->reset_calls;
-    my $file_response = $client->get('/plain.txt');
-    is($file_response->status, 200, 'file Result keeps File response handling');
-    is($file_response->text, 'plain', 'delegated file body is unchanged');
+    my $served_file = $client->get('/plain.txt');
+    is($served_file->status, 200, 'file Result keeps File response handling');
+    is($served_file->text, 'plain', 'delegated file body is unchanged');
     is($component->locate_calls, 1, 'file request locates exactly once');
     is($component->serve_calls, 1, 'file Result delegates to inherited serve');
 

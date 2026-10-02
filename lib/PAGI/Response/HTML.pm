@@ -4,7 +4,6 @@ use strict;
 use warnings;
 
 use Encode qw(encode FB_CROAK);
-use Exporter qw(import);
 use parent 'PAGI::Response';
 
 =encoding UTF-8
@@ -27,12 +26,6 @@ C<content_type> options are accepted. The class encodes markup but does not
 escape or sanitize it.
 
 =cut
-
-our @EXPORT_OK = qw(html_response);
-
-sub html_response {
-    return PAGI::Response::HTML->new(@_);
-}
 
 sub default_content_type { 'text/html; charset=utf-8' }
 
