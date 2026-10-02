@@ -7,8 +7,8 @@ use Carp qw(croak);
 use Future;
 use Future::AsyncAwait;
 use PAGI::Authority;
-use PAGI::Pages;
 use PAGI::Response::Redirect ();
+use PAGI::Response::Text ();
 use PAGI::Utils ();
 use PAGI::Utils::Scope ();
 
@@ -29,17 +29,23 @@ PAGI::Middleware::HTTPSRedirect - Force HTTPS redirect middleware
 
 PAGI::Middleware::HTTPSRedirect redirects HTTP requests to HTTPS. Redirect
 authority comes from the validated Host header when present, otherwise from the
-scope server tuple. It never invents a C<localhost> authority; duplicate or
-malformed Host data and unusable server fallbacks receive a generic HTTP 400
-response. Useful for enforcing secure connections in production.
+scope server tuple. It never invents a C<localhost> authority: a duplicate or
+malformed Host, or no Host and an unusable server tuple, is refused with a
+plain-text 400, C<Invalid Host header>, and a request target that is not a
+path (C<GET http://evil/x>) with C<Invalid request target>, since a redirect
+built from it could name another host. C<refuse> replaces the refusal.
 
-Redirect targets use L<PAGI::Response::Redirect>. Invalid-authority responses
-are rendered by L<PAGI::Pages> from the original request scope. The redirect
-target is C<https://>, the authority, and L<PAGI::Request/request_uri>: the
-path and query the client requested, still encoded, including any mount
-prefix. Authority selection, exclusions,
-secure-request pass-through, and HSTS remain owned by this middleware; there
-is no response-policy configuration option.
+Redirect targets use L<PAGI::Response::Redirect>. The redirect target is
+C<https://>, the authority, and L<PAGI::Request/request_uri>: the path and
+query the client requested, still encoded, including any mount prefix.
+Authority selection, exclusions, secure-request pass-through, and HSTS remain
+owned by this middleware.
+
+Use it when PAGI::Server itself accepts plain HTTP from clients. Behind a
+TLS-terminating proxy or load balancer, the proxy usually does this redirect,
+and every request reaches the application as C<http>: without
+L<PAGI::Middleware::ReverseProxy> placed before this middleware to restore the
+scheme from C<X-Forwarded-Proto>, it redirects every request, forever.
 
 Non-HTTP scopes continue to pass through unchanged without authority handling.
 
@@ -65,6 +71,20 @@ If true, add Strict-Transport-Security header.
 
 HSTS max-age in seconds (1 year default).
 
+=item * refuse (default: a 400 text response)
+
+An application that answers a refused request instead of the plain-text
+default: a C<($scope, $receive, $send)> coderef or an object with C<to_app>,
+which includes every L<PAGI::Response>:
+
+    middleware('HTTPSRedirect',
+        refuse => response('JSON', { detail => 'Cannot redirect to HTTPS' }, status => 400));
+
+For a malformed Host it receives a scope holding only the request's
+well-formed C<Accept> headers. A refused request is never passed on over
+plain HTTP, so there is no C<0> form; leave paths on HTTP with C<exclude>.
+Any plain value dies.
+
 =back
 
 =cut
@@ -89,6 +109,13 @@ sub _init {
     $self->{exclude} = $config->{exclude} // [];
     $self->{hsts} = $config->{hsts} // 0;
     $self->{hsts_max_age} = $config->{hsts_max_age} // 31536000;
+
+    # The caller's refusing application, or plain-text defaults built once.
+    $self->{refuse} = PAGI::Utils::_refuse_option('HTTPSRedirect', $config);
+    $self->{_default_refusal} = {
+        host   => PAGI::Response::Text->new('Invalid Host header', status => 400)->to_app,
+        target => PAGI::Response::Text->new('Invalid request target', status => 400)->to_app,
+    };
 }
 
 sub wrap {
@@ -143,7 +170,8 @@ sub wrap {
             $authority_error = $@;
         }
         if ($authority_error) {
-            await $self->_send_error($scope, $receive, $send, 400);
+            await $self->_refuse($self->_refusal_scope_for_authority_error($scope),
+                $receive, $send, 'host');
             return;
         }
 
@@ -157,7 +185,7 @@ sub wrap {
             return;
         }
         if (substr($target, 0, 1) ne '/') {
-            await $self->_send_error($scope, $receive, $send, 400);
+            await $self->_refuse($scope, $receive, $send, 'target');
             return;
         }
         my $url = "https://$authority$target";
@@ -188,11 +216,10 @@ async sub _send_redirect {
     await PAGI::Utils::invoke_app($response, $scope, $receive, $send);
 }
 
-async sub _send_error {
-    my ($self, $scope, $receive, $send, $status) = @_;
-    croak "HTTPSRedirect does not own status $status" unless $status == 400;
-    my $response = PAGI::Pages->bad_request;
-    await PAGI::Utils::invoke_app($response, $scope, $receive, $send);
+async sub _refuse {
+    my ($self, $scope, $receive, $send, $reason) = @_;
+    my $refusal = $self->{refuse} // $self->{_default_refusal}{$reason};
+    await $refusal->($scope, $receive, $send);
 }
 
 1;
@@ -208,9 +235,8 @@ when behind a reverse proxy (use ReverseProxy middleware).
 Host validation and server fallback are only used when constructing an HTTP
 redirect. Existing HTTPS, excluded paths, and non-HTTP scopes retain their
 pass-through behavior. In redirect branches, this middleware constructs the
-final Location and Redirect validates and renders it. Invalid
-authorities retain Pages negotiation. HSTS is still added only to responses
-from an already-secure request when enabled.
+final Location and Redirect validates and renders it. HSTS is still added
+only to responses from an already-secure request when enabled.
 
 =head1 SEE ALSO
 

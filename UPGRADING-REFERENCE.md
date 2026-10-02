@@ -919,7 +919,6 @@ built-in English body should assert the status and media type instead.
 | `PAGI::Middleware::Maintenance` | built-in 503 | `retry_after`; explicit `body`/`content_type` stay literal |
 | `PAGI::Middleware::RateLimit` | default 429 | `retry_after`, `X-RateLimit-*` |
 | `PAGI::Middleware::ReverseProxy` | forwarded-authority 400 | trust decisions |
-| `PAGI::Middleware::HTTPSRedirect` | invalid-authority 400 and redirect | authority/HSTS policy |
 | `PAGI::Middleware::Rewrite` | redirect-mode response | rule selection, code, target |
 | `PAGI::Endpoint::HTTP` | automatic 405 | computed `allowed_methods` |
 

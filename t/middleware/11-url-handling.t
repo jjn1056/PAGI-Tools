@@ -13,6 +13,7 @@ use PAGI::Middleware::HTTPSRedirect;
 use PAGI::Middleware::ReverseProxy;
 use PAGI::Middleware::Healthcheck;
 use PAGI::Request;
+use PAGI::Response qw(response);
 
 my $loop = IO::Async::Loop->new;
 
@@ -504,7 +505,7 @@ subtest 'HTTPSRedirect keeps an encoded ? and # in the path' => sub {
         'a ? or # the client sent encoded stays in the path; the query follows it';
 };
 
-subtest 'HTTPSRedirect - invalid authority negotiates Pages 400' => sub {
+subtest 'HTTPSRedirect - invalid authority is refused with plain text' => sub {
     my @cases = (
         {
             name  => 'duplicate Host',
@@ -558,18 +559,47 @@ subtest 'HTTPSRedirect - invalid authority negotiates Pages 400' => sub {
         is $events[0]{type}, 'http.response.start', "$case->{name}: response starts";
         is $events[0]{status}, 400, "$case->{name}: status is 400";
         my %headers = map { lc($_->[0]) => $_->[1] } @{$events[0]{headers}};
-        is $headers{'content-type'},
-            $case->{content_type} // 'text/html; charset=utf-8',
-            "$case->{name}: Pages negotiates from the original scope";
-        is $headers{'cache-control'}, 'no-store',
-            "$case->{name}: Pages applies the error cache policy";
-        unlike $events[1]{body}, qr/Invalid Host header|evil\.example/,
+        is $headers{'content-type'}, 'text/plain; charset=utf-8',
+            "$case->{name}: plain text whatever the Accept";
+        is $events[1]{body}, 'Invalid Host header',
+            "$case->{name}: says the Host header is invalid";
+        unlike $events[1]{body}, qr/evil\.example/,
             "$case->{name}: response does not expose rejected authority data";
-        if ($case->{content_type}) {
-            my $problem = decode_json($events[1]{body});
-            is $problem->{status}, 400,
-                "$case->{name}: problem document carries status 400";
-        }
+    }
+};
+
+subtest 'HTTPSRedirect - refuse replaces the refusal' => sub {
+    my $redirect = PAGI::Middleware::HTTPSRedirect->new(
+        refuse => response('JSON', { detail => 'Cannot redirect' }, status => 400));
+    my @events;
+    run_async {
+        $redirect->wrap(async sub { die 'downstream' })->(
+            make_scope(headers => [['Host', 'example.com/path']]),
+            async sub { {} }, async sub { my ($event) = @_; push @events, $event },
+        )
+    };
+    is decode_json($events[1]{body}), { detail => 'Cannot redirect' }, 'the refusing Response answers';
+
+    my $seen_headers;
+    $redirect = PAGI::Middleware::HTTPSRedirect->new(refuse => async sub {
+        my ($scope, $receive, $send) = @_;
+        $seen_headers = $scope->{headers};
+        await $send->({ type => 'http.response.start', status => 400, headers => [] });
+        await $send->({ type => 'http.response.body', body => '', more => 0 });
+    });
+    run_async {
+        $redirect->wrap(async sub { die 'downstream' })->(
+            make_scope(headers => [['Host', ['a.example']], ['Accept', 'text/html']]),
+            async sub { {} }, async sub { },
+        )
+    };
+    is $seen_headers, [['Accept', 'text/html']],
+        'a malformed request reaches the refusing application with only its Accept headers';
+
+    for my $value (undef, '', 0, 'yes') {
+        my $label = defined $value ? "'$value'" : 'undef';
+        like dies { PAGI::Middleware::HTTPSRedirect->new(refuse => $value) },
+            qr/\QHTTPSRedirect 'refuse' must be an application\E/, "$label is refused";
     }
 };
 
@@ -640,6 +670,7 @@ subtest 'HTTPSRedirect never redirects to a target that is not a path' => sub {
         ));
         my %headers = map { lc($_->[0]) => $_->[1] } @{$events[0]{headers} // []};
         is [$events[0]{status}, $headers{location}], [400, undef], "'$raw' is refused, not redirected";
+        is $events[1]{body}, 'Invalid request target', "'$raw' is told the target is invalid";
     }
     my @events;
     $loop->await($wrapped->(

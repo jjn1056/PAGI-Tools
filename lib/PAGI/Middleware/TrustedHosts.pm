@@ -148,46 +148,6 @@ sub wrap {
     };
 }
 
-# A refusing application that builds a PAGI::Request would croak on the
-# malformed header pairs that caused the refusal; it gets only the
-# well-formed Accept pairs.
-sub _refusal_scope_for_authority_error {
-    my ($self, $scope) = @_;
-    my $pairs = exists $scope->{headers} ? $scope->{headers} : [];
-    my $structurally_valid = ref($pairs) eq 'ARRAY';
-
-    if ($structurally_valid) {
-        for my $pair (@$pairs) {
-            unless (ref($pair) eq 'ARRAY' && @$pair == 2
-                    && defined($pair->[0]) && !ref($pair->[0])
-                    && defined($pair->[1]) && !ref($pair->[1])) {
-                $structurally_valid = 0;
-                last;
-            }
-        }
-    }
-    return $scope if $structurally_valid;
-
-    my @accept;
-    if (ref($pairs) eq 'ARRAY') {
-        for my $pair (@$pairs) {
-            next unless ref($pair) eq 'ARRAY' && @$pair == 2
-                && defined($pair->[0]) && !ref($pair->[0])
-                && defined($pair->[1]) && !ref($pair->[1]);
-            my $name = $pair->[0];
-            $name =~ tr/A-Z/a-z/;
-            push @accept, [$pair->[0], $pair->[1]] if $name eq 'accept';
-        }
-    }
-
-    my $safe_scope = {
-        %$scope,
-        headers => \@accept,
-    };
-    delete $safe_scope->{'pagi.request.headers'};
-    return $safe_scope;
-}
-
 async sub _refuse {
     my ($self, $scope, $receive, $send, $reason) = @_;
     my $refusal = $self->{refuse} // $self->{_default_refusal}{$reason};
@@ -217,12 +177,12 @@ Host header injection attacks can lead to:
 This middleware prevents these attacks by validating the Host header
 against a whitelist of allowed hosts.
 
-If the raw header container itself is malformed, the built-in Pages response
-uses a request-local shallow scope containing only structurally valid Accept
-pairs. Any inherited request-header cache is discarded from that copy. The
-original scope and malformed header data are not mutated. Structurally valid
-missing, duplicate, malformed-authority, and allowlist-rejected Host branches
-continue to pass their original scope to Pages.
+If the raw header container itself is malformed, a C<refuse> application
+receives a request-local shallow scope containing only structurally valid
+Accept pairs. Any inherited request-header cache is discarded from that copy.
+The original scope and malformed header data are not mutated. Structurally
+valid missing, duplicate, malformed-authority, and allowlist-rejected Host
+branches pass their original scope.
 
 =head1 SEE ALSO
 
