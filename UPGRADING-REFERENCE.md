@@ -730,6 +730,27 @@ my $db = $state->get('db');
 A temporary `%{}` overload still allows `->state->{db}` (with a warning), but
 `ref($protocol->state) eq 'HASH'` is false: use `->data` for an exact hashref.
 
+## Breaking: `on_close` callbacks receive a third argument
+
+`on_close` now also passes the connection's disconnect detail:
+
+| | 0.002002 | Now |
+|---|---|---|
+| `PAGI::WebSocket` | `($code, $reason)` | `($code, $reason, $detail)` |
+| `PAGI::SSE` | `($sse, $reason)` | `($sse, $reason, $detail)` |
+
+A callback that unpacks `@_` is unaffected. One with a **strict signature**
+dies with "Too many arguments", which the helper catches and logs, so its
+cleanup silently does not run:
+
+```perl
+# Before
+$sse->on_close(sub ($sse, $reason) { cleanup() });
+
+# After
+$sse->on_close(sub ($sse, $reason, $detail = undef) { cleanup() });
+```
+
 ## Breaking: `PAGI::SSE` and `PAGI::WebSocket` require `pagi.connection`
 
 PAGI::Spec::Www 0.6 requires a `pagi.connection` object in every `http`,

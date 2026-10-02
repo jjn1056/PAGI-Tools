@@ -25,6 +25,7 @@ in [UPGRADING-REFERENCE.md](UPGRADING-REFERENCE.md).
 | `FormBody`, `JSONBody` middleware | `$request->form_params`, `$request->json` ([details](UPGRADING-REFERENCE.md#breaking-pagimiddlewareformbody-and-pagimiddlewarejsonbody-are-removed)) |
 | `PAGI::App::Loader` | `pagi-server --app`, or `do $file` ([details](UPGRADING-REFERENCE.md#breaking-pagiapploader-is-removed)) |
 | WebSocket/SSE `->state` hashref | a `PAGI::State` object ([details](UPGRADING-REFERENCE.md#breaking-direct-websocket-and-sse-state-matches-request)) |
+| WebSocket `on_close` `($code, $reason)`; SSE `on_close` `($sse, $reason)` | a third argument, `$detail`; a strict signature must accept it ([details](UPGRADING-REFERENCE.md#breaking-on_close-callbacks-receive-a-third-argument)) |
 | `$ws->deny(status => ..., body => ...)` | `$ws->deny($response)`; new `$sse->decline($response)` ([details](UPGRADING-REFERENCE.md#refuse-websocketsse-with-request-handlers-or-applications)) |
 | Builder `enable '^My::Middleware'` | `enable '+My::Middleware'` ([details](UPGRADING-REFERENCE.md#breaking-use-explicit-middleware-descriptions-at-core-boundaries)) |
 | Directory `show_hidden` | `allow_hidden` ([details](UPGRADING-REFERENCE.md#rooted-file-serving-security-contract)) |

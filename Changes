@@ -74,6 +74,9 @@
     gets a 500, and each terminal disconnect is delivered once.
   - Lint's strict mode rejects an illegal send instead of forwarding it.
   - App::WebSocket::Echo's on_disconnect receives ($scope, $code, $reason).
+  - PAGI::WebSocket and PAGI::SSE on_close callbacks receive a third
+    argument, $detail; a callback with a strict two-argument signature
+    dies, and its cleanup is skipped (the error is logged).
 
   [Fixed]
   - GZip sent every compressed response as 200, whatever its status.

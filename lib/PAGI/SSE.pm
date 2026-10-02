@@ -1482,6 +1482,9 @@ Callbacks receive three arguments:
 
 =back
 
+A callback with a signature must accept all three, for example
+C<sub ($sse, $reason, $detail = undef) { ... }>.
+
 Returns C<$self> for chaining.
 
 B<Circular reference note:> If your callback captures the C<$sse> object

@@ -1342,7 +1342,8 @@ Exceptions in callback propagate to caller.
     });
 
 Registers cleanup for the connection's terminal C<on_end> notification.
-Arguments are C<($peer_code, $peer_reason, $disconnect_detail)>; lifecycle
+Arguments are C<($peer_code, $peer_reason, $disconnect_detail)> -- a callback
+with a signature must accept all three; lifecycle
 reason is available through C<disconnect_reason>. Register before awaited I/O:
 registration after cleanup has begun (including constructor-time terminal
 notification) croaks. A local C<close> request alone does not start cleanup.
