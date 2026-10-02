@@ -730,21 +730,21 @@ my $db = $state->get('db');
 A temporary `%{}` overload still allows `->state->{db}` (with a warning), but
 `ref($protocol->state) eq 'HASH'` is false: use `->data` for an exact hashref.
 
-## Breaking: CSRF `enforce` is replaced by `invalid`
+## Breaking: CSRF `enforce` is replaced by `refuse`
 
 | 0.002002 | Now |
 |---|---|
 | `enforce => 'header'` (the default) | the default; remove the option |
-| `enforce => 'app'` | `invalid => 0`; the handler still calls `csrf($request)->verify($token)` |
+| `enforce => 'app'` | `refuse => 0`; the handler still calls `csrf($request)->verify($token)` |
 
 Passing `enforce` dies, so a form application that relied on
 `enforce => 'app'` cannot silently start refusing its posts. The default
-refusal is a plain `403 text/plain` (0.002002's wording); `invalid` replaces
+refusal is a plain `403 text/plain` (0.002002's wording); `refuse` replaces
 it with any application:
 
 ```perl
 middleware('CSRF', secret => $secret,
-    invalid => response('JSON', { detail => 'CSRF token validation failed' }, status => 403));
+    refuse => response('JSON', { detail => 'CSRF token validation failed' }, status => 403));
 ```
 
 ## Breaking: `on_close` callbacks receive a third argument

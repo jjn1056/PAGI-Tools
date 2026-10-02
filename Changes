@@ -30,7 +30,7 @@
     logs, and HTTPSRedirect redirects to, the encoded request URI.
   - Stock error and redirect responses from first-party components
     negotiate HTML, problem JSON or text through Pages.
-  - CSRF's default refusal is a plain 403 text response; invalid replaces
+  - CSRF's default refusal is a plain 403 text response; refuse replaces
     it with any application, and csrf($request)->valid and ->failure
     report the check.
   - GZip compresses streaming responses.
@@ -81,7 +81,7 @@
   - PAGI::WebSocket and PAGI::SSE on_close callbacks receive a third
     argument, $detail; a callback with a strict two-argument signature
     dies, and its cleanup is skipped (the error is logged).
-  - PAGI::Middleware::CSRF's enforce is removed: invalid => 0 replaces
+  - PAGI::Middleware::CSRF's enforce is removed: refuse => 0 replaces
     enforce => 'app', and passing enforce dies.
 
   [Fixed]

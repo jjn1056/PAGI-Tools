@@ -26,11 +26,11 @@ PAGI::Middleware::CSRF - Cross-Site Request Forgery protection middleware
 
     # Refuse it with your own application or Response
     middleware('CSRF', secret => $secret,
-        invalid => response('JSON', { detail => 'CSRF token validation failed' }, status => 403));
+        refuse => response('JSON', { detail => 'CSRF token validation failed' }, status => 403));
 
     # Let the application decide: every request reaches it, with the outcome
     # recorded for csrf($request)->valid and ->failure
-    middleware('CSRF', secret => $secret, invalid => 0);
+    middleware('CSRF', secret => $secret, refuse => 0);
 
 L<PAGI::CSRF/SYNOPSIS> shows both modes in full, as complete applications.
 
@@ -38,7 +38,7 @@ L<PAGI::CSRF/SYNOPSIS> shows both modes in full, as complete applications.
 
 PAGI::Middleware::CSRF provides protection against Cross-Site Request
 Forgery attacks by validating tokens on state-changing requests. Its default
-refusal is a plain 403 text response; C<invalid> replaces it, or lets the
+refusal is a plain 403 text response; C<refuse> replaces it, or lets the
 application decide. L<PAGI::CSRF/SYNOPSIS> shows both, as complete
 applications.
 
@@ -68,7 +68,7 @@ Add the C<Secure> attribute to the CSRF cookie, restricting it to HTTPS
 requests. Off by default so plain-HTTP development setups keep working;
 for production HTTPS deployments, add C<< secure => 1 >>.
 
-=item * invalid (default: a 403 text response)
+=item * refuse (default: a 403 text response)
 
 What answers an unsafe request whose token check fails. Absent: a
 C<403 text/plain> response, C<CSRF token validation failed>. An application
@@ -85,7 +85,7 @@ C<< csrf($request)->valid >> and C<< ->failure >>. Any other plain value dies.
 sub _init {
     my ($self, $config) = @_;
 
-    die "CSRF 'enforce' was removed: use invalid => 0 for the application to decide; the default refuses"
+    die "CSRF 'enforce' was removed: use refuse => 0 for the application to decide; the default refuses"
         if exists $config->{enforce};
 
     $self->{secret}       = $config->{secret} // die "CSRF middleware requires 'secret' option";
@@ -94,25 +94,25 @@ sub _init {
     $self->{safe_methods} = { map { $_ => 1 } @{$config->{safe_methods} // [qw(GET HEAD OPTIONS TRACE)]} };
     $self->{secure}       = $config->{secure} // 0;
 
-    # invalid: absent -> the default refusal; exactly 0 -> the application
+    # refuse: absent -> the default refusal; exactly 0 -> the application
     # decides; otherwise an application. Any other plain value (undef, '',
     # '0E0', a string) is a configuration mistake, never a quiet way to
     # switch protection off.
-    if (!exists $config->{invalid}) {
-        $self->{invalid} = PAGI::Response::Text->new(
+    if (!exists $config->{refuse}) {
+        $self->{refuse} = PAGI::Response::Text->new(
             'CSRF token validation failed', status => 403,
         )->to_app;
     }
     else {
-        my $invalid = $config->{invalid};
-        if (defined($invalid) && !ref($invalid) && $invalid eq '0') {
-            $self->{invalid} = undef;
+        my $refuse = $config->{refuse};
+        if (defined($refuse) && !ref($refuse) && $refuse eq '0') {
+            $self->{refuse} = undef;
         }
-        elsif (!ref($invalid)) {
-            die "CSRF 'invalid' must be an application, or 0 to let the application decide";
+        elsif (!ref($refuse)) {
+            die "CSRF 'refuse' must be an application, or 0 to let the application decide";
         }
         else {
-            $self->{invalid} = PAGI::Utils::to_app($invalid);
+            $self->{refuse} = PAGI::Utils::to_app($refuse);
         }
     }
 }
@@ -155,8 +155,8 @@ sub wrap {
             await $send->($event);
         };
 
-        my $target = exists($recorded{csrf_failure}) && $self->{invalid}
-            ? $self->{invalid} : $app;
+        my $target = exists($recorded{csrf_failure}) && $self->{refuse}
+            ? $self->{refuse} : $app;
         await $target->($self->modify_scope($scope, \%recorded), $receive, $wrapped_send);
     };
 }
@@ -219,7 +219,7 @@ it also carries that same token some other way -- because C<HttpOnly> means
 client-side JavaScript cannot read the cookie itself (C<document.cookie>
 won't show it, and neither would a hypothetical C<getCookie> helper). That
 "some other way" is a request header (the default) or a form field
-(C<invalid =E<gt> 0>).
+(C<refuse =E<gt> 0>).
 
 =head2 Header flow (the default)
 
@@ -245,11 +245,11 @@ configured header:
         headers: { 'X-CSRF-Token': token },
     });
 
-=head2 Form flow (invalid => 0)
+=head2 Form flow (refuse => 0)
 
 Use this for server-rendered HTML forms. A plain C<< <form> >> POST has no
 way to add a custom header, so the default would 403 every such submission --
-that's precisely why C<invalid =E<gt> 0> exists: the middleware issues the
+that's precisely why C<refuse =E<gt> 0> exists: the middleware issues the
 token (on every method, including the POST itself) and records its header
 check, but never refuses; the app validates once it has parsed the submitted
 params.
