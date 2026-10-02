@@ -981,29 +981,21 @@ subtest 'ReverseProxy - trusted forwarded Host rejects ambiguity and invalid aut
         is $events[0]{status}, 400, "$case->{name}: status remains 400";
         is [response_header_values($events[0], 'Content-Type')],
             ['text/plain; charset=utf-8'],
-            "$case->{name}: Pages negotiates text";
-        is [response_header_values($events[0], 'Cache-Control')],
-            ['no-store'], "$case->{name}: Pages applies error cache policy";
-        is [response_header_values($events[0], 'Vary')],
-            ['Accept'], "$case->{name}: Pages varies on Accept";
+            "$case->{name}: plain text";
         is $events[1], {
             type => 'http.response.body',
-            body => "400 Bad Request\n\nThe server could not understand the request.\n",
+            body => 'Invalid X-Forwarded-Host header',
             more => 0,
-        }, "$case->{name}: generic Pages 400 response is sent";
+        }, "$case->{name}: names the header to fix";
     }
 };
 
-subtest 'ReverseProxy invalid forwarded authority negotiates problem JSON' => sub {
-    my $proxy = PAGI::Middleware::ReverseProxy->new(
-        trusted_proxies => ['127.0.0.1'],
-    );
+subtest 'ReverseProxy invalid forwarded authority is plain text whatever the Accept' => sub {
+    my $proxy = PAGI::Middleware::ReverseProxy->new(trusted_proxies => ['127.0.0.1']);
     my $app_calls = 0;
-    my $wrapped = $proxy->wrap(async sub { $app_calls++ });
     my @events;
-
     run_async {
-        $wrapped->(
+        $proxy->wrap(async sub { $app_calls++ })->(
             make_scope(
                 client  => ['127.0.0.1', 12345],
                 headers => [
@@ -1015,22 +1007,32 @@ subtest 'ReverseProxy invalid forwarded authority negotiates problem JSON' => su
             async sub { my ($event) = @_; push @events, $event },
         )
     };
-
     is $app_calls, 0, 'invalid forwarded authority does not call downstream';
-    is $events[0]{status}, 400, 'invalid forwarded authority retains status 400';
-    is [response_header_values($events[0], 'Content-Type')],
-        ['application/problem+json'],
-        'invalid forwarded authority negotiates problem JSON';
-    is [response_header_values($events[0], 'Cache-Control')],
-        ['no-store'], 'problem response uses the Pages error cache policy';
-    is [response_header_values($events[0], 'Vary')],
-        ['Accept'], 'problem response varies on Accept';
-    my $problem = eval { JSON::MaybeXS::decode_json($events[1]{body}) };
-    ok $problem, 'invalid forwarded authority renders a JSON problem document';
-    if ($problem) {
-        is $problem->{status}, 400, 'problem document contains status 400';
-        is $problem->{detail}, 'The server could not understand the request.',
-            'problem document does not expose the rejected authority';
+    is $events[0]{status}, 400, 'invalid forwarded authority is refused with 400';
+    is [response_header_values($events[0], 'Content-Type')], ['text/plain; charset=utf-8'],
+        'as plain text';
+    is $events[1]{body}, 'Invalid X-Forwarded-Host header', 'naming the header';
+    unlike $events[1]{body}, qr/public\.example/, 'without echoing the rejected value';
+};
+
+subtest 'ReverseProxy refuse replaces the refusal' => sub {
+    my $proxy = PAGI::Middleware::ReverseProxy->new(trusted_proxies => ['127.0.0.1'],
+        refuse => response('JSON', { detail => 'Bad forwarded host' }, status => 400));
+    my @events;
+    run_async {
+        $proxy->wrap(async sub { die 'downstream' })->(
+            make_scope(client => ['127.0.0.1', 1],
+                headers => [['X-Forwarded-Host', 'a.example'], ['X-Forwarded-Host', 'b.example']]),
+            async sub { {} },
+            async sub { my ($event) = @_; push @events, $event },
+        )
+    };
+    is JSON::MaybeXS::decode_json($events[1]{body}), { detail => 'Bad forwarded host' },
+        'the refusing Response answers';
+    for my $value (undef, '', 0, 'yes') {
+        my $label = defined $value ? "'$value'" : 'undef';
+        like dies { PAGI::Middleware::ReverseProxy->new(refuse => $value) },
+            qr/\QReverseProxy 'refuse' must be an application\E/, "$label is refused";
     }
 };
 
