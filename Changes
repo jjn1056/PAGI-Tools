@@ -11,7 +11,8 @@
     url_for) and PAGI::Compose (application root with lifespan, error
     handling and a response guard).
   - Response classes: Text, HTML, JSON, Problem, Redirect, Empty, File,
-    Stream and NDJSON, with exported factories.
+    Stream and NDJSON, built by name with response('Name', ...) -- resolved
+    like middleware(), '+' for a Response class from another distribution.
   - PAGI::Pages: negotiated welcome, error and redirect responses.
   - PAGI::Auth (auth, auth_result, unauth_result, www_authenticate,
     requires) and PAGI::Middleware::Authentication.
@@ -29,6 +30,9 @@
     logs, and HTTPSRedirect redirects to, the encoded request URI.
   - Stock error and redirect responses from first-party components
     negotiate HTML, problem JSON or text through Pages.
+  - CSRF's default refusal is a plain 403 text response; invalid replaces
+    it with any application, and csrf($request)->valid and ->failure
+    report the check.
   - GZip compresses streaming responses.
   - Cascade advances only on a status in catch; a child that sends
     nothing is an error, not a miss.
@@ -47,8 +51,8 @@
   - The PAGI::Context family is removed: handlers receive PAGI::Request,
     PAGI::WebSocket or PAGI::SSE and return a response value.
   - The mutable PAGI::Response builder and $request->response are replaced
-    by complete Response classes (json_response, text_response, ...);
-    respond and is_response are gone.
+    by complete Response classes (response('JSON', ...), ...); respond
+    and is_response are gone.
   - PAGI::App::NotFound and PAGI::App::Redirect are replaced by
     PAGI::Pages; ErrorHandler loses content_type.
   - PAGI::App::Loader, PAGI::Middleware::FormBody and ::JSONBody,
@@ -77,6 +81,8 @@
   - PAGI::WebSocket and PAGI::SSE on_close callbacks receive a third
     argument, $detail; a callback with a strict two-argument signature
     dies, and its cleanup is skipped (the error is logged).
+  - PAGI::Middleware::CSRF's enforce is removed: invalid => 0 replaces
+    enforce => 'app', and passing enforce dies.
 
   [Fixed]
   - GZip sent every compressed response as 200, whatever its status.
