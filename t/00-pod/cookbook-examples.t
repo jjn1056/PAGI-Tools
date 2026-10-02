@@ -3,7 +3,7 @@ use strict;
 use warnings;
 use Test2::V0;
 use Future;
-use File::Temp qw(tempfile);
+use File::Temp qw(tempdir tempfile);
 use IPC::Open3 qw(open3);
 use Symbol qw(gensym);
 
@@ -344,6 +344,33 @@ subtest 'representative final forms construct' => sub {
     isa_ok $root, 'PAGI::Compose';
     is $root->path_for('/child/index'), '/child/',
         'mounted child remains discoverable for reverse routing';
+};
+
+subtest 'Company Collection recipe builds its class by name' => sub {
+    my $heading = '=head2 Company Collection JSON Response';
+    my $class_source = first_code_block($cookbook, $heading);
+    my $usage = code_block_containing($cookbook, $heading, 'sub list_people');
+    unlike $class_source, qr/Exporter|EXPORT_OK|collection_response/,
+        'the Response class exports no factory of its own';
+    like $usage, qr/response\('\+MyCompany::Response::Collection',/,
+        'the route builds it with response() and a leading +';
+
+    require PAGI::Test::Client;
+    my $lib = tempdir(CLEANUP => 1);
+    mkdir "$lib/MyCompany";
+    mkdir "$lib/MyCompany/Response";
+    open my $out, '>', "$lib/MyCompany/Response/Collection.pm" or die $!;
+    print {$out} $class_source;
+    close $out;
+    local @INC = ($lib, @INC);
+
+    my $routing = eval "package CollectionRecipe; sub load_people { [{ name => 'Ada' }] }\n$usage\n\$routing";
+    ok $routing, 'the recipe runs as published' or diag $@;
+    my $res = PAGI::Test::Client->new(app => $routing)->get('/people');
+    is $res->status, 200, 'the route answers';
+    is $res->json, { data => [{ name => 'Ada' }], meta => { total => 1, page => 1, count => 1 },
+        links => { self => '/people' } }, 'with the company envelope';
+    is $res->header('X-Collection-Version'), '1', 'and its header';
 };
 
 unlike $cookbook,

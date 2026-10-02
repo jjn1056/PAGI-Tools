@@ -249,7 +249,7 @@ Keeping C<@response_options> as a list lets the base constructor retain its
 unknown-, duplicate-, and malformed-option checks. Application subclasses
 must not call private Response parsing or emission methods. See
 L<PAGI::Tools::Cookbook/Company Collection JSON Response> for a complete
-factory and Route example.
+class and Route example, built with C<response('+...')>.
 See L<PAGI::Tools::Cookbook/"Streaming Response Extension: NDJSON"> for the
 public Stream-extension proof.
 

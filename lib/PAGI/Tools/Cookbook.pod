@@ -1291,14 +1291,7 @@ L<PAGI::Response::JSON> perform JSON encoding:
   use v5.40;
 
   use Carp qw(croak);
-  use Exporter qw(import);
   use parent 'PAGI::Response::JSON';
-
-  our @EXPORT_OK = qw(collection_response);
-
-  sub collection_response (@args) {
-      return __PACKAGE__->new(@args);
-  }
 
   sub new ($class, $source, @response_options) {
       croak 'collection response requires a hashref'
@@ -1340,16 +1333,18 @@ Inherited C<render> has one job--encode that document as JSON. The inherited
 C<to_app>, status, headers, cookies, content type, and buffered delivery
 require no registration or reimplementation.
 
-The exported factory is optional application-level shorthand with a fixed
-mapping to the company class:
+Build it by name with a leading C<+>, the way C<response> builds any
+Response class from outside C<PAGI::Response::> -- the class needs no export
+of its own:
 
-  use MyCompany::Response::Collection qw(collection_response);
+  use v5.40;
+  use PAGI::Response qw(response);
   use PAGI::Routing qw(route router);
 
   sub list_people ($request) {
       my $people = load_people();
 
-      return collection_response(
+      return response('+MyCompany::Response::Collection',
           {
               items => $people,
               meta  => {
