@@ -22,6 +22,7 @@ in [UPGRADING-REFERENCE.md](UPGRADING-REFERENCE.md).
 | ErrorHandler `content_type`; errors swallowed after start | a `handler` that returns a Response; 5xx re-raised to the server ([details](UPGRADING-REFERENCE.md#breaking-errorhandler-re-raises-server-errors)) |
 | Session `secret`, `cookie_name`, `cookie_options`; `State::Bearer` | `state => session_state('Cookie', ...)`; no secret ([details](UPGRADING-REFERENCE.md#breaking-the-session-cookie-is-configured-on-statecookie-not-on-the-middleware)) |
 | CSRF `enforce => 'header'` / `enforce => 'app'` | the default / `refuse => 0`; `enforce` now dies ([details](UPGRADING-REFERENCE.md#breaking-csrf-enforce-is-replaced-by-refuse)) |
+| RateLimit `backend` | removed (it was never used); passing it dies ([details](UPGRADING-REFERENCE.md#breaking-ratelimit-backend-is-removed-limiters-no-longer-share-buckets)) |
 | `Auth::Basic`, `Auth::Bearer` | `Authentication` with a backend, plus `requires` ([details](UPGRADING-REFERENCE.md#breaking-authbasic-and-authbearer-are-replaced-by-authentication)) |
 | `FormBody`, `JSONBody` middleware | `$request->form_params`, `$request->json` ([details](UPGRADING-REFERENCE.md#breaking-pagimiddlewareformbody-and-pagimiddlewarejsonbody-are-removed)) |
 | `PAGI::App::Loader` | `pagi-server --app`, or `do $file` ([details](UPGRADING-REFERENCE.md#breaking-pagiapploader-is-removed)) |

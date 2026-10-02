@@ -30,9 +30,12 @@
     logs, and HTTPSRedirect redirects to, the encoded request URI.
   - Stock error and redirect responses from first-party components
     negotiate HTML, problem JSON or text through Pages.
-  - CSRF, TrustedHosts, HTTPSRedirect and ReverseProxy refuse with plain
-    text (CSRF a 403, the others a 400); their refuse option replaces the
-    refusal with any application. CSRF's refuse => 0 lets the application decide, and
+  - CSRF, TrustedHosts, HTTPSRedirect, ReverseProxy and RateLimit refuse
+    with plain text (CSRF a 403, RateLimit a 429, the others a 400); their
+    refuse option replaces the refusal with any application. RateLimit
+    still sets Retry-After and X-RateLimit-* on whatever refuses, keeps
+    each instance's buckets apart, counts time below a second, and calls
+    itself a proof of concept in its POD. CSRF's refuse => 0 lets the application decide, and
     csrf($request)->valid and ->failure report its check.
   - GZip compresses streaming responses.
   - Cascade advances only on a status in catch; a child that sends
@@ -84,6 +87,8 @@
     dies, and its cleanup is skipped (the error is logged).
   - PAGI::Middleware::CSRF's enforce is removed: refuse => 0 replaces
     enforce => 'app', and passing enforce dies.
+  - PAGI::Middleware::RateLimit's backend is removed (it was never used);
+    passing it dies.
 
   [Fixed]
   - GZip sent every compressed response as 200, whatever its status.

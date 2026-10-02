@@ -730,6 +730,18 @@ my $db = $state->get('db');
 A temporary `%{}` overload still allows `->state->{db}` (with a warning), but
 `ref($protocol->state) eq 'HASH'` is false: use `->data` for an exact hashref.
 
+## Breaking: RateLimit `backend` is removed; limiters no longer share buckets
+
+`backend` was documented as `'memory'` or "a custom object implementing
+get/set" but was never read: every limiter kept its buckets in one table per
+process. Passing `backend` now dies. Remove it; a store shared across
+workers or hosts is not something this middleware provides (its POD now
+calls it a proof of concept).
+
+That one table was also shared by every RateLimit instance, so two limiters
+with different limits drew on the same client bucket. Each instance now has
+its own buckets.
+
 ## Breaking: CSRF `enforce` is replaced by `refuse`
 
 | 0.002002 | Now |
@@ -917,7 +929,6 @@ built-in English body should assert the status and media type instead.
 | `PAGI::Middleware::Static` | 403, 404, 416 | pass-through; 416 file length |
 | `PAGI::Middleware::ContentNegotiation` | strict-mode 406 | supported-type detail |
 | `PAGI::Middleware::Maintenance` | built-in 503 | `retry_after`; explicit `body`/`content_type` stay literal |
-| `PAGI::Middleware::RateLimit` | default 429 | `retry_after`, `X-RateLimit-*` |
 | `PAGI::Middleware::Rewrite` | redirect-mode response | rule selection, code, target |
 | `PAGI::Endpoint::HTTP` | automatic 405 | computed `allowed_methods` |
 

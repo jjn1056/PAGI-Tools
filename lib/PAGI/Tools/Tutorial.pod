@@ -1127,7 +1127,8 @@ Returns 304 Not Modified for matching If-None-Match headers.
 
 =item * L<PAGI::Middleware::RateLimit>
 
-Rate limiting with configurable strategies:
+An in-process token-bucket limiter -- a proof of concept to build on (see its
+LIMITATIONS):
 
   enable 'RateLimit',
       requests_per_second => 100,         # token-bucket refill rate

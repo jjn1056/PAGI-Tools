@@ -11,6 +11,8 @@ use JSON::MaybeXS ();
 use lib 'lib';
 
 use PAGI::Middleware::RateLimit;
+use PAGI::Response::JSON ();
+use Time::HiRes ();
 
 my $loop = IO::Async::Loop->new;
 
@@ -81,41 +83,86 @@ subtest 'burst exhaustion results in 429' => sub {
     is $sent[0]{status}, 429, 'request 4 blocked (burst exhausted)';
 };
 
-subtest 'default 429 negotiates through Pages and retains rate-limit fields' => sub {
-    PAGI::Middleware::RateLimit->_clear_buckets();
-
-    my $mw = PAGI::Middleware::RateLimit->new(
-        requests_per_second => 0.1,
-        burst               => 1,
-    );
+sub limited_once {
+    my ($mw) = @_;
     my $wrapped = $mw->wrap($simple_app);
-
     my @allowed = make_request($wrapped, '10.20.30.40');
-    is $allowed[0]{status}, 200, 'the burst token remains available';
+    return (\@allowed, [make_request($wrapped, '10.20.30.40', [['Accept', 'application/json']])]);
+}
 
-    my @limited = make_request(
-        $wrapped,
-        '10.20.30.40',
-        [['Accept', 'application/json']],
-    );
-    is $limited[0]{status}, 429, 'exhaustion remains 429';
-
+sub rate_limit_fields_ok {
+    my ($start, $label) = @_;
     for my $name (qw(retry-after x-ratelimit-limit x-ratelimit-remaining x-ratelimit-reset)) {
-        my @values = map { $_->[1] }
-            grep { lc($_->[0]) eq $name } @{$limited[0]{headers}};
-        is scalar(@values), 1, "has exactly one $name field";
+        my @values = map { $_->[1] } grep { lc($_->[0]) eq $name } @{$start->{headers}};
+        is scalar(@values), 1, "$label: exactly one $name";
     }
-    my %headers = map { lc($_->[0]) => $_->[1] } @{$limited[0]{headers}};
-    is $headers{'content-type'}, 'application/problem+json',
-        'Accept negotiation selects problem JSON';
-    ok exists $headers{'retry-after'}, 'retains Retry-After';
-    is $headers{'x-ratelimit-limit'}, 1, 'retains X-RateLimit-Limit';
-    is $headers{'x-ratelimit-remaining'}, 0, 'retains X-RateLimit-Remaining';
-    ok exists $headers{'x-ratelimit-reset'}, 'retains X-RateLimit-Reset';
+    my %headers = map { lc($_->[0]) => $_->[1] } @{$start->{headers}};
+    like $headers{'retry-after'}, qr/\A[1-9][0-9]*\z/, "$label: Retry-After is whole seconds";
+    like $headers{'x-ratelimit-reset'}, qr/\A[0-9]+\z/, "$label: X-RateLimit-Reset is a whole epoch second";
+    is $headers{'x-ratelimit-remaining'}, 0, "$label: nothing remaining";
+}
 
-    my $problem = JSON::MaybeXS::decode_json($limited[1]{body});
-    is $problem->{status}, 429, 'problem status matches the wire status';
-    is $problem->{title}, 'Too Many Requests', 'problem uses the stock title';
+subtest 'default 429 is plain text and carries the rate-limit fields' => sub {
+    PAGI::Middleware::RateLimit->_clear_buckets();
+    my ($allowed, $limited) = limited_once(
+        PAGI::Middleware::RateLimit->new(requests_per_second => 0.1, burst => 1));
+    is $allowed->[0]{status}, 200, 'the burst token is available';
+    is $limited->[0]{status}, 429, 'exhaustion is 429';
+    my %headers = map { lc($_->[0]) => $_->[1] } @{$limited->[0]{headers}};
+    is $headers{'content-type'}, 'text/plain; charset=utf-8', 'plain text whatever the Accept';
+    is $limited->[1]{body}, 'Rate limit exceeded. Try again later.', '0.002002 wording';
+    rate_limit_fields_ok($limited->[0], 'default');
+};
+
+subtest 'refuse writes the body; the middleware still sends the rate-limit fields' => sub {
+    PAGI::Middleware::RateLimit->_clear_buckets();
+    my ($allowed, $limited) = limited_once(PAGI::Middleware::RateLimit->new(
+        requests_per_second => 0.1, burst => 1,
+        refuse => PAGI::Response::JSON->new({ detail => 'Slow down' }, status => 429)));
+    is JSON::MaybeXS::decode_json($limited->[1]{body}), { detail => 'Slow down' }, 'the refusing Response answers';
+    rate_limit_fields_ok($limited->[0], 'refuse Response');
+
+    # A refusing application that sends its own Retry-After, from a headers
+    # arrayref it reuses: one Retry-After goes out, and its array is untouched.
+    PAGI::Middleware::RateLimit->_clear_buckets();
+    my @shared = (['content-type', 'text/plain'], ['Retry-After', '999']);
+    (undef, $limited) = limited_once(PAGI::Middleware::RateLimit->new(
+        requests_per_second => 0.1, burst => 1,
+        refuse => async sub {
+            my ($scope, $receive, $send) = @_;
+            await $send->({ type => 'http.response.start', status => 429, headers => \@shared });
+            await $send->({ type => 'http.response.body', body => 'no', more => 0 });
+        }));
+    rate_limit_fields_ok($limited->[0], 'refuse application');
+    is scalar(@shared), 2, "the application's header list is unchanged";
+
+    for my $value (undef, '', 0, 'yes') {
+        my $label = defined $value ? "'$value'" : 'undef';
+        like dies { PAGI::Middleware::RateLimit->new(refuse => $value) },
+            qr/\QRateLimit 'refuse' must be an application\E/, "$label is refused";
+    }
+};
+
+subtest 'each instance keeps its own buckets' => sub {
+    PAGI::Middleware::RateLimit->_clear_buckets();
+    my $strict = PAGI::Middleware::RateLimit->new(requests_per_second => 0.1, burst => 1)->wrap($simple_app);
+    my $loose  = PAGI::Middleware::RateLimit->new(requests_per_second => 0.1, burst => 5)->wrap($simple_app);
+    make_request($strict, '10.0.0.9');
+    is((make_request($strict, '10.0.0.9'))[0]{status}, 429, 'the strict limiter is exhausted');
+    is((make_request($loose, '10.0.0.9'))[0]{status}, 200, 'the other limiter is not');
+};
+
+subtest 'backend was removed' => sub {
+    like dies { PAGI::Middleware::RateLimit->new(backend => 'memory') },
+        qr/\QRateLimit 'backend' was removed\E/, 'passing backend dies with the reason';
+};
+
+subtest 'the clock has sub-second resolution' => sub {
+    PAGI::Middleware::RateLimit->_clear_buckets();
+    my $before = PAGI::Middleware::RateLimit::_now();
+    Time::HiRes::sleep(0.05);
+    my $after = PAGI::Middleware::RateLimit::_now();
+    ok $after > $before && $after - $before < 0.5, 'two reads 50ms apart differ by a fraction of a second';
 };
 
 subtest 'rate-limit rejection awaits concrete response emission' => sub {
