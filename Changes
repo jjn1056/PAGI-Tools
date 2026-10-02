@@ -92,6 +92,8 @@
     passing it dies.
   - PAGI::App::Throttle is removed; PAGI::Middleware::RateLimit is the one
     rate limiter.
+  - PAGI::App::Proxy is removed: its blocking socket I/O froze the event
+    loop for every proxied request.
   - ContentNegotiation refuses an unmatched request by default; strict and
     default_type are removed (refuse => 0 replaces strict => 0); passing
     either dies.
@@ -113,8 +115,7 @@
   - The Response Writer and Stream skipped on_close cleanup on failure.
   - RequestId added its header to the application's own header list, so a
     reused list accumulated one ID per request.
-  - App::Proxy could hang on a keep-alive backend and let %0D%0A in the
-    path inject backend headers; AccessLog let it forge log lines.
+  - AccessLog let a %0D%0A in the path forge log lines.
   - WrapPSGI set no REQUEST_URI and passed characters, not bytes.
   - PAGI::Lifespan re-ran startup on an out-of-phase message.
   - try_send_* with a dropped Future warned and needed ->retain; SSE

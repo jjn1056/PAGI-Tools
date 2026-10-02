@@ -137,10 +137,12 @@ subtest 'App::Healthcheck' => sub {
     };
 };
 
-subtest 'App::Throttle was removed' => sub {
+subtest 'removed applications are not in the distribution' => sub {
     # A file check, not require: an older PAGI-Tools may be installed.
     ok !-e 'lib/PAGI/App/Throttle.pm',
-        'PAGI::App::Throttle is not in this distribution: RateLimit is the one limiter';
+        'PAGI::App::Throttle is gone: RateLimit is the one limiter';
+    ok !-e 'lib/PAGI/App/Proxy.pm',
+        'PAGI::App::Proxy is gone: its blocking I/O froze the event loop';
 };
 
 done_testing;

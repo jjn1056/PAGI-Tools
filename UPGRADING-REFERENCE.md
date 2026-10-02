@@ -45,8 +45,8 @@ time (see [pagi.connection](#breaking-pagisse-and-pagiwebsocket-require-pagiconn
   `pagi.connection` ([state](#breaking-direct-websocket-and-sse-state-matches-request)).
 - Bad request bodies are 400/413; a body cut short by a disconnect croaks
   ([bodies](#bad-request-bodies-answer-400-or-413-not-500)).
-- `raw_path` is the full requested path; AccessLog, HTTPSRedirect, WrapPSGI
-  and App::Proxy change with it ([raw_path](#raw_path-request_uri-raw_path_info-and-serving-under-a-prefix)).
+- `raw_path` is the full requested path; AccessLog, HTTPSRedirect and
+  WrapPSGI change with it ([raw_path](#raw_path-request_uri-raw_path_info-and-serving-under-a-prefix)).
 - File serving shares one strict request-path contract
   ([file serving](#rooted-file-serving-security-contract)).
 - Middleware Builder's exact-package prefix is `+`, not `^`
@@ -770,6 +770,14 @@ my $id = $request->scope->{'pagi.request_id'};
 Code that reads the CSRF token through `csrf($request)->token` is
 unaffected. The CSRF cookie and form field are still named `csrf_token`.
 
+## Breaking: `PAGI::App::Proxy` is removed
+
+It read the backend with blocking socket I/O, which froze the whole event
+loop for every proxied request: one slow backend stalled every other
+connection on that worker. Its own POD already said it was not for
+production use. Use a reverse proxy in front of the application -- nginx,
+HAProxy, Caddy -- or a dedicated proxy distribution.
+
 ## Breaking: `PAGI::App::Throttle` is removed
 
 `PAGI::Middleware::RateLimit` is the one rate limiter. Throttle duplicated
@@ -990,7 +998,6 @@ built-in English body should assert the status and media type instead.
 | `PAGI::App::File` | 403, 404, 405, 416 | 405 `Allow: GET, HEAD`; 416 file length |
 | `PAGI::App::Directory` | listing 403 plus File's 403, 404, 405, 416 | listing rendering and I/O |
 | `PAGI::App::URLMap` | no-default 404 | mount selection |
-| `PAGI::App::Proxy` | backend-connect 502 | connection decision |
 | `PAGI::App::WrapCGI` | process-start 500 | CGI execution and responses |
 | `PAGI::Middleware::Static` | 403, 404, 416 | pass-through; 416 file length |
 | `PAGI::Middleware::Maintenance` | built-in 503 | `retry_after`; explicit `body`/`content_type` stay literal |
@@ -1183,8 +1190,6 @@ mount level (`PAGI::Spec::Www`, "Paths, Mounts and Root Paths").
 - **WrapPSGI** sets `REQUEST_URI` and passes `SCRIPT_NAME`/`PATH_INFO` as
   bytes, as PSGI requires; `Plack::Request->uri` now works on non-Latin-1
   paths.
-- **App::Proxy** forwards the encoded path below its mount; a client's
-  `%0D%0A` can no longer inject a header into the backend request.
 
 ## Rooted file-serving security contract
 

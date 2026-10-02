@@ -1474,19 +1474,7 @@ An arbitrary silent HTTP child is an application error. Routers emit ordinary
 404/405 responses, so those statuses advance only when listed in C<catch>; a
 final Router response passes through unchanged.
 
-=head2 7.5 PAGI::App::Proxy - Reverse Proxy
-
-L<PAGI::App::Proxy> forwards requests to backend servers:
-
-  use PAGI::App::Proxy;
-
-  my $proxy = PAGI::App::Proxy->new(
-      backend => 'http://localhost:8080',
-      timeout => 30,
-  );
-  mount('/api', app => $proxy);
-
-=head2 7.6 PAGI::App::WrapPSGI - Use Existing PSGI Apps
+=head2 7.5 PAGI::App::WrapPSGI - Use Existing PSGI Apps
 
 L<PAGI::App::WrapPSGI> lets you use existing PSGI applications:
 
@@ -1497,7 +1485,7 @@ L<PAGI::App::WrapPSGI> lets you use existing PSGI applications:
 
 Useful for incremental migration from PSGI to PAGI.
 
-=head2 7.7 Application Composition
+=head2 7.6 Application Composition
 
 Application positions accept two explicit native forms:
 
@@ -1561,7 +1549,7 @@ explicitly.
 A C<builder {}> block already returns a native coderef; whether it is complete
 depends on the applications it composes.
 
-=head2 7.8 Starlette Vocabulary, PAGI Boundaries
+=head2 7.7 Starlette Vocabulary, PAGI Boundaries
 
 PAGI follows Starlette's Route/Mount/Router/application topology, not every
 method on Starlette Request. L<PAGI::Request> owns HTTP input; imports identify
