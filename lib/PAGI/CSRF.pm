@@ -17,14 +17,48 @@ PAGI::CSRF - Strict access to an issued CSRF token
 
 =head1 SYNOPSIS
 
+    use Future::AsyncAwait;
     use PAGI::CSRF qw(csrf);
+    use PAGI::Middleware::CSRF;
+    use PAGI::Request;
     use PAGI::Response qw(response);
 
-    my $guard = csrf($request);
-    my $token = $guard->token;
+    # 1. The middleware handles it. For clients that can set a header (fetch,
+    #    XHR): an unsafe request without an X-CSRF-Token header matching the
+    #    csrf_token cookie gets a 403 and never reaches the application.
+    my $api = PAGI::Middleware::CSRF->new(secret => $secret)->wrap(async sub {
+        my ($scope, $receive, $send) = @_;
+        # Only requests that passed the check get here.
+        await response('JSON', { saved => \1 })->to_app->($scope, $receive, $send);
+    });
 
-    return response('Text', 'CSRF validation failed', status => 403)
-        unless $guard->verify($submitted_token);
+    # To answer a failed check your own way, pass any application as invalid:
+    #   PAGI::Middleware::CSRF->new(secret => $secret,
+    #       invalid => response('JSON', { detail => 'CSRF token validation failed' }, status => 403));
+
+    # 2. The application handles it. A plain HTML form sends its token in the
+    #    body, which the middleware does not read: with invalid => 0 every
+    #    request reaches the application, which verifies the parsed field.
+    #    (csrf($scope)->valid and ->failure report the header check, if any.)
+    my $form = PAGI::Middleware::CSRF->new(secret => $secret, invalid => 0)->wrap(async sub {
+        my ($scope, $receive, $send) = @_;
+        my $guard = csrf($scope);
+        my $response;
+        if ($scope->{method} eq 'GET') {
+            # The cookie holding the token is HttpOnly, so the page hands it over.
+            my $token = $guard->token;
+            $response = response('HTML', qq{<form method="post">}
+                . qq{<input type="hidden" name="csrf_token" value="$token">}
+                . qq{<button>Save</button></form>});
+        }
+        else {
+            my $fields = await PAGI::Request->new($scope, $receive)->form_params;
+            $response = $guard->verify($fields->get('csrf_token') // '')
+                ? response('Text', 'Saved')
+                : response('Text', 'CSRF token validation failed', status => 403);
+        }
+        await $response->to_app->($scope, $receive, $send);
+    });
 
 =head1 DESCRIPTION
 

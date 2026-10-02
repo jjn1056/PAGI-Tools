@@ -15,6 +15,8 @@ use PAGI::Middleware::CORS;
 use PAGI::Middleware::SecurityHeaders;
 use PAGI::Middleware::TrustedHosts;
 use PAGI::Middleware::CSRF;
+use PAGI::CSRF qw(csrf);
+use PAGI::Response qw(response);
 use PAGI::Headers;
 use PAGI::Response::Text;
 use PAGI::Utils qw(invoke_app);
@@ -960,58 +962,144 @@ subtest 'CSRF rejects POST without token' => sub {
     is $sent[0]{status}, 403, 'status is 403 Forbidden';
 };
 
-subtest 'CSRF enforced default negotiates its generic 403 through Pages' => sub {
-    my @representations = (
-        ['application/problem+json', 'application/problem+json'],
-        ['text/plain', 'text/plain; charset=utf-8'],
+sub csrf_request {
+    my ($mw, %request) = @_;
+    my (@sent, @seen);
+    my $wrapped = $mw->wrap(async sub {
+        my ($scope, $receive, $send) = @_;
+        push @seen, $scope;
+        await $send->({ type => 'http.response.start', status => 200, headers => [] });
+        await $send->({ type => 'http.response.body', body => 'app', more => 0 });
+    });
+    run_async(async sub {
+        await $wrapped->(
+            {
+                type    => 'http',
+                path    => '/submit',
+                method  => $request{method} // 'POST',
+                headers => $request{headers} // [],
+            },
+            async sub { { type => 'http.disconnect' } },
+            async sub { my ($event) = @_; push @sent, $event },
+        );
+    });
+    return (\@sent, \@seen);
+}
+
+subtest 'CSRF refuses with a plain 403 by default' => sub {
+    my ($sent, $seen) = csrf_request(PAGI::Middleware::CSRF->new(secret => 's'),
+        headers => [['Accept', 'application/json']]);
+    is scalar(@$seen), 0, 'the application is not called';
+    is $sent->[0]{status}, 403, 'status 403';
+    is [response_header_values($sent->[0], 'Content-Type')],
+        ['text/plain; charset=utf-8'], 'plain text whatever the Accept';
+    is $sent->[1]{body}, 'CSRF token validation failed', 'fixed body';
+};
+
+subtest 'CSRF records why the check failed, in order' => sub {
+    my @cases = (
+        ['missing_cookie', [['x-csrf-token', 'abc']]],
+        ['missing_token',  [['cookie', 'csrf_token=abc']]],
+        ['missing_token',  [['cookie', 'csrf_token=abc'], ['x-csrf-token', '']]],
+        ['mismatch',       [['cookie', 'csrf_token=abc'], ['x-csrf-token', 'xyz']]],
     );
-
-    for my $representation (@representations) {
-        my ($accept, $content_type) = @$representation;
-        my $mw = PAGI::Middleware::CSRF->new(secret => 'test-secret');
-        my $app_calls = 0;
-        my $wrapped = $mw->wrap(async sub { $app_calls++ });
-        my @sent;
-
-        run_async(async sub {
-            await $wrapped->(
-                {
-                    type    => 'http',
-                    path    => '/submit',
-                    method  => 'POST',
-                    headers => [['Accept', $accept]],
-                },
-                async sub { { type => 'http.disconnect' } },
-                async sub { my ($event) = @_; push @sent, $event },
-            );
-        });
-
-        my $label = "CSRF rejection with $accept";
-        is $app_calls, 0, "$label does not call downstream";
-        is $sent[0]{status}, 403, "$label retains status 403";
-        is [response_header_values($sent[0], 'Content-Type')],
-            [$content_type], "$label negotiates the requested representation";
-        is [response_header_values($sent[0], 'Cache-Control')],
-            ['no-store'], "$label uses the Pages error cache policy";
-        is [response_header_values($sent[0], 'Vary')],
-            ['Accept'], "$label varies negotiated responses on Accept";
-
-        if ($accept eq 'application/problem+json') {
-            my $problem = eval { decode_json($sent[1]{body}) };
-            ok $problem, "$label renders a JSON problem document";
-            if ($problem) {
-                is $problem->{status}, 403, "$label renders problem status";
-                is $problem->{detail},
-                    'You do not have permission to access this resource.',
-                    "$label renders the generic Pages detail";
-            }
-        }
-        else {
-            is $sent[1]{body},
-                "403 Forbidden\n\nYou do not have permission to access this resource.\n",
-                "$label renders the generic Pages text body";
-        }
+    for my $case (@cases) {
+        my ($reason, $headers) = @$case;
+        my (undef, $seen) = csrf_request(
+            PAGI::Middleware::CSRF->new(secret => 's', invalid => 0), headers => $headers);
+        is $seen->[0]{csrf_failure}, $reason, "records $reason";
+        is csrf($seen->[0])->failure, $reason, "csrf()->failure reads $reason";
     }
+    my (undef, $seen) = csrf_request(PAGI::Middleware::CSRF->new(secret => 's', invalid => 0),
+        headers => [['cookie', 'a=1; csrf_token=abc; b=2'], ['x-csrf-token', 'abc']]);
+    ok !exists $seen->[0]{csrf_failure}, 'a passing check records no failure';
+    is csrf($seen->[0])->valid, 1, 'and is valid';
+};
+
+subtest 'CSRF invalid => 0 lets the application decide' => sub {
+    my ($sent, $seen) = csrf_request(PAGI::Middleware::CSRF->new(secret => 's', invalid => 0));
+    is scalar(@$seen), 1, 'the application is called';
+    is $sent->[0]{status}, 200, 'and its response is sent';
+    ok length($seen->[0]{csrf_token}), 'a token is in the scope';
+};
+
+subtest 'CSRF invalid accepts any application' => sub {
+    my %apps = (
+        'a Response' => response('JSON', { detail => 'nope' }, status => 403),
+        'a coderef'  => async sub {
+            my ($scope, $receive, $send) = @_;
+            await $send->({ type => 'http.response.start', status => 403,
+                headers => [['content-type', 'application/json']] });
+            await $send->({ type => 'http.response.body',
+                body => '{"detail":"nope"}', more => 0 });
+        },
+        'an object with to_app' => PAGI::Utils::as_app_object(async sub {
+            my ($scope, $receive, $send) = @_;
+            await $send->({ type => 'http.response.start', status => 403,
+                headers => [['content-type', 'application/json']] });
+            await $send->({ type => 'http.response.body',
+                body => '{"detail":"nope"}', more => 0 });
+        }),
+    );
+    for my $label (sort keys %apps) {
+        my ($sent, $seen) = csrf_request(
+            PAGI::Middleware::CSRF->new(secret => 's', invalid => $apps{$label}));
+        is scalar(@$seen), 0, "$label: the application is not called";
+        is $sent->[0]{status}, 403, "$label: its status";
+        is [response_header_values($sent->[0], 'Content-Type')], ['application/json'],
+            "$label: its content type";
+    }
+};
+
+subtest 'CSRF reuses one configured invalid Response' => sub {
+    my $mw = PAGI::Middleware::CSRF->new(secret => 's',
+        invalid => response('Text', 'Bad CSRF', status => 400));
+    for my $n (1, 2) {
+        my ($sent) = csrf_request($mw);
+        is $sent->[0]{status}, 400, "refusal $n status";
+        is $sent->[1]{body}, 'Bad CSRF', "refusal $n complete body";
+    }
+};
+
+subtest 'CSRF invalid: the refusing application can read the reason' => sub {
+    my $reason;
+    my $mw = PAGI::Middleware::CSRF->new(secret => 's', invalid => async sub {
+        my ($scope, $receive, $send) = @_;
+        $reason = csrf($scope)->failure;
+        await $send->({ type => 'http.response.start', status => 403, headers => [] });
+        await $send->({ type => 'http.response.body', body => '', more => 0 });
+    });
+    csrf_request($mw);
+    is $reason, 'missing_cookie', 'csrf($scope) works inside the invalid application';
+};
+
+subtest 'CSRF refusal of a first POST still issues the cookie' => sub {
+    my ($sent) = csrf_request(PAGI::Middleware::CSRF->new(secret => 's'));
+    my ($cookie) = response_header_values($sent->[0], 'Set-Cookie');
+    like $cookie, qr/\Acsrf_token=[0-9a-f]+; Path=\/; HttpOnly; SameSite=Strict\z/,
+        'the refusal sets the minted token';
+};
+
+subtest 'CSRF invalid rejects every plain value but 0' => sub {
+    for my $value (undef, '', '0E0', '0.0') {
+        my $label = defined $value ? "'$value'" : 'undef';
+        like dies { PAGI::Middleware::CSRF->new(secret => 's', invalid => $value) },
+            qr/\QCSRF 'invalid' must be an application, or 0 to let the application decide\E/,
+            "$label is refused";
+    }
+    ok lives { PAGI::Middleware::CSRF->new(secret => 's', invalid => 0) }, '0 is accepted';
+    ok lives { PAGI::Middleware::CSRF->new(secret => 's', invalid => '0') }, "'0' is accepted";
+    like dies { PAGI::Middleware::CSRF->new(secret => 's', invalid => 'yes') },
+        qr/\QCSRF 'invalid' must be an application, or 0 to let the application decide\E/,
+        'a non-application string is refused';
+};
+
+subtest 'CSRF checks HEAD when safe_methods leaves it out' => sub {
+    my ($sent, $seen) = csrf_request(
+        PAGI::Middleware::CSRF->new(secret => 's', safe_methods => ['GET']),
+        method => 'HEAD');
+    is scalar(@$seen), 0, 'HEAD without a token does not reach the application';
+    is $sent->[0]{status}, 403, 'and is refused';
 };
 
 subtest 'CSRF allows POST with valid token' => sub {

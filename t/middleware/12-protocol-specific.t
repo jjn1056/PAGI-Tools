@@ -187,6 +187,24 @@ subtest 'HTTP policy middleware preserves non-HTTP event streams and send settle
     }
 };
 
+subtest 'CSRF passes WebSocket and SSE scopes through untouched' => sub {
+    for my $type (qw(websocket sse)) {
+        my $seen;
+        my $wrapped = PAGI::Middleware::CSRF->new(secret => 'test-secret')->wrap(async sub {
+            my ($scope, $receive, $send) = @_;
+            $seen = $scope;
+        });
+        $loop->await($wrapped->(
+            { type => $type, path => '/live', headers => [] },
+            async sub { { type => "$type.disconnect" } },
+            async sub { },
+        ));
+        ok $seen, "$type reaches the application";
+        ok !exists($seen->{csrf_token}) && !exists($seen->{csrf_failure}),
+            "$type scope gets no CSRF keys";
+    }
+};
+
 subtest 'Authentication supports request protocols and passes lifespan through' => sub {
     for my $type (qw(http websocket sse)) {
         my ($backend_calls, $saw_auth) = (0, 0);

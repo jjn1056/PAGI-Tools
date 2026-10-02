@@ -8,7 +8,7 @@ use Future::AsyncAwait;
 use Digest::SHA qw(sha256_hex);
 use PAGI::Utils::Random qw(secure_random_bytes);
 use PAGI::Utils::SecureCompare qw(secure_compare);
-use PAGI::Pages;
+use PAGI::Response::Text ();
 use PAGI::Utils ();
 
 =head1 NAME
@@ -39,10 +39,10 @@ PAGI::Middleware::CSRF - Cross-Site Request Forgery protection middleware
 =head1 DESCRIPTION
 
 PAGI::Middleware::CSRF provides protection against Cross-Site Request
-Forgery attacks by validating tokens on state-changing requests. Its built-in
-enforced 403 response negotiates through L<PAGI::Pages>. The C<enforce =E<gt>
-'app'> flow remains issue-only, so application-owned Responses returned by
-Request handlers or sent by raw applications remain literal and authoritative.
+Forgery attacks by validating tokens on state-changing requests. Its default
+refusal is a plain 403 text response; C<invalid> replaces it, or lets the
+application decide. L<PAGI::CSRF/SYNOPSIS> shows both, as complete
+applications.
 
 =head1 CONFIGURATION
 
@@ -69,6 +69,16 @@ HTTP methods that don't require CSRF validation.
 Add the C<Secure> attribute to the CSRF cookie, restricting it to HTTPS
 requests. Off by default so plain-HTTP development setups keep working;
 for production HTTPS deployments, add C<< secure => 1 >>.
+
+=item * invalid (default: a 403 text response)
+
+What answers an unsafe request whose token check fails. Absent: a
+C<403 text/plain> response, C<CSRF token validation failed>. An application
+-- a C<($scope, $receive, $send)> coderef or an object with C<to_app>, which
+includes every L<PAGI::Response> -- answers instead, and can read the reason
+with C<< csrf($scope)->failure >>. Exactly C<0>: the middleware never refuses;
+the request reaches the application with the outcome recorded for
+C<< csrf($request)->valid >> and C<< ->failure >>. Any other plain value dies.
 
 =item * enforce (default: 'header')
 
@@ -111,68 +121,77 @@ sub _init {
     $self->{enforce} = $config->{enforce} // 'header';
     die "CSRF middleware 'enforce' must be 'header' or 'app', got '$self->{enforce}'"
         unless $self->{enforce} eq 'header' || $self->{enforce} eq 'app';
+
+    # invalid: absent -> the default refusal; exactly 0 -> the application
+    # decides; otherwise an application. Any other plain value (undef, '',
+    # '0E0', a string) is a configuration mistake, never a quiet way to
+    # switch protection off.
+    if (!exists $config->{invalid}) {
+        $self->{invalid} = $self->{enforce} eq 'app' ? undef : PAGI::Response::Text->new(
+            'CSRF token validation failed', status => 403,
+        )->to_app;
+    }
+    else {
+        my $invalid = $config->{invalid};
+        if (defined($invalid) && !ref($invalid) && $invalid eq '0') {
+            $self->{invalid} = undef;
+        }
+        elsif (!ref($invalid)) {
+            die "CSRF 'invalid' must be an application, or 0 to let the application decide";
+        }
+        else {
+            $self->{invalid} = PAGI::Utils::to_app($invalid);
+        }
+    }
 }
 
 sub wrap {
     my ($self, $app) = @_;
 
-    return async sub  {
+    return async sub {
         my ($scope, $receive, $send) = @_;
-        # Only handle HTTP requests
         if ($scope->{type} ne 'http') {
             await $app->($scope, $receive, $send);
             return;
         }
 
-        my $method = $scope->{method};
-
-        # Get existing token from cookie
+        # The existing cookie token, never a regenerated one, so a token the
+        # client already holds still has something to match.
         my $cookie_token = $self->_get_cookie_token($scope);
-
-        # Generate new token if none exists
         my $token = $cookie_token // $self->_generate_token();
-
-        # Safe methods always just issue the token. Under enforce => 'app', unsafe
-        # methods do too: the middleware never validates, it only issues; the app
-        # calls csrf($request)->verify once it has parsed the submitted params.
-        # Either way $token is the existing cookie token if there was one, never
-        # a regenerated one, so a submitted form token still has something to match.
-        if ($self->{safe_methods}{$method} || $self->{enforce} eq 'app') {
-            my $modified_scope = $self->modify_scope($scope, {
-                csrf_token => $token,
-            });
-
-            # Add Set-Cookie if token is new
-            my $wrapped_send = $cookie_token ? $send : async sub {
-                my ($event) = @_;
-                if ($event->{type} eq 'http.response.start') {
-                    my $cookie = "$self->{cookie_name}=$token; Path=/; HttpOnly; SameSite=Strict";
-                    $cookie .= "; Secure" if $self->{secure};
-                    push @{$event->{headers}}, ['Set-Cookie', $cookie];
-                }
-                await $send->($event);
-            };
-
-            await $app->($modified_scope, $receive, $wrapped_send);
-            return;
+        my %recorded = (csrf_token => $token);
+        unless ($self->{safe_methods}{$scope->{method}}) {
+            my $failure = $self->_failure_for(
+                $cookie_token, $self->_get_submitted_token($scope));
+            $recorded{csrf_failure} = $failure if defined $failure;
         }
 
-        # Unsafe method under enforce => 'header': the middleware validates itself.
-        my $submitted_token = $self->_get_submitted_token($scope);
+        # A minted token is set on whatever response leaves, a refusal
+        # included, so the client's next attempt can carry it.
+        my $wrapped_send = defined $cookie_token ? $send : async sub {
+            my ($event) = @_;
+            if ($event->{type} eq 'http.response.start') {
+                my $cookie = "$self->{cookie_name}=$token; Path=/; HttpOnly; SameSite=Strict";
+                $cookie .= "; Secure" if $self->{secure};
+                push @{$event->{headers}}, ['Set-Cookie', $cookie];
+            }
+            await $send->($event);
+        };
 
-        # Use timing-safe comparison to prevent timing attacks
-        if (!$submitted_token || !$cookie_token || !secure_compare($submitted_token, $cookie_token)) {
-            await $self->_send_error($scope, $receive, $send, 403);
-            return;
-        }
-
-        # Token valid, continue with request
-        my $modified_scope = $self->modify_scope($scope, {
-            csrf_token => $token,
-        });
-
-        await $app->($modified_scope, $receive, $send);
+        my $target = exists($recorded{csrf_failure}) && $self->{invalid}
+            ? $self->{invalid} : $app;
+        await $target->($self->modify_scope($scope, \%recorded), $receive, $wrapped_send);
     };
+}
+
+# Why an unsafe request's header check fails, or undef when it passes.
+# Compared in constant time.
+sub _failure_for {
+    my ($self, $cookie_token, $submitted) = @_;
+    return 'missing_cookie' unless defined($cookie_token) && length($cookie_token);
+    return 'missing_token' unless defined($submitted) && length($submitted);
+    return 'mismatch' unless secure_compare($submitted, $cookie_token);
+    return undef;
 }
 
 sub _generate_token {
@@ -209,14 +228,6 @@ sub _get_header {
         return $h->[1] if lc($h->[0]) eq $name;
     }
     return;
-}
-
-async sub _send_error {
-    my ($self, $scope, $receive, $send, $status) = @_;
-    die "PAGI::Middleware::CSRF does not own status $status"
-        unless $status == 403;
-    my $response = PAGI::Pages->forbidden;
-    await PAGI::Utils::invoke_app($response, $scope, $receive, $send);
 }
 
 1;
