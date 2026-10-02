@@ -363,6 +363,23 @@ sub _resolve_class {
     return "${namespace}::$name";
 }
 
+# A first-party component's `refuse` option: undef when the caller gave
+# none (the component uses its own default), the string '0' when the caller
+# asked the application to decide (only if $may_decide), else the caller's
+# application as a coderef. Any other plain value dies: an undefined or
+# mistyped setting must never switch a check off.
+sub _refuse_option {
+    my ($component, $config, $may_decide) = @_;
+    return undef unless exists $config->{refuse};
+    my $refuse = $config->{refuse};
+    return '0' if $may_decide && defined($refuse) && !ref($refuse) && $refuse eq '0';
+    die $may_decide
+        ? "$component 'refuse' must be an application, or 0 to let the application decide"
+        : "$component 'refuse' must be an application"
+        unless ref($refuse);
+    return to_app($refuse);
+}
+
 # On a case-insensitive filesystem, require 'Foo/json.pm' opens Foo/JSON.pm
 # and compiles it a second time under a package name it does not define.
 # True when every component of the first @INC match has exactly this case,

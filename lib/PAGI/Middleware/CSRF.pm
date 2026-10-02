@@ -94,27 +94,13 @@ sub _init {
     $self->{safe_methods} = { map { $_ => 1 } @{$config->{safe_methods} // [qw(GET HEAD OPTIONS TRACE)]} };
     $self->{secure}       = $config->{secure} // 0;
 
-    # refuse: absent -> the default refusal; exactly 0 -> the application
-    # decides; otherwise an application. Any other plain value (undef, '',
-    # '0E0', a string) is a configuration mistake, never a quiet way to
-    # switch protection off.
-    if (!exists $config->{refuse}) {
-        $self->{refuse} = PAGI::Response::Text->new(
+    # Absent: the default refusal. Exactly 0: the application decides.
+    my $refuse = PAGI::Utils::_refuse_option('CSRF', $config, 1);
+    $self->{refuse} = !defined($refuse) ? PAGI::Response::Text->new(
             'CSRF token validation failed', status => 403,
-        )->to_app;
-    }
-    else {
-        my $refuse = $config->{refuse};
-        if (defined($refuse) && !ref($refuse) && $refuse eq '0') {
-            $self->{refuse} = undef;
-        }
-        elsif (!ref($refuse)) {
-            die "CSRF 'refuse' must be an application, or 0 to let the application decide";
-        }
-        else {
-            $self->{refuse} = PAGI::Utils::to_app($refuse);
-        }
-    }
+        )->to_app
+        : ref($refuse) ? $refuse
+        : undef;
 }
 
 sub wrap {
