@@ -25,6 +25,7 @@ in [UPGRADING-REFERENCE.md](UPGRADING-REFERENCE.md).
 | RateLimit `backend` | removed (it was never used); passing it dies ([details](UPGRADING-REFERENCE.md#breaking-ratelimit-backend-is-removed-limiters-no-longer-share-buckets)) |
 | `PAGI::App::Throttle` | `middleware('RateLimit', ...)`; `key_generator => sub { 'global' }` for one bucket ([details](UPGRADING-REFERENCE.md#breaking-pagiappthrottle-is-removed)) |
 | scope keys `csrf_token`, `original_client`, `original_method`, `original_path`, `request_id` | the same names under `pagi.` ([details](UPGRADING-REFERENCE.md#breaking-middleware-scope-keys-move-under-pagi)) |
+| ContentNegotiation `strict`, `default_type` | refusing is the default; `refuse => 0` lets the application decide; both options now die ([details](UPGRADING-REFERENCE.md#breaking-contentnegotiation-refuses-by-default-strict-and-default_type-are-removed)) |
 | `Auth::Basic`, `Auth::Bearer` | `Authentication` with a backend, plus `requires` ([details](UPGRADING-REFERENCE.md#breaking-authbasic-and-authbearer-are-replaced-by-authentication)) |
 | `FormBody`, `JSONBody` middleware | `$request->form_params`, `$request->json` ([details](UPGRADING-REFERENCE.md#breaking-pagimiddlewareformbody-and-pagimiddlewarejsonbody-are-removed)) |
 | `PAGI::App::Loader` | `pagi-server --app`, or `do $file` ([details](UPGRADING-REFERENCE.md#breaking-pagiapploader-is-removed)) |

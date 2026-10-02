@@ -108,7 +108,6 @@ subtest 'HTTP policy middleware preserves non-HTTP event streams and send settle
         ['ContentNegotiation', sub {
             PAGI::Middleware::ContentNegotiation->new(
                 supported_types => ['application/json'],
-                strict          => 1,
             );
         }],
         ['Maintenance', sub {

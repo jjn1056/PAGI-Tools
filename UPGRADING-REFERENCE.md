@@ -730,6 +730,21 @@ my $db = $state->get('db');
 A temporary `%{}` overload still allows `->state->{db}` (with a warning), but
 `ref($protocol->state) eq 'HASH'` is false: use `->data` for an exact hashref.
 
+## Breaking: ContentNegotiation refuses by default; `strict` and `default_type` are removed
+
+ContentNegotiation's distinct job is refusing, at a boundary, what that part
+of the application cannot produce; negotiating inside one handler is
+`$request->preferred_type`. So an unmatched request is refused by default,
+with 0.002002's `406 text/plain` listing the supported types.
+
+| 0.002002 | Now |
+|---|---|
+| `strict => 1` | the default; remove it |
+| `strict => 0` (the default) | `refuse => 0`; with no match `pagi.preferred_content_type` is undef |
+| `default_type => $type` | removed: a request without `Accept` gets the first supported type; with `refuse => 0` choose your own fallback (`// $type`) |
+
+Passing `strict` or `default_type` dies.
+
 ## Breaking: middleware scope keys move under `pagi.*`
 
 PAGI::Spec::Www reserves keys without a dot for the core spec and `pagi.*`
@@ -978,7 +993,6 @@ built-in English body should assert the status and media type instead.
 | `PAGI::App::Proxy` | backend-connect 502 | connection decision |
 | `PAGI::App::WrapCGI` | process-start 500 | CGI execution and responses |
 | `PAGI::Middleware::Static` | 403, 404, 416 | pass-through; 416 file length |
-| `PAGI::Middleware::ContentNegotiation` | strict-mode 406 | supported-type detail |
 | `PAGI::Middleware::Maintenance` | built-in 503 | `retry_after`; explicit `body`/`content_type` stay literal |
 | `PAGI::Middleware::Rewrite` | redirect-mode response | rule selection, code, target |
 | `PAGI::Endpoint::HTTP` | automatic 405 | computed `allowed_methods` |

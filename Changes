@@ -30,9 +30,10 @@
     logs, and HTTPSRedirect redirects to, the encoded request URI.
   - Stock error and redirect responses from first-party components
     negotiate HTML, problem JSON or text through Pages.
-  - CSRF, TrustedHosts, HTTPSRedirect, ReverseProxy and RateLimit refuse
-    with plain text (CSRF a 403, RateLimit a 429, the others a 400); their
-    refuse option replaces the refusal with any application. RateLimit
+  - CSRF, TrustedHosts, HTTPSRedirect, ReverseProxy, RateLimit and
+    ContentNegotiation refuse with plain text (CSRF a 403, RateLimit a 429,
+    ContentNegotiation a 406 listing the supported types, the others a
+    400); their refuse option replaces the refusal with any application. RateLimit
     still sets Retry-After and X-RateLimit-* on whatever refuses, keeps
     each instance's buckets apart, counts time below a second, and calls
     itself a proof of concept in its POD. CSRF's refuse => 0 lets the application decide, and
@@ -91,6 +92,9 @@
     passing it dies.
   - PAGI::App::Throttle is removed; PAGI::Middleware::RateLimit is the one
     rate limiter.
+  - ContentNegotiation refuses an unmatched request by default; strict and
+    default_type are removed (refuse => 0 replaces strict => 0); passing
+    either dies.
   - Middleware scope keys move under pagi.*, which PAGI::Spec::Www reserves
     for extensions: pagi.csrf_token, pagi.original_client,
     pagi.original_method, pagi.original_path, pagi.request_id.
