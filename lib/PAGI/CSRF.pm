@@ -113,6 +113,38 @@ sub verify {
     );
 }
 
+=head2 valid
+
+    return $refused unless csrf($request)->valid;
+
+Returns 1 unless L<PAGI::Middleware::CSRF> recorded a failed header check
+for this request, else 0. Safe methods are not checked and report valid. A
+token sent in a form field is not seen by the middleware: verify it with
+L</verify> once the form is parsed.
+
+=cut
+
+sub valid {
+    my ($self, @arguments) = @_;
+    croak 'valid() accepts no arguments' if @arguments;
+    return defined($self->failure) ? 0 : 1;
+}
+
+=head2 failure
+
+    my $reason = csrf($request)->failure;
+
+Returns why the middleware's header check failed -- C<missing_cookie>,
+C<missing_token>, or C<mismatch> -- or undef when it passed or did not run.
+
+=cut
+
+sub failure {
+    my ($self, @arguments) = @_;
+    croak 'failure() accepts no arguments' if @arguments;
+    return $self->{scope}{csrf_failure};
+}
+
 1;
 
 =head1 SEE ALSO

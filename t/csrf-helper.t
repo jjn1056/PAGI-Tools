@@ -119,4 +119,19 @@ subtest 'constructor, factory, and methods enforce strict arity' => sub {
         'verify rejects multiple submitted arguments');
 };
 
+subtest 'valid and failure report the recorded header check' => sub {
+    my $passed = csrf({ type => 'http', csrf_token => 't' });
+    is($passed->failure, undef, 'no recorded failure');
+    is($passed->valid, 1, 'is valid');
+
+    for my $reason (qw(missing_cookie missing_token mismatch)) {
+        my $failed = csrf({ type => 'http', csrf_token => 't', csrf_failure => $reason });
+        is($failed->failure, $reason, "failure is $reason");
+        is($failed->valid, 0, "$reason is not valid");
+    }
+
+    like(dies { $passed->valid(1) }, qr/valid\(\) accepts no arguments/, 'valid takes no arguments');
+    like(dies { $passed->failure(1) }, qr/failure\(\) accepts no arguments/, 'failure takes no arguments');
+};
+
 done_testing;
