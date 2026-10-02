@@ -6,6 +6,7 @@ use Future::AsyncAwait;
 use PAGI::Auth qw(auth_result unauth_result requires);
 use PAGI::Auth::SimpleUser;
 use PAGI::Compose qw(compose);
+use PAGI::CSRF qw(csrf);
 use PAGI::Middleware::Session qw(session_state);
 use PAGI::Pages qw(redirect not_found);
 use PAGI::Response qw(response);
@@ -26,10 +27,25 @@ sub html_escape ($text) {
     return $text =~ s/([&<>"'])/$entity{$1}/gr;
 }
 
+# Every form carries the CSRF token as a hidden field. The cookie holding it
+# is HttpOnly, so the page, not JavaScript, is what hands the token back.
+sub csrf_field ($request) {
+    return sprintf(qq{<input type="hidden" name="csrf_token" value="%s">},
+        html_escape(csrf($request)->token));
+}
+
+# The middleware runs with invalid => 0 because a form's token is in the
+# body, which it does not read: each POST handler checks the parsed field.
+sub csrf_refused ($request, $form) {
+    return undef if csrf($request)->verify($form->get('csrf_token') // '');
+    return response('Text', 'CSRF token validation failed', status => 403);
+}
+
 # Every URL comes from path_for, so the pages stay correct wherever the
 # account area is mounted or the whole app is served under a prefix.
 sub login_page ($request, $next, $error = undef) {
     my $action = html_escape(path_for($request, 'login'));
+    my $csrf = csrf_field($request);
     my $message = defined $error
         ? qq{<p role="alert">$error</p>}
         : '';
@@ -45,6 +61,7 @@ sub login_page ($request, $next, $error = undef) {
 <h1>Demo login</h1>
 $message
 <form method="post" action="$action">
+$csrf
 $next_field
 <label>Username <input name="username" autocomplete="username"></label>
 <label>Password <input type="password" name="password" autocomplete="current-password"></label>
@@ -57,6 +74,7 @@ HTML
 
 async sub home($request) {
     my $logout = html_escape(path_for($request, 'logout'));
+    my $csrf = csrf_field($request);
     return response('HTML', <<"HTML");
 <!doctype html>
 <html lang="en">
@@ -64,6 +82,7 @@ async sub home($request) {
 <body>
 <h1>Hello, demo</h1>
 <form method="post" action="$logout">
+$csrf
 <button type="submit">Log out</button>
 </form>
 </body>
@@ -77,6 +96,8 @@ async sub login_form($request) {
 
 async sub login_submit($request) {
     my $form = await $request->form_params(strict => 1);
+    if (my $refused = csrf_refused($request, $form)) { return $refused }
+
     my $username = $form->get('username') // '';
     my $password = $form->get('password') // '';
     my $next = $form->get('next');
@@ -95,6 +116,9 @@ async sub login_submit($request) {
 }
 
 async sub logout($request) {
+    my $form = await $request->form_params(strict => 1);
+    if (my $refused = csrf_refused($request, $form)) { return $refused }
+
     session($request)->destroy;
     return redirect(path_for($request, 'login'), status => 303);
 }
@@ -116,6 +140,8 @@ compose(
             state  => session_state('Cookie', cookie_name => 'hello_session', expire => 3600),
             expire => 3600,
         ),
+        middleware('CSRF', secret => $ENV{CSRF_SECRET} // 'demo-only-csrf-secret',
+            invalid => 0),
         middleware('Authentication', backend => \&session_user),
     ],
 );

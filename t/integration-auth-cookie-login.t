@@ -19,6 +19,13 @@ my $load_error = $@ || $!;
 ok($app && !$load_error, 'cookie login example loads cleanly') or diag($load_error);
 plan skip_all => 'example did not load' unless $app;
 
+# The forms carry the CSRF token as a hidden field; post it back like a browser.
+sub form_token {
+    my ($html) = @_;
+    my ($token) = $html =~ /<input type="hidden" name="csrf_token" value="([^"]+)">/;
+    return $token;
+}
+
 # The same flow at the root and served under /app (as behind a proxy, or a
 # server root path): every URL the app emits must follow.
 for my $case (['at the root', '', $app], ['under /app', '/app', compose(routes => [mount('/app', app => $app)])]) {
@@ -36,19 +43,31 @@ for my $case (['at the root', '', $app], ['under /app', '/app', compose(routes =
         like($form, qr{<input type="hidden" name="next" value="\Q$p\E/account/">}, 'the form carries next');
         my $anonymous_id = $client->cookie('hello_session');
         like($anonymous_id, qr/\A[a-f0-9]{64}\z/, 'anonymous request gets the session cookie');
+        my $token = form_token($form);
+        ok($token, 'the form carries the CSRF token');
 
-        my $invalid = $client->post("$p/account/login", form => { username => 'demo', password => 'wrong' });
+        my $forged = $client->post("$p/account/login",
+            form => { username => 'demo', password => 'secret' });
+        is($forged->status, 403, 'a login POST without the token is refused');
+        is($client->get("$p/account/")->status, 303, 'and does not log in');
+
+        my $invalid = $client->post("$p/account/login",
+            form => { username => 'demo', password => 'wrong', csrf_token => $token });
         is($invalid->status, 200, 'invalid credentials redisplay the form');
         like($invalid->text, qr/Invalid username or password/, 'with a fixed error');
         is($client->cookie('hello_session'), $anonymous_id, 'and do not regenerate the session');
         is($client->get("$p/account/")->header('Location'), "$p/account/login?next=$here", 'nor authenticate');
 
-        my $offsite = PAGI::Test::Client->new(app => $served)->post("$p/account/login",
-            form => { username => 'demo', password => 'secret', next => 'https://evil.example/' });
+        my $offsite_client = PAGI::Test::Client->new(app => $served);
+        my $offsite_token = form_token($offsite_client->get("$p/account/login")->text);
+        my $offsite = $offsite_client->post("$p/account/login", form => {
+            username => 'demo', password => 'secret', next => 'https://evil.example/',
+            csrf_token => $offsite_token,
+        });
         is($offsite->header('Location'), "$p/account/", 'a next that is not a local path falls back to home');
 
         my $login = $client->post("$p/account/login",
-            form => { username => 'demo', password => 'secret', next => "$p/account/" });
+            form => { username => 'demo', password => 'secret', next => "$p/account/", csrf_token => $token });
         is([$login->status, $login->header('Location')], [303, "$p/account/"], 'login returns to next');
         isnt($client->cookie('hello_session'), $anonymous_id, 'and regenerates the session');
 
@@ -57,6 +76,10 @@ for my $case (['at the root', '', $app], ['under /app', '/app', compose(routes =
         like($home->text, qr/Hello, demo/, 'and greets the user');
         like($home->text, qr{<form method="post" action="\Q$p\E/account/logout">}, 'logout posts to the mounted route');
 
+        my $forged_logout = $client->post("$p/account/logout", form => {});
+        is($forged_logout->status, 403, 'a logout POST without the token is refused');
+        is($client->get("$p/account/")->status, 200, 'and keeps the session');
+
         my $plain = $client->get("$p/account/login");
         is($plain->status, 200, 'GET login only shows the form');
         unlike($plain->text, qr/Invalid username or password/, 'without an error');
@@ -64,7 +87,7 @@ for my $case (['at the root', '', $app], ['under /app', '/app', compose(routes =
         my $get_logout = $client->get("$p/account/logout");
         is([$get_logout->status, $get_logout->header('Allow')], [405, 'POST'], 'GET cannot log out');
 
-        my $logout = $client->post("$p/account/logout");
+        my $logout = $client->post("$p/account/logout", form => { csrf_token => form_token($home->text) });
         is([$logout->status, $logout->header('Location')], [303, "$p/account/login"], 'logout goes to the login route');
         is($client->get("$p/account/")->header('Location'), "$p/account/login?next=$here",
             'and the session no longer authenticates');
