@@ -89,6 +89,8 @@
     enforce => 'app', and passing enforce dies.
   - PAGI::Middleware::RateLimit's backend is removed (it was never used);
     passing it dies.
+  - PAGI::App::Throttle is removed; PAGI::Middleware::RateLimit is the one
+    rate limiter.
 
   [Fixed]
   - GZip sent every compressed response as 200, whatever its status.

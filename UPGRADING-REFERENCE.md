@@ -730,6 +730,33 @@ my $db = $state->get('db');
 A temporary `%{}` overload still allows `->state->{db}` (with a warning), but
 `ref($protocol->state) eq 'HASH'` is false: use `->data` for an exact hashref.
 
+## Breaking: `PAGI::App::Throttle` is removed
+
+`PAGI::Middleware::RateLimit` is the one rate limiter. Throttle duplicated
+it, shared its buckets between instances, and never cleaned them up.
+
+```perl
+# Before
+my $app = PAGI::App::Throttle->new(
+    app => $inner, rate => 5, burst => 10,
+    key_for  => sub { $_[0]{client}[0] },
+    on_limit => $handler,
+)->to_app;
+
+# After
+compose(
+    routes     => [...],
+    middleware => [
+        middleware('RateLimit', requests_per_second => 5, burst => 10,
+            key_generator => sub { $_[0]{client}[0] },   # the default; 'global' for one bucket
+            refuse        => $refusing_application),
+    ],
+);
+```
+
+RateLimit limits HTTP requests only; Throttle could also throttle WebSocket
+and SSE connection attempts through `on_limit`.
+
 ## Breaking: RateLimit `backend` is removed; limiters no longer share buckets
 
 `backend` was documented as `'memory'` or "a custom object implementing
@@ -925,17 +952,15 @@ built-in English body should assert the status and media type instead.
 | `PAGI::App::URLMap` | no-default 404 | mount selection |
 | `PAGI::App::Proxy` | backend-connect 502 | connection decision |
 | `PAGI::App::WrapCGI` | process-start 500 | CGI execution and responses |
-| `PAGI::App::Throttle` | default 429 | `retry_after`, rate-limit fields, `on_limit` |
 | `PAGI::Middleware::Static` | 403, 404, 416 | pass-through; 416 file length |
 | `PAGI::Middleware::ContentNegotiation` | strict-mode 406 | supported-type detail |
 | `PAGI::Middleware::Maintenance` | built-in 503 | `retry_after`; explicit `body`/`content_type` stay literal |
 | `PAGI::Middleware::Rewrite` | redirect-mode response | rule selection, code, target |
 | `PAGI::Endpoint::HTTP` | automatic 405 | computed `allowed_methods` |
 
-Custom handlers, `on_limit`, application bodies and explicit Responses stay
-literal. Two non-HTTP fallbacks that used to send `http.response.*` on
-another protocol now croak instead: URLMap with no default, and Throttle
-without `on_limit`, on a WebSocket or SSE scope.
+Custom handlers, application bodies and explicit Responses stay literal.
+URLMap with no default, on a WebSocket or SSE scope, now croaks instead of
+sending `http.response.*` on another protocol.
 
 ContentNegotiation now uses `PAGI::Request::Negotiate`: an exact `q=0`
 exclusion beats a less specific wildcard. Unknown, missing or malformed scope
