@@ -30,9 +30,10 @@
     logs, and HTTPSRedirect redirects to, the encoded request URI.
   - Stock error and redirect responses from first-party components
     negotiate HTML, problem JSON or text through Pages.
-  - CSRF's default refusal is a plain 403 text response; refuse replaces
-    it with any application, and csrf($request)->valid and ->failure
-    report the check.
+  - CSRF and TrustedHosts refuse with plain text (CSRF a 403, TrustedHosts
+    a 400), as in 0.002002; their refuse option replaces the refusal with
+    any application. CSRF's refuse => 0 lets the application decide, and
+    csrf($request)->valid and ->failure report its check.
   - GZip compresses streaming responses.
   - Cascade advances only on a status in catch; a child that sends
     nothing is an error, not a miss.

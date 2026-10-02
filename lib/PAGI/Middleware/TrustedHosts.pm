@@ -6,7 +6,7 @@ use parent 'PAGI::Middleware';
 use Future;
 use Future::AsyncAwait;
 use PAGI::Authority;
-use PAGI::Pages;
+use PAGI::Response::Text ();
 use PAGI::Utils ();
 
 =head1 NAME
@@ -26,14 +26,14 @@ PAGI::Middleware::TrustedHosts - Host header validation middleware
 =head1 DESCRIPTION
 
 PAGI::Middleware::TrustedHosts structurally validates the Host header before
-matching its raw, validated value against a list of allowed hosts. Duplicate or
-malformed Host headers, missing required hosts, and allowlist rejections receive
-a generic HTTP 400 response negotiated through L<PAGI::Pages>. Structural
+matching its raw, validated value against a list of allowed hosts. A missing
+Host is refused with a plain-text 400, C<Missing Host header>; a duplicate or
+malformed Host, or one no pattern allows, with C<Invalid Host header>. Neither
+echoes the rejected value. C<refuse> replaces the refusal. Structural
 validation and allowlist decisions remain authoritative in this middleware.
 This helps prevent host header injection attacks.
 
-Non-HTTP scopes continue to pass through unchanged without Host validation or
-Pages rendering.
+Non-HTTP scopes continue to pass through unchanged without Host validation.
 
 =head1 CONFIGURATION
 
@@ -50,6 +50,20 @@ Array of allowed host patterns. Patterns can include:
 
 If true, allow requests without a Host header.
 
+=item * refuse (default: a 400 text response)
+
+An application that answers a refused request instead of the plain-text
+default: a C<($scope, $receive, $send)> coderef or an object with C<to_app>,
+which includes every L<PAGI::Response>:
+
+    middleware('TrustedHosts', hosts => ['example.com'],
+        refuse => response('JSON', { detail => 'Unknown host' }, status => 400));
+
+For a malformed Host it receives a scope holding only the request's
+well-formed C<Accept> headers, so it can read the request without tripping
+over the header that caused the refusal. A bad Host is never passed on to the
+wrapped application, so there is no C<0> form. Any plain value dies.
+
 =back
 
 =cut
@@ -62,6 +76,13 @@ sub _init {
 
     # Compile host patterns to regexes
     $self->{_patterns} = [map { $self->_compile_pattern($_) } @{$self->{hosts}}];
+
+    # The caller's refusing application, or plain-text defaults built once.
+    $self->{refuse} = PAGI::Utils::_refuse_option('TrustedHosts', $config);
+    $self->{_default_refusal} = {
+        missing => PAGI::Response::Text->new('Missing Host header', status => 400)->to_app,
+        invalid => PAGI::Response::Text->new('Invalid Host header', status => 400)->to_app,
+    };
 }
 
 sub _compile_pattern {
@@ -92,8 +113,8 @@ sub wrap {
             $authority_error = $@;
         }
         if ($authority_error) {
-            my $pages_scope = $self->_pages_scope_for_authority_error($scope);
-            await $self->_send_error($pages_scope, $receive, $send, 400);
+            my $refusal_scope = $self->_refusal_scope_for_authority_error($scope);
+            await $self->_refuse($refusal_scope, $receive, $send, 'invalid');
             return;
         }
 
@@ -103,7 +124,7 @@ sub wrap {
                 await $app->($scope, $receive, $send);
                 return;
             }
-            await $self->_send_error($scope, $receive, $send, 400);
+            await $self->_refuse($scope, $receive, $send, 'missing');
             return;
         }
 
@@ -122,12 +143,15 @@ sub wrap {
         if ($allowed) {
             await $app->($scope, $receive, $send);
         } else {
-            await $self->_send_error($scope, $receive, $send, 400);
+            await $self->_refuse($scope, $receive, $send, 'invalid');
         }
     };
 }
 
-sub _pages_scope_for_authority_error {
+# A refusing application that builds a PAGI::Request would croak on the
+# malformed header pairs that caused the refusal; it gets only the
+# well-formed Accept pairs.
+sub _refusal_scope_for_authority_error {
     my ($self, $scope) = @_;
     my $pairs = exists $scope->{headers} ? $scope->{headers} : [];
     my $structurally_valid = ref($pairs) eq 'ARRAY';
@@ -164,12 +188,10 @@ sub _pages_scope_for_authority_error {
     return $safe_scope;
 }
 
-async sub _send_error {
-    my ($self, $scope, $receive, $send, $status) = @_;
-    die "PAGI::Middleware::TrustedHosts does not own status $status"
-        unless $status == 400;
-    my $response = PAGI::Pages->bad_request;
-    await PAGI::Utils::invoke_app($response, $scope, $receive, $send);
+async sub _refuse {
+    my ($self, $scope, $receive, $send, $reason) = @_;
+    my $refusal = $self->{refuse} // $self->{_default_refusal}{$reason};
+    await $refusal->($scope, $receive, $send);
 }
 
 1;

@@ -491,81 +491,65 @@ subtest 'TrustedHosts rejects invalid hosts' => sub {
     is $sent[0]{status}, 400, 'status is 400 Bad Request';
 };
 
-subtest 'TrustedHosts generic failures negotiate through Pages' => sub {
+sub trusted_hosts_request {
+    my ($mw, $headers) = @_;
+    my (@sent, @seen);
+    my $wrapped = $mw->wrap(async sub { push @seen, $_[0] });
+    run_async(async sub {
+        await $wrapped->(
+            { type => 'http', path => '/', method => 'GET', headers => $headers },
+            async sub { { type => 'http.disconnect' } },
+            async sub { my ($event) = @_; push @sent, $event },
+        );
+    });
+    return (\@sent, \@seen);
+}
+
+subtest 'TrustedHosts refuses with plain text by default' => sub {
     my @cases = (
-        {
-            name    => 'missing Host',
-            headers => [],
-        },
-        {
-            name    => 'duplicate Host',
-            headers => [['Host', 'example.com'], ['host', 'example.com']],
-        },
-        {
-            name    => 'structurally malformed Host',
-            headers => [['Host', 'example.com/path']],
-        },
-        {
-            name    => 'allowlist-rejected valid Host',
-            headers => [['Host', 'other.example']],
-        },
+        ['missing Host',                  [],                                                'Missing Host header'],
+        ['duplicate Host',                [['Host', 'example.com'], ['host', 'example.com']], 'Invalid Host header'],
+        ['structurally malformed Host',   [['Host', 'example.com/path']],                    'Invalid Host header'],
+        ['allowlist-rejected valid Host', [['Host', 'other.example']],                       'Invalid Host header'],
     );
-    my @representations = (
-        ['application/problem+json', 'application/problem+json'],
-        ['text/plain', 'text/plain; charset=utf-8'],
-    );
-
     for my $case (@cases) {
-        for my $representation (@representations) {
-            my ($accept, $content_type) = @$representation;
-            my $mw = PAGI::Middleware::TrustedHosts->new(
-                hosts => ['example.com'],
-            );
-            my $app_calls = 0;
-            my $wrapped = $mw->wrap(async sub { $app_calls++ });
-            my @sent;
-            my @headers = (@{$case->{headers}}, ['Accept', $accept]);
+        my ($label, $headers, $body) = @$case;
+        my ($sent, $seen) = trusted_hosts_request(
+            PAGI::Middleware::TrustedHosts->new(hosts => ['example.com']),
+            [@$headers, ['Accept', 'application/problem+json']],
+        );
+        is scalar(@$seen), 0, "$label does not call downstream";
+        is $sent->[0]{status}, 400, "$label is refused with 400";
+        is [response_header_values($sent->[0], 'Content-Type')],
+            ['text/plain; charset=utf-8'], "$label is plain text whatever the Accept";
+        is $sent->[1]{body}, $body, "$label says what was wrong";
+    }
+};
 
-            run_async(async sub {
-                await $wrapped->(
-                    {
-                        type    => 'http',
-                        path    => '/',
-                        method  => 'GET',
-                        headers => \@headers,
-                    },
-                    async sub { { type => 'http.disconnect' } },
-                    async sub { my ($event) = @_; push @sent, $event },
-                );
-            });
+subtest 'TrustedHosts refuse replaces the refusal' => sub {
+    my $mw = PAGI::Middleware::TrustedHosts->new(hosts => ['example.com'],
+        refuse => response('JSON', { detail => 'Unknown host' }, status => 421));
+    my ($sent) = trusted_hosts_request($mw, [['Host', 'other.example']]);
+    is $sent->[0]{status}, 421, 'the refusing Response answers';
+    is decode_json($sent->[1]{body}), { detail => 'Unknown host' }, 'with its body';
 
-            my $label = "$case->{name} with $accept";
-            is $app_calls, 0, "$label does not call downstream";
-            is scalar(@sent), 2, "$label sends a complete response";
-            is $sent[0]{status}, 400, "$label retains status 400";
-            is [response_header_values($sent[0], 'Content-Type')],
-                [$content_type], "$label negotiates the requested representation";
-            is [response_header_values($sent[0], 'Cache-Control')],
-                ['no-store'], "$label uses the Pages error cache policy";
-            is [response_header_values($sent[0], 'Vary')],
-                ['Accept'], "$label varies negotiated responses on Accept";
+    # A refusing application that reads the request must not trip over the
+    # malformed header that caused the refusal.
+    my $seen_headers;
+    $mw = PAGI::Middleware::TrustedHosts->new(hosts => ['example.com'], refuse => async sub {
+        my ($scope, $receive, $send) = @_;
+        $seen_headers = $scope->{headers};
+        await $send->({ type => 'http.response.start', status => 400, headers => [] });
+        await $send->({ type => 'http.response.body', body => '', more => 0 });
+    });
+    trusted_hosts_request($mw, [['Host', ['a.example']], ['Accept', 'text/html']]);
+    is $seen_headers, [['Accept', 'text/html']],
+        'a malformed request reaches the refusing application with only its Accept headers';
 
-            if ($accept eq 'application/problem+json') {
-                my $problem = eval { decode_json($sent[1]{body}) };
-                ok $problem, "$label renders a JSON problem document";
-                if ($problem) {
-                    is $problem->{status}, 400, "$label renders problem status";
-                    is $problem->{detail},
-                        'The server could not understand the request.',
-                        "$label does not expose the rejected authority";
-                }
-            }
-            else {
-                is $sent[1]{body},
-                    "400 Bad Request\n\nThe server could not understand the request.\n",
-                    "$label renders the generic Pages text body";
-            }
-        }
+    for my $value (undef, '', 0, 'yes') {
+        my $label = defined $value ? "'$value'" : 'undef';
+        like dies { PAGI::Middleware::TrustedHosts->new(hosts => ['example.com'], refuse => $value) },
+            qr/\QTrustedHosts 'refuse' must be an application\E/, "$label is refused";
     }
 };
 
@@ -653,9 +637,9 @@ subtest 'TrustedHosts rejects invalid Host authority before downstream' => sub {
         is $sent[0]{status}, 400, "$case->[1] returns 400";
         is $sent[1], {
             type => 'http.response.body',
-            body => "400 Bad Request\n\nThe server could not understand the request.\n",
+            body => 'Invalid Host header',
             more => 0,
-        }, "$case->[1] returns the generic Pages terminal body";
+        }, "$case->[1] says the Host header is invalid";
     }
 };
 
@@ -739,11 +723,11 @@ subtest 'TrustedHosts rejects undefined headers even when empty Host is allowed'
     is scalar(@sent), 2, 'undefined headers container sends start and terminal body';
     is $sent[0]{type}, 'http.response.start', 'undefined headers container sends response start';
     is $sent[0]{status}, 400, 'undefined headers container returns 400';
-    like $sent[1]{body}, qr{<title>400 Bad Request</title>},
-        'undefined headers container returns the default Pages HTML body';
+    is $sent[1]{body}, 'Invalid Host header',
+        'undefined headers container says the Host header is invalid';
 };
 
-subtest 'TrustedHosts structurally malformed headers retain safe Accept negotiation' => sub {
+subtest 'TrustedHosts refuses structurally malformed headers safely' => sub {
     my @cases = (
         {
             name    => 'scalar header entry',
@@ -815,30 +799,16 @@ subtest 'TrustedHosts structurally malformed headers retain safe Accept negotiat
                     "$label sends response start first";
                 is $sent[0]{status}, 400, "$label retains status 400";
                 is [response_header_values($sent[0], 'Content-Type')],
-                    [$content_type],
-                    "$label negotiates using the surviving Accept pair";
+                    ['text/plain; charset=utf-8'],
+                    "$label is refused with plain text";
                 is $sent[1]{type}, 'http.response.body',
                     "$label sends a terminal response body";
                 is $sent[1]{more}, 0, "$label terminates the response";
                 unlike $sent[1]{body}, qr/rejected\.example/,
                     "$label does not expose rejected header input";
 
-                if ($accept eq 'application/problem+json') {
-                    my $problem = eval { decode_json($sent[1]{body}) };
-                    ok $problem, "$label renders a JSON problem document";
-                    if ($problem) {
-                        is $problem->{status}, 400,
-                            "$label renders problem status";
-                        is $problem->{detail},
-                            'The server could not understand the request.',
-                            "$label renders only the safe generic detail";
-                    }
-                }
-                else {
-                    is $sent[1]{body},
-                        "400 Bad Request\n\nThe server could not understand the request.\n",
-                        "$label renders the safe generic text body";
-                }
+                is $sent[1]{body}, 'Invalid Host header',
+                    "$label says the Host header is invalid";
             }
 
             is refaddr($scope->{headers}), refaddr($original_headers),
