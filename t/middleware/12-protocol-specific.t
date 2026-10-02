@@ -200,7 +200,7 @@ subtest 'CSRF passes WebSocket and SSE scopes through untouched' => sub {
             async sub { },
         ));
         ok $seen, "$type reaches the application";
-        ok !exists($seen->{csrf_token}) && !exists($seen->{csrf_failure}),
+        ok !exists($seen->{'pagi.csrf_token'}) && !exists($seen->{'pagi.csrf_failure'}),
             "$type scope gets no CSRF keys";
     }
 };

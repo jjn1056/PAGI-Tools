@@ -151,14 +151,14 @@ sub wrap {
             $original_ip =~ s/\s+$//;
             if (exists $scope->{client}) {
                 $new_scope{client} = [$original_ip, $scope->{client}[1]];
-                $new_scope{original_client} = $scope->{client};
+                $new_scope{'pagi.original_client'} = $scope->{client};
             } else {
                 $new_scope{client} = [$original_ip, undef];
             }
         } elsif ($real_ip) {
             if (exists $scope->{client}) {
                 $new_scope{client} = [$real_ip, $scope->{client}[1]];
-                $new_scope{original_client} = $scope->{client};
+                $new_scope{'pagi.original_client'} = $scope->{client};
             } else {
                 $new_scope{client} = [$real_ip, undef];
             }
@@ -270,7 +270,7 @@ When headers are processed from a trusted proxy:
 
 =item * client - Updated to original client [IP, port]
 
-=item * original_client - The proxy's [IP, port]
+=item * pagi.original_client - The proxy's [IP, port]
 
 =item * scheme - Updated to 'https' if X-Forwarded-Proto indicates
 

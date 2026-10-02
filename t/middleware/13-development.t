@@ -515,7 +515,7 @@ subtest 'MethodOverride - overrides from header' => sub {
     run_async { $wrapped->($scope, async sub { {} }, async sub { }) };
 
     is $captured_scope->{method}, 'DELETE', 'method overridden';
-    is $captured_scope->{original_method}, 'POST', 'original method preserved';
+    is $captured_scope->{'pagi.original_method'}, 'POST', 'original method preserved';
 };
 
 subtest 'MethodOverride - overrides from query param' => sub {

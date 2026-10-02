@@ -94,7 +94,7 @@ sub wrap {
                 # Create new scope with overridden method
                 my $new_scope = $self->modify_scope($scope, {
                     method => $upper_method,
-                    original_method => $scope->{method},
+                    'pagi.original_method' => $scope->{method},
                 });
                 await $app->($new_scope, $receive, $send);
                 return;
@@ -160,7 +160,7 @@ When a POST request is received:
 
 =item 3. If found and method is allowed, override scope->{method}
 
-=item 4. Original method preserved in scope->{original_method}
+=item 4. Original method preserved in scope->{'pagi.original_method'}
 
 =back
 

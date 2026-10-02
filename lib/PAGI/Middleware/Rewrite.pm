@@ -109,7 +109,7 @@ sub wrap {
         # Internal rewrite
         my $new_scope = $self->modify_scope($scope, {
             path          => $new_path,
-            original_path => $scope->{original_path} // $path,
+            'pagi.original_path' => $scope->{'pagi.original_path'} // $path,
         });
 
         await $app->($new_scope, $receive, $send);

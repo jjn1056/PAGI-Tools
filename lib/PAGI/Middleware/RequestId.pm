@@ -103,14 +103,19 @@ sub wrap {
 
         # Add request ID to scope
         my $modified_scope = $self->modify_scope($scope, {
-            request_id => $request_id,
+            'pagi.request_id' => $request_id,
         });
 
-        # Intercept send to add request ID to response
-        my $wrapped_send = async sub  {
-        my ($event) = @_;
+        # Add the request ID to the response, on a copy of the event: an
+        # application may reuse its headers arrayref, and an ID pushed onto
+        # it would accumulate across requests.
+        my $wrapped_send = async sub {
+            my ($event) = @_;
             if ($event->{type} eq 'http.response.start') {
-                push @{$event->{headers}}, [$self->{header}, $request_id];
+                $event = {
+                    %$event,
+                    headers => [@{$event->{headers} // []}, [$self->{header}, $request_id]],
+                };
             }
             await $send->($event);
         };

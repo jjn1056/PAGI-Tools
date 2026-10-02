@@ -117,11 +117,11 @@ sub wrap {
         # client already holds still has something to match.
         my $cookie_token = $self->_get_cookie_token($scope);
         my $token = $cookie_token // $self->_generate_token();
-        my %recorded = (csrf_token => $token);
+        my %recorded = ('pagi.csrf_token' => $token);
         unless ($self->{safe_methods}{$scope->{method}}) {
             my $failure = $self->_failure_for(
                 $cookie_token, $self->_get_submitted_token($scope));
-            $recorded{csrf_failure} = $failure if defined $failure;
+            $recorded{'pagi.csrf_failure'} = $failure if defined $failure;
         }
 
         # A minted token is set on whatever response leaves, a refusal
@@ -141,7 +141,7 @@ sub wrap {
             await $send->($event);
         };
 
-        my $target = exists($recorded{csrf_failure}) && $self->{refuse}
+        my $target = exists($recorded{'pagi.csrf_failure'}) && $self->{refuse}
             ? $self->{refuse} : $app;
         await $target->($self->modify_scope($scope, \%recorded), $receive, $wrapped_send);
     };

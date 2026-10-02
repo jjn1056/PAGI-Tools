@@ -11,7 +11,7 @@ async sub home {
         or die 'compose example requires lifespan state';
     return response('JSON', {
         message => $state->get('message'),
-        request_id => $request->scope->{request_id},
+        request_id => $request->scope->{'pagi.request_id'},
     });
 }
 

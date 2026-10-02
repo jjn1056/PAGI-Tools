@@ -1027,7 +1027,7 @@ Add unique request ID to each request:
 
   enable 'RequestId';  # Adds X-Request-Id header
 
-Access via C<$scope-E<gt>{request_id}>.
+Access via C<$scope-E<gt>{'pagi.request_id'}>.
 
 =item * L<PAGI::Middleware::Runtime>
 

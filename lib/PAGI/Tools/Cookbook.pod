@@ -553,7 +553,7 @@ Use L<PAGI::Utils::Middleware> to keep channel ownership visible:
           my ($scope, $receive, $send) = @_;
 
           # Immediate request-local shallow state change; no I/O.
-          my $child = clone_scope($scope, { request_id => make_id() });
+          my $child = clone_scope($scope, { 'pagi.request_id' => make_id() });
 
           # Construction only: no event has been emitted or received yet.
           my $out = wrap_send($send, async sub {
@@ -562,7 +562,7 @@ Use L<PAGI::Utils::Middleware> to keep channel ownership visible:
                   $event = {
                       %$event,
                       headers => [@{$event->{headers} // []},
-                          ['x-request-id', $child->{request_id}]],
+                          ['x-request-id', $child->{'pagi.request_id'}]],
                   };
               }
               await $downstream->($event); # this actually emits and awaits
@@ -724,7 +724,7 @@ the server's log, such as an error tracker or paging:
           my ($error, $scope) = @_;
           $tracker->capture($error,
               path       => $scope->{path},
-              request_id => $scope->{request_id});  # with RequestId installed
+              request_id => $scope->{'pagi.request_id'});  # with RequestId installed
           return;
       }),
 

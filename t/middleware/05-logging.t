@@ -256,7 +256,7 @@ subtest 'RequestId generates unique IDs and adds to response' => sub {
     my $received_request_id;
     my $app = async sub  {
         my ($scope, $receive, $send) = @_;
-        $received_request_id = $scope->{request_id};
+        $received_request_id = $scope->{'pagi.request_id'};
         await $send->({
             type    => 'http.response.start',
             status  => 200,
@@ -317,7 +317,7 @@ subtest 'RequestId trusts incoming header when configured' => sub {
     my $received_request_id;
     my $app = async sub  {
         my ($scope, $receive, $send) = @_;
-        $received_request_id = $scope->{request_id};
+        $received_request_id = $scope->{'pagi.request_id'};
         await $send->({
             type    => 'http.response.start',
             status  => 200,

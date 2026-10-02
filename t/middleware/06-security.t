@@ -977,12 +977,12 @@ subtest 'CSRF records why the check failed, in order' => sub {
         my ($reason, $headers) = @$case;
         my (undef, $seen) = csrf_request(
             PAGI::Middleware::CSRF->new(secret => 's', refuse => 0), headers => $headers);
-        is $seen->[0]{csrf_failure}, $reason, "records $reason";
+        is $seen->[0]{'pagi.csrf_failure'}, $reason, "records $reason";
         is csrf($seen->[0])->failure, $reason, "csrf()->failure reads $reason";
     }
     my (undef, $seen) = csrf_request(PAGI::Middleware::CSRF->new(secret => 's', refuse => 0),
         headers => [['cookie', 'a=1; csrf_token=abc; b=2'], ['x-csrf-token', 'abc']]);
-    ok !exists $seen->[0]{csrf_failure}, 'a passing check records no failure';
+    ok !exists $seen->[0]{'pagi.csrf_failure'}, 'a passing check records no failure';
     is csrf($seen->[0])->valid, 1, 'and is valid';
 };
 
@@ -990,7 +990,7 @@ subtest 'CSRF refuse => 0 lets the application decide' => sub {
     my ($sent, $seen) = csrf_request(PAGI::Middleware::CSRF->new(secret => 's', refuse => 0));
     is scalar(@$seen), 1, 'the application is called';
     is $sent->[0]{status}, 200, 'and its response is sent';
-    ok length($seen->[0]{csrf_token}), 'a token is in the scope';
+    ok length($seen->[0]{'pagi.csrf_token'}), 'a token is in the scope';
 };
 
 subtest 'CSRF refuse accepts any application' => sub {
@@ -1097,7 +1097,7 @@ subtest 'CSRF allows POST with valid token' => sub {
     my $token;
     my $app = async sub  {
         my ($scope, $receive, $send) = @_;
-        $token = $scope->{csrf_token};
+        $token = $scope->{'pagi.csrf_token'};
         await $send->({
             type    => 'http.response.start',
             status  => 200,
@@ -1243,7 +1243,7 @@ subtest "CSRF refuse => 0 passes an unsafe request through with no token" => sub
     my $app = async sub  {
         my ($scope, $receive, $send) = @_;
         $app_called   = 1;
-        $seen_token   = $scope->{csrf_token};
+        $seen_token   = $scope->{'pagi.csrf_token'};
         await $send->({ type => 'http.response.start', status => 200, headers => [] });
         await $send->({ type => 'http.response.body', body => 'OK', more => 0 });
     };
@@ -1343,7 +1343,7 @@ subtest "CSRF refuse => 0 stashes the existing COOKIE token, not a new one" => s
     my $seen_token;
     my $post_app = async sub  {
         my ($scope, $receive, $send) = @_;
-        $seen_token = $scope->{csrf_token};
+        $seen_token = $scope->{'pagi.csrf_token'};
         await $send->({ type => 'http.response.start', status => 200, headers => [] });
         await $send->({ type => 'http.response.body', body => 'Created', more => 0 });
     };

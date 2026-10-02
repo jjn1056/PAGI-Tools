@@ -730,6 +730,31 @@ my $db = $state->get('db');
 A temporary `%{}` overload still allows `->state->{db}` (with a warning), but
 `ref($protocol->state) eq 'HASH'` is false: use `->data` for an exact hashref.
 
+## Breaking: middleware scope keys move under `pagi.*`
+
+PAGI::Spec::Www reserves keys without a dot for the core spec and `pagi.*`
+for PAGI extensions. Five middleware wrote bare keys; they now write the
+same name under `pagi.`, like `pagi.session` and `pagi.cookies` already did:
+
+| Middleware | 0.002002 | Now |
+|---|---|---|
+| CSRF | `csrf_token` | `pagi.csrf_token` |
+| ReverseProxy | `original_client` | `pagi.original_client` |
+| MethodOverride | `original_method` | `pagi.original_method` |
+| Rewrite | `original_path` | `pagi.original_path` |
+| RequestId | `request_id` | `pagi.request_id` |
+
+```perl
+# Before
+my $id = $request->scope->{request_id};
+
+# After
+my $id = $request->scope->{'pagi.request_id'};
+```
+
+Code that reads the CSRF token through `csrf($request)->token` is
+unaffected. The CSRF cookie and form field are still named `csrf_token`.
+
 ## Breaking: `PAGI::App::Throttle` is removed
 
 `PAGI::Middleware::RateLimit` is the one rate limiter. Throttle duplicated

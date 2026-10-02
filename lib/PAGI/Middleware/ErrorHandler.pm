@@ -62,7 +62,7 @@ construction never consults C<PAGI_ENV>.
 
 Callback invoked as C<< $on_error->($error, $scope) >> when an exception is
 caught: the original error, then the request scope, so a reporter can record
-the path or a C<request_id> (present when L<PAGI::Middleware::RequestId> is
+the path or a C<pagi.request_id> (present when L<PAGI::Middleware::RequestId> is
 installed). Immediate values and Futures are both accepted and awaited.
 Callback failures are contained and never replace the application error.
 
@@ -71,7 +71,7 @@ is still re-raised to the server after rendering (see L</DESCRIPTION>).
 
     on_error => sub  {
         my ($error, $scope) = @_;
-        $tracker->capture($error, request_id => $scope->{request_id});
+        $tracker->capture($error, request_id => $scope->{'pagi.request_id'});
     }
 
 =item * status (default: 500)

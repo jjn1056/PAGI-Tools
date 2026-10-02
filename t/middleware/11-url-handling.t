@@ -67,7 +67,7 @@ subtest 'Rewrite middleware - exact match' => sub {
     run_async { $wrapped->($scope, async sub { {} }, async sub { }) };
 
     is $captured_scope->{path}, '/new', 'path rewritten';
-    is $captured_scope->{original_path}, '/old', 'original path preserved';
+    is $captured_scope->{'pagi.original_path'}, '/old', 'original path preserved';
 };
 
 subtest 'Rewrite middleware - regex with captures' => sub {
@@ -762,7 +762,7 @@ subtest 'ReverseProxy - updates client from X-Forwarded-For' => sub {
     run_async { $wrapped->($scope, async sub { {} }, async sub { }) };
 
     is $captured_scope->{client}[0], '203.0.113.50', 'client IP from X-Forwarded-For';
-    is $captured_scope->{original_client}[0], '127.0.0.1', 'original client preserved';
+    is $captured_scope->{'pagi.original_client'}[0], '127.0.0.1', 'original client preserved';
 };
 
 subtest 'ReverseProxy - updates scheme from X-Forwarded-Proto' => sub {

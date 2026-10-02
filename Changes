@@ -91,6 +91,9 @@
     passing it dies.
   - PAGI::App::Throttle is removed; PAGI::Middleware::RateLimit is the one
     rate limiter.
+  - Middleware scope keys move under pagi.*, which PAGI::Spec::Www reserves
+    for extensions: pagi.csrf_token, pagi.original_client,
+    pagi.original_method, pagi.original_path, pagi.request_id.
 
   [Fixed]
   - GZip sent every compressed response as 200, whatever its status.
@@ -104,6 +107,8 @@
   - Endpoint::SSE keepalive failed against validating servers, and a
     declined Endpoint::SSE still sent sse.start.
   - The Response Writer and Stream skipped on_close cleanup on failure.
+  - RequestId added its header to the application's own header list, so a
+    reused list accumulated one ID per request.
   - App::Proxy could hang on a keep-alive backend and let %0D%0A in the
     path inject backend headers; AccessLog let it forge log lines.
   - WrapPSGI set no REQUEST_URI and passed characters, not bytes.
