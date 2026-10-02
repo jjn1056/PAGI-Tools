@@ -1061,6 +1061,24 @@ subtest 'CSRF reuses one configured invalid Response' => sub {
     }
 };
 
+subtest "CSRF never adds its cookie to an application's own header list" => sub {
+    # An application may send the same headers arrayref every time; a
+    # cookie added to it would reach every later client.
+    my @shared = (['content-type', 'text/plain']);
+    my $refuse = async sub {
+        my ($scope, $receive, $send) = @_;
+        await $send->({ type => 'http.response.start', status => 403, headers => \@shared });
+        await $send->({ type => 'http.response.body', body => 'no', more => 0 });
+    };
+    my $mw = PAGI::Middleware::CSRF->new(secret => 's', invalid => $refuse);
+    csrf_request($mw) for 1 .. 3;
+    is scalar(@shared), 1, "the application's header list is unchanged";
+
+    my ($sent) = csrf_request($mw, headers => [['cookie', 'csrf_token=mine']]);
+    is [response_header_values($sent->[0], 'Set-Cookie')], [],
+        'a client that already has a token gets no one else\'s';
+};
+
 subtest 'CSRF invalid: the refusing application can read the reason' => sub {
     my $reason;
     my $mw = PAGI::Middleware::CSRF->new(secret => 's', invalid => async sub {

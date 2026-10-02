@@ -139,13 +139,18 @@ sub wrap {
         }
 
         # A minted token is set on whatever response leaves, a refusal
-        # included, so the client's next attempt can carry it.
+        # included, so the client's next attempt can carry it. The event is
+        # copied: an application may reuse its headers arrayref, and a
+        # cookie added to it would reach every later client.
         my $wrapped_send = defined $cookie_token ? $send : async sub {
             my ($event) = @_;
             if ($event->{type} eq 'http.response.start') {
                 my $cookie = "$self->{cookie_name}=$token; Path=/; HttpOnly; SameSite=Strict";
                 $cookie .= "; Secure" if $self->{secure};
-                push @{$event->{headers}}, ['Set-Cookie', $cookie];
+                $event = {
+                    %$event,
+                    headers => [@{$event->{headers} // []}, ['Set-Cookie', $cookie]],
+                };
             }
             await $send->($event);
         };
