@@ -730,6 +730,23 @@ my $db = $state->get('db');
 A temporary `%{}` overload still allows `->state->{db}` (with a warning), but
 `ref($protocol->state) eq 'HASH'` is false: use `->data` for an exact hashref.
 
+## Breaking: CSRF `enforce` is replaced by `invalid`
+
+| 0.002002 | Now |
+|---|---|
+| `enforce => 'header'` (the default) | the default; remove the option |
+| `enforce => 'app'` | `invalid => 0`; the handler still calls `csrf($request)->verify($token)` |
+
+Passing `enforce` dies, so a form application that relied on
+`enforce => 'app'` cannot silently start refusing its posts. The default
+refusal is a plain `403 text/plain` (0.002002's wording); `invalid` replaces
+it with any application:
+
+```perl
+middleware('CSRF', secret => $secret,
+    invalid => response('JSON', { detail => 'CSRF token validation failed' }, status => 403));
+```
+
 ## Breaking: `on_close` callbacks receive a third argument
 
 `on_close` now also passes the connection's disconnect detail:
@@ -898,7 +915,6 @@ built-in English body should assert the status and media type instead.
 | `PAGI::App::WrapCGI` | process-start 500 | CGI execution and responses |
 | `PAGI::App::Throttle` | default 429 | `retry_after`, rate-limit fields, `on_limit` |
 | `PAGI::Middleware::Static` | 403, 404, 416 | pass-through; 416 file length |
-| `PAGI::Middleware::CSRF` | enforced 403 | validation, `enforce => 'app'` |
 | `PAGI::Middleware::ContentNegotiation` | strict-mode 406 | supported-type detail |
 | `PAGI::Middleware::Maintenance` | built-in 503 | `retry_after`; explicit `body`/`content_type` stay literal |
 | `PAGI::Middleware::RateLimit` | default 429 | `retry_after`, `X-RateLimit-*` |

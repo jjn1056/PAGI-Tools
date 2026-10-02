@@ -17,24 +17,22 @@ PAGI::Middleware::CSRF - Cross-Site Request Forgery protection middleware
 
 =head1 SYNOPSIS
 
-    use PAGI::Middleware::Builder;
-    use PAGI::CSRF qw(csrf);
+    use PAGI::Compose qw(compose);
+    use PAGI::Response qw(response);
+    use PAGI::Routing qw(middleware);
 
-    my $app = builder {
-        enable 'CSRF',
-            secret       => 'your-secret-key',
-            token_header => 'X-CSRF-Token',
-            cookie_name  => 'csrf_token',
-            safe_methods => ['GET', 'HEAD', 'OPTIONS'];
-        $my_app;
-    };
+    # Refuse a failed check with a 403 text response (the default)
+    middleware('CSRF', secret => $secret);
 
-    # Issue-only mode: the middleware never rejects; the app validates via
-    # csrf($request)->verify once it has parsed the submitted form/JSON params.
-    my $app2 = builder {
-        enable 'CSRF', secret => 'your-secret-key', enforce => 'app';
-        $my_app;
-    };
+    # Refuse it with your own application or Response
+    middleware('CSRF', secret => $secret,
+        invalid => response('JSON', { detail => 'CSRF token validation failed' }, status => 403));
+
+    # Let the application decide: every request reaches it, with the outcome
+    # recorded for csrf($request)->valid and ->failure
+    middleware('CSRF', secret => $secret, invalid => 0);
+
+L<PAGI::CSRF/SYNOPSIS> shows both modes in full, as complete applications.
 
 =head1 DESCRIPTION
 
@@ -80,31 +78,6 @@ with C<< csrf($scope)->failure >>. Exactly C<0>: the middleware never refuses;
 the request reaches the application with the outcome recorded for
 C<< csrf($request)->valid >> and C<< ->failure >>. Any other plain value dies.
 
-=item * enforce (default: 'header')
-
-How unsafe methods (anything not in C<safe_methods>) are checked:
-
-=over 4
-
-=item * C<'header'> - the middleware itself validates: the request must
-carry a C<token_header> whose value matches the cookie token, or the
-middleware responds 403 and the app is never called. This only works for
-requests that can set a custom header (typically AJAX/fetch); a plain HTML
-form POST has no way to add one, so a server-rendered form under this mode
-would always 403 -- see L</USAGE> for why.
-
-=item * C<'app'> - issue-only. The middleware mints/persists the cookie
-token exactly as it does for safe methods, on I<every> method, and never
-auto-rejects. It stashes the cookie token (the existing one, or a freshly
-minted one if none existed yet) into scope as C<csrf_token> for the app to
-read with C<< csrf($request)->token >>. The app owns validation, by calling
-C<< csrf($request)->verify($submitted) >> once it has parsed the request's
-params, and decides the response for a failed check. Raw PAGI applications can
-pass the scope directly as C<csrf($scope)>. This is what server-rendered form
-POSTs need.
-
-=back
-
 =back
 
 =cut
@@ -112,22 +85,21 @@ POSTs need.
 sub _init {
     my ($self, $config) = @_;
 
+    die "CSRF 'enforce' was removed: use invalid => 0 for the application to decide; the default refuses"
+        if exists $config->{enforce};
+
     $self->{secret}       = $config->{secret} // die "CSRF middleware requires 'secret' option";
     $self->{token_header} = $config->{token_header} // 'X-CSRF-Token';
     $self->{cookie_name}  = $config->{cookie_name} // 'csrf_token';
     $self->{safe_methods} = { map { $_ => 1 } @{$config->{safe_methods} // [qw(GET HEAD OPTIONS TRACE)]} };
     $self->{secure}       = $config->{secure} // 0;
 
-    $self->{enforce} = $config->{enforce} // 'header';
-    die "CSRF middleware 'enforce' must be 'header' or 'app', got '$self->{enforce}'"
-        unless $self->{enforce} eq 'header' || $self->{enforce} eq 'app';
-
     # invalid: absent -> the default refusal; exactly 0 -> the application
     # decides; otherwise an application. Any other plain value (undef, '',
     # '0E0', a string) is a configuration mistake, never a quiet way to
     # switch protection off.
     if (!exists $config->{invalid}) {
-        $self->{invalid} = $self->{enforce} eq 'app' ? undef : PAGI::Response::Text->new(
+        $self->{invalid} = PAGI::Response::Text->new(
             'CSRF token validation failed', status => 403,
         )->to_app;
     }
@@ -241,9 +213,10 @@ generated and stored in an C<HttpOnly> cookie, and a request is only valid if
 it also carries that same token some other way -- because C<HttpOnly> means
 client-side JavaScript cannot read the cookie itself (C<document.cookie>
 won't show it, and neither would a hypothetical C<getCookie> helper). That
-"some other way" is where the two C<enforce> modes diverge.
+"some other way" is a request header (the default) or a form field
+(C<invalid =E<gt> 0>).
 
-=head2 Header flow (enforce => 'header', the default)
+=head2 Header flow (the default)
 
 Use this for JSON/AJAX APIs, where the client can set a custom request
 header. The middleware validates the header itself; the app is never called
@@ -267,13 +240,14 @@ configured header:
         headers: { 'X-CSRF-Token': token },
     });
 
-=head2 Form flow (enforce => 'app')
+=head2 Form flow (invalid => 0)
 
 Use this for server-rendered HTML forms. A plain C<< <form> >> POST has no
-way to add a custom header, so C<enforce => 'header'> would 403 every such
-submission -- that's precisely why this mode exists: the middleware only
-issues the token (on every method, including the POST itself) and never
-auto-rejects; the app validates once it has parsed the submitted params.
+way to add a custom header, so the default would 403 every such submission --
+that's precisely why C<invalid =E<gt> 0> exists: the middleware issues the
+token (on every method, including the POST itself) and records its header
+check, but never refuses; the app validates once it has parsed the submitted
+params.
 
 Embed the token as a hidden field:
 
@@ -284,11 +258,9 @@ Embed the token as a hidden field:
 Then, in the handler, verify the submitted value against the one the
 middleware stashed in scope:
 
-    use PAGI::Pages;
+    use PAGI::Response qw(response);
 
-    return PAGI::Pages->forbidden(
-        detail => 'CSRF token validation failed',
-    )
+    return response('Text', 'CSRF token validation failed', status => 403)
         unless $guard->verify($params->{_csrf_token});
 
 The same helper works in a raw-scope application:

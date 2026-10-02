@@ -1234,49 +1234,21 @@ subtest 'CSRF allows GET without token' => sub {
 };
 
 # =============================================================================
-# Test: CSRF 'enforce' config - 'header' (default) vs 'app' (issue-only)
+# Test: CSRF invalid => 0 (the application decides); enforce was removed
 # =============================================================================
 
-subtest 'CSRF rejects invalid enforce value' => sub {
-    like(
-        dies { PAGI::Middleware::CSRF->new(secret => 'test-secret', enforce => 'bogus') },
-        qr/enforce/,
-        'constructor dies on an unrecognized enforce value',
-    );
-};
-
-subtest "CSRF enforce => 'header' behaves exactly like the default" => sub {
-    my $mw = PAGI::Middleware::CSRF->new(secret => 'test-secret', enforce => 'header');
-
-    my $app_called = 0;
-    my $app = async sub  {
-        my ($scope, $receive, $send) = @_;
-        $app_called = 1;
-    };
-
-    my $wrapped = $mw->wrap($app);
-
-    my @sent;
-    run_async(async sub {
-        await $wrapped->(
-            {
-                type    => 'http',
-                path    => '/submit',
-                method  => 'POST',
-                headers => [],
-            },
-            async sub { { type => 'http.disconnect' } },
-            async sub  {
-        my ($event) = @_; push @sent, $event },
+subtest 'CSRF enforce was removed' => sub {
+    for my $enforce (qw(app header bogus)) {
+        like(
+            dies { PAGI::Middleware::CSRF->new(secret => 'test-secret', enforce => $enforce) },
+            qr/\QCSRF 'enforce' was removed: use invalid => 0 for the application to decide; the default refuses\E/,
+            "enforce => '$enforce' dies with the replacement",
         );
-    });
-
-    ok !$app_called, 'app not called without token';
-    is $sent[0]{status}, 403, 'status is 403 Forbidden, same as default enforcement';
+    }
 };
 
-subtest "CSRF enforce => 'app' passes an unsafe request through with no token" => sub {
-    my $mw = PAGI::Middleware::CSRF->new(secret => 'test-secret', enforce => 'app');
+subtest "CSRF invalid => 0 passes an unsafe request through with no token" => sub {
+    my $mw = PAGI::Middleware::CSRF->new(secret => 'test-secret', invalid => 0);
 
     my $seen_token;
     my $app_called = 0;
@@ -1314,9 +1286,9 @@ subtest "CSRF enforce => 'app' passes an unsafe request through with no token" =
     like $set_cookie->[1], qr/\Q$seen_token\E/, 'Set-Cookie carries the same token stashed in scope';
 };
 
-subtest "CSRF enforce => 'app' preserves an application-owned Response" => sub {
+subtest "CSRF invalid => 0 preserves an application-owned Response" => sub {
     my $mw = PAGI::Middleware::CSRF->new(
-        secret => 'test-secret', enforce => 'app',
+        secret => 'test-secret', invalid => 0,
     );
     my @sent;
     my $send = async sub { my ($event) = @_; push @sent, $event };
@@ -1352,8 +1324,8 @@ subtest "CSRF enforce => 'app' preserves an application-owned Response" => sub {
         'application Response body remains byte-for-byte literal';
 };
 
-subtest "CSRF enforce => 'app' stashes the existing COOKIE token, not a new one" => sub {
-    my $mw = PAGI::Middleware::CSRF->new(secret => 'test-secret', enforce => 'app');
+subtest "CSRF invalid => 0 stashes the existing COOKIE token, not a new one" => sub {
+    my $mw = PAGI::Middleware::CSRF->new(secret => 'test-secret', invalid => 0);
 
     # First, a GET establishes a cookie token.
     my $cookie_token;
