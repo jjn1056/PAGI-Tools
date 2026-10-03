@@ -111,29 +111,16 @@ sub mangle_allow_middleware {
     });
 }
 
-subtest 'Router renders NONE through Pages and PARTIAL as a plain 405' => sub {
+subtest 'Router renders NONE as a plain 404 and PARTIAL as a plain 405' => sub {
     my $app = router(routes => [
         route('/items' => \&text_handler, methods => 'GET'),
         route('/items' => \&text_handler, methods => 'POST'),
     ])->to_app;
 
-    my $none = run_app($app, path => '/missing', raw_path => '/missing');
-    is(response_status($none), 404, 'NONE renders 404');
-    is(response_header($none, 'Content-Type'), 'application/problem+json',
-        'NONE uses normal request negotiation');
-    like(response_body($none), qr/"status"\s*:\s*404/,
-        'NONE emits the negotiated problem representation');
-
-    my $none_text = run_app(
-        $app,
-        path => '/missing', raw_path => '/missing',
-        headers => [['accept', 'text/plain']],
-    );
-    is(response_header($none_text, 'Content-Type'),
-        'text/plain; charset=utf-8',
-        'NONE also negotiates the concrete text representation');
-    like(response_body($none_text), qr/404\s+Not Found/,
-        'NONE text representation retains Pages status semantics');
+    my $none = run_app($app, path => '/missing', raw_path => '/missing',
+        headers => [['accept', 'application/problem+json']]);
+    is([response_status($none), response_header($none, 'Content-Type'), response_body($none)],
+        [404, 'text/plain; charset=utf-8', 'Not Found'], 'NONE is plain text whatever the Accept');
 
     my $partial = run_app(
         $app, method => 'TRACE', path => '/items', raw_path => '/items',

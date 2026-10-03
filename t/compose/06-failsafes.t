@@ -140,10 +140,9 @@ subtest 'Compose routes receive ordinary Router HTTP outcomes' => sub {
     my $empty = PAGI::Test::Client->new(
         app => compose(routes => [])->to_app,
     )->get('/missing', headers => { Accept => 'application/problem+json' });
-    assert_client_pages_error(
-        'empty routes Router default', $empty, 404, 'Not Found',
-        'application/problem+json',
-    );
+    is([$empty->status, $empty->content_type, $empty->text],
+        [404, 'text/plain; charset=utf-8', 'Not Found'],
+        'empty routes Router default is a plain 404 whatever the Accept');
 
     my $client = PAGI::Test::Client->new(
         app => compose(routes => route_set())->to_app,
@@ -291,9 +290,8 @@ subtest 'invalid PAGI_ENV is contained only when an error path consults it' => s
         $routing, scope(path => '/missing'),
     );
     is($route_error, undef, 'Router default does not consult the environment');
-    assert_pages_error(
-        'invalid environment Router default', $route_events, 404,
-        'Not Found', 'text/html; charset=utf-8',
+    assert_rendered(
+        'invalid environment Router default', $route_events, 404, 'Not Found',
     );
     is($route_warnings, [], 'ordinary Router 404 does not warn');
 

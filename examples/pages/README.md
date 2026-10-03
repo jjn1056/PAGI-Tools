@@ -76,7 +76,7 @@ mount('/terminal', app => gone(
 The final `compose(routes => [...], lifespan => { ... })` expression is an
 inspectable root application. Compose constructs and owns the root Router,
 startup/shutdown, error handling, and response completion; that root owns
-negotiated 404/405 and automatic HEAD behavior.
+the plain-text 404/405 and automatic HEAD behavior.
 
 A Pages application can also be the root directly, for example
 `PAGI::Pages->welcome`. It can be invoked for HTTP or passed directly to a

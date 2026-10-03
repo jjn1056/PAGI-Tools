@@ -192,7 +192,7 @@ inspect signatures or evaluate package-method strings.
     Mount app CODE                       native PAGI application
     Mount app object                     app object via to_app
 
-The usual HTTP default is a source-free Pages application:
+A branded HTTP default can be a source-free Pages application:
 
     use PAGI::Pages qw(not_found);
 
@@ -306,12 +306,10 @@ Router describes an ordered collection of Route and Mount descriptions. An
 optional C<http_default> accepts a one-Request handler coderef or an app
 object; construction validates it but does not compile it. A directly compiled
 Router owns normal routing outcomes. HTTP NONE invokes C<http_default>, or the
-stock 404 when it is absent.
+plain-text C<404 Not Found> when it is absent.
 HTTP PARTIAL emits the built-in plain-text C<405 Method Not Allowed> with one
 authoritative C<Allow> union; to answer it differently, put a middleware around
-the Router that rewrites 405 responses. The stock 404 uses L<PAGI::Pages>
-content negotiation and returns a concrete HTML, Text, or Problem response
-according to C<Accept>. The HTTP default never handles PARTIAL, WebSocket, or
+the Router that rewrites 405 responses. The HTTP default never handles PARTIAL, WebSocket, or
 SSE misses. Router ignores lifespan; L<PAGI::Compose> owns that scope at a deployed
 root.
 

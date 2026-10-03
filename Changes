@@ -30,6 +30,8 @@
     logs, and HTTPSRedirect redirects to, the encoded request URI.
   - Stock error and redirect responses from first-party components
     negotiate HTML, problem JSON or text through Pages.
+  - The Router's stock HTTP default is 0.002002's plain-text 404 "Not
+    Found"; http_default stays the override.
   - URLMap answers an unmatched request with 0.002002's plain-text 404
     again. Builder's mount now is URLMap, so mount '/' takes every path,
     as in Plack, rather than only /; URLMap's mount('api') now mounts

@@ -129,8 +129,8 @@ declaration order, constructs the selected protocol object, awaits the handler, 
 Response exactly once.
 
 The compiled coderef is a complete Router application for routing outcomes. If
-no route answers, NONE emits its stock Pages 404 or configured HTTP-only
-C<http_default>; PARTIAL emits its built-in Pages 405 with authoritative
+no route answers, NONE emits its plain-text 404 or configured HTTP-only
+C<http_default>; PARTIAL emits its plain-text 405 with authoritative
 C<Allow>. Compose does not own routing fallback. It owns deployed root safety,
 including ErrorHandler, response-completion guarding, the outer HEAD boundary,
 and lifespan.
@@ -341,8 +341,8 @@ C<routing()> method return an immutable Router:
 The Router is already both an application and an inspectable route tree, so
 the parent can generate C</people/show> URLs without a snapshot conversion.
 The selected Router owns NONE and PARTIAL. NONE invokes its HTTP-only
-C<http_default> or stock Pages 404; PARTIAL emits a compliant Pages 405 with
-the authoritative C<Allow> field. Compose remains the root owner for lifespan,
+C<http_default> or plain-text 404; PARTIAL emits a compliant plain-text 405
+with the authoritative C<Allow> field. Compose remains the root owner for lifespan,
 error handling, HEAD handling, and response-completion safety.
 
 =head1 PART 3: HANDLING REQUESTS

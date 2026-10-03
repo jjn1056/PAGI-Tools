@@ -473,7 +473,7 @@ subtest 'Root composes lifespan, Router links, and owned outcomes' => sub {
         my $noninteger_person = $client->get('/person/not-an-integer');
         is($noninteger_person->status, 404,
             'a noninteger person identifier does not reach the typed leaf');
-        like($noninteger_person->text, qr{<h1>Not Found</h1>},
+        is($noninteger_person->text, 'Not Found',
             'a noninteger person identifier reaches the Person Router 404');
         unlike($noninteger_person->text, qr{<h1>Person not found</h1>},
             'the automatic noninteger response is not the branded handler 404');
@@ -500,11 +500,8 @@ subtest 'Root composes lifespan, Router links, and owned outcomes' => sub {
         my $child_none = $client->get('/person/1/unmatched');
         is($child_none->status, 404,
             'Person Router mount owns its routing miss');
-        like($child_none->text, qr{<h1>Not Found</h1>},
-            'Person uses its own stock Router default instead of Root policy');
-        like($child_none->text,
-            qr{The requested resource was not found[.]},
-            'Person stock detail distinguishes it from both custom defaults');
+        is($child_none->text, 'Not Found',
+            'Person uses its own plain stock Router default instead of Root policy');
 
         my $wrong_method = $client->post('/person/1/blog/101');
         is($wrong_method->status, 405,

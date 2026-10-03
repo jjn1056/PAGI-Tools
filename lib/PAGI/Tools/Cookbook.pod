@@ -593,11 +593,11 @@ remain attached. Factory execution happens once during C<to_app>; returned
 wrappers run per request. Core Router, Route, Mount, and Compose lists contain
 only C<middleware(...)> descriptions.
 
-=head2 Negotiated 404 and 405 Responses
+=head2 Branded 404 Responses
 
-Router owns HTTP NONE and PARTIAL. Supply a Pages endpoint through
-C<http_default> for custom NONE presentation; PARTIAL remains the Router's
-negotiated 405 with authoritative C<Allow>:
+Router owns HTTP NONE and PARTIAL, answering both in plain text. Supply a Pages
+endpoint through C<http_default> for a branded, negotiated NONE; PARTIAL remains
+the Router's plain-text 405 with authoritative C<Allow>:
 
   use PAGI::Compose qw(compose);
   use PAGI::Pages;
