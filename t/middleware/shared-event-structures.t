@@ -5,6 +5,7 @@ use Future::AsyncAwait;
 use lib 'lib';
 use PAGI::Middleware::Runtime;
 use PAGI::Middleware::Debug;
+use PAGI::Middleware::SecurityHeaders;
 
 my @shared;
 sub shared_app ($body = 'ok', $type = 'text/plain') {
@@ -50,6 +51,34 @@ subtest 'Debug rewrites Content-Length on its own pairs' => sub {
     my $app = PAGI::Middleware::Debug->new(enabled => 1)->wrap(shared_app($html, 'text/html'));
     request($app);
     is $shared[1][1], length($html), "the app's Content-Length pair is unchanged";
+};
+
+sub app_sending (@start) {
+    return async sub ($scope, $receive, $send) {
+        await $send->({ type => 'http.response.start', status => 200, @start });
+        await $send->({ type => 'http.response.body', body => 'ok', more => 0 });
+    };
+}
+sub values_of ($events, $name) {
+    return [ map { $_->[1] } grep { lc($_->[0]) eq lc $name } @{ $events->[0]{headers} } ];
+}
+
+subtest 'SecurityHeaders' => sub {
+    my @mine = (['content-type', 'text/plain']);
+    my $mw = PAGI::Middleware::SecurityHeaders->new;
+    my $shared = $mw->wrap(app_sending(headers => \@mine));
+    my $events;
+    (undef, $events) = request($shared) for 1 .. 5;
+    is scalar(@mine), 1, "the app's array is untouched";
+    is values_of($events, 'X-Frame-Options'), ['SAMEORIGIN'], 'one X-Frame-Options';
+
+    (undef, $events) = request($mw->wrap(app_sending()));
+    is values_of($events, 'X-Frame-Options'), ['SAMEORIGIN'], 'added when the app omits headers';
+
+    my $route = PAGI::Middleware::SecurityHeaders->new(content_security_policy => "default-src 'self'")
+        ->wrap(app_sending(headers => [['Content-Security-Policy', "default-src 'none'"]]));
+    (undef, $events) = request($route);
+    is values_of($events, 'Content-Security-Policy'), ["default-src 'none'"], "a route's own CSP wins";
 };
 
 done_testing;

@@ -5,6 +5,7 @@ use warnings;
 use parent 'PAGI::Middleware';
 use Future::AsyncAwait;
 use PAGI::Utils ();
+use PAGI::Utils::Middleware ();
 
 =head1 NAME
 
@@ -27,6 +28,11 @@ PAGI::Middleware::SecurityHeaders - Security headers middleware
 
 PAGI::Middleware::SecurityHeaders adds common security-related HTTP headers
 to responses. These headers help protect against various web vulnerabilities.
+
+Each header is added only when the response does not already carry it, so a
+route that sets its own C<Content-Security-Policy> or C<X-Frame-Options> keeps
+it. The headers are added to a copy of the response's headers; the
+application's own list is never changed.
 
 =head1 CONFIGURATION
 
@@ -99,58 +105,57 @@ sub wrap {
             return;
         }
 
-        # Intercept send to add security headers
-        my $wrapped_send = async sub  {
-        my ($event) = @_;
-            if ($event->{type} eq 'http.response.start') {
-                $self->_add_security_headers($event->{headers}, $scope);
-            }
-            await $send->($event);
-        };
+        # The headers go on a copy: the response's own header list belongs
+        # to whoever built it, who may send it again.
+        my $wrapped_send = PAGI::Utils::Middleware::wrap_response_headers($send, sub {
+            $self->_add_security_headers($_[0], $scope);
+        });
 
         await $app->($scope, $receive, $wrapped_send);
     };
 }
 
 sub _add_security_headers {
-    my ($self, $headers, $scope) = @_;
+    my ($self, $headers, $scope) = @_;    # a PAGI::Headers copy
+
+    # A header the response already carries is its own, and stays.
 
     # X-Frame-Options
     if (defined $self->{x_frame_options}) {
-        push @$headers, ['X-Frame-Options', $self->{x_frame_options}];
+        $headers->set_default('X-Frame-Options', $self->{x_frame_options});
     }
 
     # X-Content-Type-Options
     if (defined $self->{x_content_type_options}) {
-        push @$headers, ['X-Content-Type-Options', $self->{x_content_type_options}];
+        $headers->set_default('X-Content-Type-Options', $self->{x_content_type_options});
     }
 
     # X-XSS-Protection
     if (defined $self->{x_xss_protection}) {
-        push @$headers, ['X-XSS-Protection', $self->{x_xss_protection}];
+        $headers->set_default('X-XSS-Protection', $self->{x_xss_protection});
     }
 
     # Referrer-Policy
     if (defined $self->{referrer_policy}) {
-        push @$headers, ['Referrer-Policy', $self->{referrer_policy}];
+        $headers->set_default('Referrer-Policy', $self->{referrer_policy});
     }
 
     # Strict-Transport-Security (only for HTTPS)
     if (defined $self->{strict_transport_security}) {
         my $scheme = $scope->{scheme} // 'http';
         if ($scheme eq 'https') {
-            push @$headers, ['Strict-Transport-Security', $self->{strict_transport_security}];
+            $headers->set_default('Strict-Transport-Security', $self->{strict_transport_security});
         }
     }
 
     # Content-Security-Policy
     if (defined $self->{content_security_policy}) {
-        push @$headers, ['Content-Security-Policy', $self->{content_security_policy}];
+        $headers->set_default('Content-Security-Policy', $self->{content_security_policy});
     }
 
     # Permissions-Policy
     if (defined $self->{permissions_policy}) {
-        push @$headers, ['Permissions-Policy', $self->{permissions_policy}];
+        $headers->set_default('Permissions-Policy', $self->{permissions_policy});
     }
 }
 
