@@ -30,6 +30,10 @@
     logs, and HTTPSRedirect redirects to, the encoded request URI.
   - Stock error and redirect responses from first-party components
     negotiate HTML, problem JSON or text through Pages.
+  - URLMap answers an unmatched request with 0.002002's plain-text 404
+    again. Builder's mount now is URLMap, so mount '/' takes every path,
+    as in Plack, rather than only /; URLMap's mount('api') now mounts
+    /api, as Builder's did.
   - Maintenance answers with a plain-text 503 by default; its response
     option (any application) replaces the body and content_type options,
     which now die.

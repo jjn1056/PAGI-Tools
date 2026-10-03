@@ -37,7 +37,10 @@ sub new {
 sub mount {
     my ($self, $path, $app) = @_;
 
-    $path =~ s{/+$}{};  # Remove trailing slashes
+    # No trailing slash, so '/' becomes '' and mounts every path; a
+    # leading slash, so 'api' mounts /api.
+    $path =~ s{/+$}{};
+    $path = "/$path" if length($path) && $path !~ m{^/};
     push @{$self->{mounts}}, [$path, PAGI::Utils::to_app($app)];
     # Keep sorted by length (longest first) for proper matching
     @{$self->{mounts}} = sort { length($b->[0]) <=> length($a->[0]) } @{$self->{mounts}};

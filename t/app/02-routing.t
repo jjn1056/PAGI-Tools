@@ -137,6 +137,17 @@ subtest 'App::URLMap routes by path prefix' => sub {
             'problem document carries the fallback status';
     };
 
+    subtest 'a prefix without its leading slash still mounts' => sub {
+        my $urlmap = PAGI::App::URLMap->new->mount('api' => make_response_app(200, 'API'));
+        my @sent;
+        run_async(async sub {
+            await $urlmap->to_app->({ type => 'http', path => '/api/x', headers => [] },
+                async sub { { type => 'http.disconnect' } },
+                async sub { my ($event) = @_; push @sent, $event });
+        });
+        is $sent[0]{status}, 200, "mount('api') serves /api";
+    };
+
     subtest 'longest prefix wins' => sub {
         my $urlmap = PAGI::App::URLMap->new;
         $urlmap->mount('/api' => make_response_app(200, 'API'));
