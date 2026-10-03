@@ -14,6 +14,7 @@ use PAGI::Middleware::Session;
 use PAGI::Middleware::Cookie;
 use PAGI::Utils::Middleware qw(wrap_response_headers);
 use Storable qw(dclone);
+use PAGI::Middleware::BufferedResponse qw(buffer_whole_response stream_transform_response);
 
 my @shared;
 sub shared_app { my ($body, $type) = @_; $body //= 'ok'; $type //= 'text/plain';
@@ -172,6 +173,51 @@ subtest 'RequestId, CSRF, Session and Cookie leave a shared array alone' => sub 
         my $app = $mw->wrap(app_sending(headers => \@mine));
         request($app) for 1 .. 5;
         is \@mine, $snapshot, "$name: the app's array and pairs are untouched";
+    }
+};
+
+subtest "BufferedResponse callbacks edit their own pairs, not the app's" => sub {
+    # The app's page headers, built once; guests' pages are made cacheable by
+    # editing the Cache-Control pair in the helper's copy.
+    my @page = (['Content-Type', 'text/html'], ['Cache-Control', 'no-cache']);
+    my $app = app_sending(headers => \@page);
+    my $guest_cacheable = sub {
+        my ($helper) = @_;
+        return async sub {
+            my ($scope, $receive, $send) = @_;
+            my $guest = !grep { $_->[0] eq 'cookie' } @{ $scope->{headers} };
+            my $edit = sub {
+                my ($headers) = @_;
+                return unless $guest;
+                $_->[1] = 'public, max-age=300' for grep { lc $_->[0] eq 'cache-control' } @$headers;
+            };
+            await $helper->($edit)->($scope, $receive, $send);
+        };
+    };
+    my %helpers = (
+        buffer_whole_response => sub {
+            my ($edit) = @_;
+            buffer_whole_response($app, transform => sub { $edit->($_[1]); return @_ });
+        },
+        stream_transform_response => sub {
+            my ($edit) = @_;
+            stream_transform_response($app, begin => sub {
+                $edit->($_[1]);
+                return { chunk => sub { $_[0] }, finish => sub { '' } };
+            });
+        },
+    );
+    for my $name (sort keys %helpers) {
+        @page = (['Content-Type', 'text/html'], ['Cache-Control', 'no-cache']);
+        my $site = $guest_cacheable->($helpers{$name});
+        my $alice = [['cookie', 'session=alice']];
+        my (undef, $first)  = request($site, headers => $alice);
+        my (undef, $guest)  = request($site);
+        my (undef, $second) = request($site, headers => $alice);
+        is values_of($first,  'Cache-Control'), ['no-cache'], "$name: alice first";
+        is values_of($guest,  'Cache-Control'), ['public, max-age=300'], "$name: the guest";
+        is values_of($second, 'Cache-Control'), ['no-cache'], "$name: alice after a guest";
+        is $page[1][1], 'no-cache', "$name: the app's own pair is unchanged";
     }
 };
 
