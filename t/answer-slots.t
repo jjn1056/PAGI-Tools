@@ -1,4 +1,5 @@
-use v5.40;
+use strict;
+use warnings;
 use Test2::V0;
 use Future::AsyncAwait;
 use lib 'lib';
@@ -18,7 +19,7 @@ use File::Temp qw(tempdir);
 # A slot that answers a request reads a bare coderef as a Request handler.
 
 subtest 'CSRF refuse: a Request handler reads the failure' => sub {
-    my $app = PAGI::Middleware::CSRF->new(secret => 's', refuse => sub ($request) {
+    my $app = PAGI::Middleware::CSRF->new(secret => 's', refuse => sub { my ($request) = @_;
         response('JSON', { error => csrf($request)->failure }, status => 403);
     })->wrap(sub { die 'not reached' });
     my $res = PAGI::Test::Client->new(app => $app)->post('/');
@@ -26,17 +27,17 @@ subtest 'CSRF refuse: a Request handler reads the failure' => sub {
 };
 
 subtest 'App::File refuse: a Request handler reads pagi.file_failure' => sub {
-    my $files = PAGI::App::File->new(root => tempdir(CLEANUP => 1), refuse => sub ($request) {
+    my $files = PAGI::App::File->new(root => tempdir(CLEANUP => 1), refuse => sub { my ($request) = @_;
         response('Text', 'no: ' . $request->scope->{'pagi.file_failure'}, status => 404);
     });
-    is PAGI::Test::Client->new(app => $files)->get('/missing')->text, 'no: not_found';
+    is(PAGI::Test::Client->new(app => $files)->get('/missing')->text, 'no: not_found');
 };
 
 subtest 'Maintenance response: a Request handler, async too' => sub {
-    my $app = PAGI::Middleware::Maintenance->new(enabled => 1, response => async sub ($request) {
+    my $app = PAGI::Middleware::Maintenance->new(enabled => 1, response => async sub { my ($request) = @_;
         response('Text', 'down for ' . $request->path, status => 503);
     })->wrap(sub { die 'not reached' });
-    is PAGI::Test::Client->new(app => $app)->get('/x')->text, 'down for /x';
+    is(PAGI::Test::Client->new(app => $app)->get('/x')->text, 'down for /x');
 };
 
 subtest 'TrustedHosts refuse: as_app_object still reaches a native app' => sub {
@@ -50,7 +51,7 @@ subtest 'TrustedHosts refuse: as_app_object still reaches a native app' => sub {
 };
 
 subtest 'Auth requires refuse: one Request handler answers HTTP and WebSocket' => sub {
-    my $refuse = sub ($request) { response('Text', 'who are you', status => 401) };
+    my $refuse = sub { my ($request) = @_; response('Text', 'who are you', status => 401) };
     my $app = compose(
         middleware => [middleware('Authentication', backend => sub { unauth_result() })],
         routes => [

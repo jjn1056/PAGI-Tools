@@ -79,7 +79,8 @@ PAGI::Utils::Middleware - Functional middleware authoring helpers
 =head1 SYNOPSIS
 
     use Future::AsyncAwait;
-    use PAGI::Utils::Middleware qw(clone_scope wrap_send wrap_receive);
+    use PAGI::Utils::Middleware qw(clone_scope wrap_send wrap_receive
+                                   wrap_response_headers);
 
     my $inner_scope = clone_scope($scope, { authenticated => 1 });
 
@@ -89,18 +90,30 @@ PAGI::Utils::Middleware - Functional middleware authoring helpers
         await $downstream->({ %$event, inspected => 1 });
     });
 
+    my $with_header = wrap_response_headers($send, sub {
+        my ($headers) = @_;
+        $headers->set('X-Served-By', 'web-1');
+    });
+
 =head1 DESCRIPTION
 
 These optional exports support middleware written as plain functions. Wrapper
-construction is synchronous and performs no I/O. The returned callbacks run
-only when called and invoke only the supplied interceptor; they never delegate
-automatically or inspect event types.
+construction is synchronous and performs no I/O.
 
-An interceptor controls whether, when, and how often it calls its downstream
-callback. Downstream completion and backpressure remain attached to the
-wrapper only when the interceptor returns or awaits that downstream result.
-The wrappers are event-family neutral and may observe any event family received
-by the enclosing middleware.
+C<wrap_send> and C<wrap_receive> are general: the returned callbacks run only
+when called and invoke only the supplied interceptor; they never delegate
+automatically or inspect event types. An interceptor controls whether, when,
+and how often it calls its downstream callback. Downstream completion and
+backpressure remain attached to the wrapper only when the interceptor returns
+or awaits that downstream result. These two are event-family neutral and may
+observe any event family received by the enclosing middleware.
+
+C<wrap_response_headers> is specific: it acts only on C<http.response.start>,
+passing every other event straight on.
+
+Whichever you use, never modify an event you are given, or the header list
+and pairs it carries: they belong to the layer that built them, which may send
+them again (see L<PAGI::Spec/Middleware>). Send a new event instead.
 
 =head1 FUNCTIONS
 
@@ -152,7 +165,8 @@ Returns a send that, for each C<http.response.start>, calls C<$editor> with a
 L<PAGI::Headers> copy of the response's headers and the event, then sends a
 new event carrying the edited headers. The event it was given, its header
 list and the pairs in it are never changed: they belong to whoever built them,
-who may send them again (see L<PAGI::Spec/Middleware>). Use C<set> to replace a
+who may send them again (see L<PAGI::Spec/Middleware>). The event is passed to
+the editor to read only -- its status, for example; do not modify it. Use C<set> to replace a
 header, C<add> for one that repeats (C<Set-Cookie>), C<set_default> to keep a
 value the response already has, and C<add_vary> for C<Vary>. The editor may
 return a Future. Other events pass through unchanged.

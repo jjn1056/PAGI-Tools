@@ -48,8 +48,8 @@
     is 5xx; a failing handler gets a last-resort 500 and the original error
     is re-raised. Status claims outside 400-599 answer 500.
   - Events belong to the layer that built them (PAGI 0.002013): Runtime,
-    SecurityHeaders, CORS and Debug no longer write into a response's own
-    header list, which leaked one request's headers -- an origin, a timing
+    SecurityHeaders and CORS no longer write into a response's own header
+    list, nor Debug into its header pairs, which leaked one request's headers -- an origin, a timing
     -- into later requests when an application reused that list. New
     PAGI::Utils::Middleware::wrap_response_headers hands middleware a
     PAGI::Headers copy to edit. When the response already carries the

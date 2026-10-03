@@ -1,4 +1,5 @@
-use v5.40;
+use strict;
+use warnings;
 use Test2::V0;
 use Future;
 use Future::AsyncAwait;
@@ -7,20 +8,26 @@ use PAGI::Middleware::Runtime;
 use PAGI::Middleware::Debug;
 use PAGI::Middleware::SecurityHeaders;
 use PAGI::Middleware::CORS;
+use PAGI::Middleware::RequestId;
+use PAGI::Middleware::CSRF;
+use PAGI::Middleware::Session;
+use PAGI::Middleware::Cookie;
+use PAGI::Utils::Middleware qw(wrap_response_headers);
+use Storable qw(dclone);
 
 my @shared;
-sub shared_app ($body = 'ok', $type = 'text/plain') {
+sub shared_app { my ($body, $type) = @_; $body //= 'ok'; $type //= 'text/plain';
     @shared = (['content-type', $type], ['content-length', length $body]);
-    return async sub ($scope, $receive, $send) {
+    return async sub { my ($scope, $receive, $send) = @_;
         await $send->({ type => 'http.response.start', status => 200, headers => \@shared });
         await $send->({ type => 'http.response.body', body => $body, more => 0 });
     };
 }
-sub request ($app, %scope) {
+sub request { my ($app, %scope) = @_;
     my @events;
     $app->({ type => 'http', method => 'GET', path => '/', headers => [], %scope },
         sub { Future->done({ type => 'http.disconnect' }) },
-        sub ($e) { push @events, $e; Future->done })->get;
+        sub { my ($e) = @_; push @events, $e; Future->done })->get;
     return [ map { lc $_->[0] } @{ $events[0]{headers} } ], \@events;
 }
 
@@ -33,7 +40,7 @@ subtest 'Runtime' => sub {
 };
 
 subtest "Runtime leaves an app's own X-Runtime and warns" => sub {
-    my $app = PAGI::Middleware::Runtime->new->wrap(async sub ($scope, $receive, $send) {
+    my $app = PAGI::Middleware::Runtime->new->wrap(async sub { my ($scope, $receive, $send) = @_;
         await $send->({ type => 'http.response.start', status => 200,
             headers => [['content-type', 'text/plain'], ['X-Runtime', 'app-set']] });
         await $send->({ type => 'http.response.body', body => 'ok', more => 0 });
@@ -54,13 +61,13 @@ subtest 'Debug rewrites Content-Length on its own pairs' => sub {
     is $shared[1][1], length($html), "the app's Content-Length pair is unchanged";
 };
 
-sub app_sending (@start) {
-    return async sub ($scope, $receive, $send) {
+sub app_sending { my (@start) = @_;
+    return async sub { my ($scope, $receive, $send) = @_;
         await $send->({ type => 'http.response.start', status => 200, @start });
         await $send->({ type => 'http.response.body', body => 'ok', more => 0 });
     };
 }
-sub values_of ($events, $name) {
+sub values_of { my ($events, $name) = @_;
     return [ map { $_->[1] } grep { lc($_->[0]) eq lc $name } @{ $events->[0]{headers} } ];
 }
 
@@ -86,7 +93,7 @@ subtest 'CORS' => sub {
     my @mine = (['content-type', 'text/plain']);
     my $mw = PAGI::Middleware::CORS->new(origins => ['https://a.example', 'https://b.example']);
     my $shared = $mw->wrap(app_sending(headers => \@mine));
-    my $from = sub ($origin) {
+    my $from = sub { my ($origin) = @_;
         my (undef, $events) = request($shared, headers => $origin ? [['origin', $origin]] : []);
         return values_of($events, 'Access-Control-Allow-Origin');
     };
@@ -103,6 +110,69 @@ subtest 'CORS' => sub {
     (undef, $events) = request($mw->wrap(app_sending(headers => [['Access-Control-Allow-Origin', '*']])),
         headers => [['origin', 'https://a.example']]);
     is values_of($events, 'Access-Control-Allow-Origin'), ['https://a.example'], "one value: CORS's";
+};
+
+subtest 'two requests in flight, a layer suspended between edit and send' => sub {
+    my @mine = (['content-type', 'text/plain']);
+    my $snapshot = dclone(\@mine);
+    my %gate;
+    my $suspending = sub {
+        my ($inner) = @_;
+        return async sub {
+            my ($scope, $receive, $send) = @_;
+            my $id = $scope->{'test.id'};
+            my $wrapped = wrap_response_headers($send, async sub {
+                my ($headers) = @_;
+                $headers->set('X-Probe', $id);
+                await($gate{$id} = Future->new);
+            });
+            await $inner->($scope, $receive, $wrapped);
+        };
+    };
+    my $stack = PAGI::Middleware::Runtime->new->wrap(
+        PAGI::Middleware::CORS->new(origins => ['https://a.example', 'https://b.example'])->wrap(
+            $suspending->(
+                PAGI::Middleware::SecurityHeaders->new->wrap(
+                    PAGI::Middleware::RequestId->new->wrap(app_sending(headers => \@mine))))));
+    my (%events, @requests);
+    for my $id (qw(A B)) {
+        push @requests, $stack->(
+            { type => 'http', method => 'GET', path => '/', 'test.id' => $id,
+              headers => [['origin', $id eq 'A' ? 'https://a.example' : 'https://b.example']] },
+            sub { Future->done({ type => 'http.disconnect' }) },
+            sub { push @{ $events{$id} }, $_[0]; Future->done });
+    }
+    ok $gate{A} && $gate{B}, 'both requests are suspended between edit and send';
+    $gate{B}->done;
+    $gate{A}->done;
+    $_->get for @requests;
+    is values_of($events{A}, 'X-Probe'), ['A'], 'A carries only its own value';
+    is values_of($events{B}, 'X-Probe'), ['B'], 'B carries only its own value';
+    is values_of($events{A}, 'Access-Control-Allow-Origin'), ['https://a.example'], "A: its own origin";
+    is values_of($events{B}, 'Access-Control-Allow-Origin'), ['https://b.example'], "B: its own origin";
+    for my $id (qw(A B)) {
+        is scalar @{ values_of($events{$id}, $_) }, 1, "$id: one $_"
+            for 'X-Request-ID', 'X-Runtime', 'X-Frame-Options';
+    }
+    isnt values_of($events{A}, 'X-Request-ID'), values_of($events{B}, 'X-Request-ID'),
+        'each its own request ID';
+    is \@mine, $snapshot, "the app's array and pairs are untouched";
+};
+
+subtest 'RequestId, CSRF, Session and Cookie leave a shared array alone' => sub {
+    for my $case (
+        [RequestId => PAGI::Middleware::RequestId->new],
+        [CSRF      => PAGI::Middleware::CSRF->new(secret => 's')],
+        [Session   => PAGI::Middleware::Session->new],
+        [Cookie    => PAGI::Middleware::Cookie->new],
+    ) {
+        my ($name, $mw) = @$case;
+        my @mine = (['content-type', 'text/plain']);
+        my $snapshot = dclone(\@mine);
+        my $app = $mw->wrap(app_sending(headers => \@mine));
+        request($app) for 1 .. 5;
+        is \@mine, $snapshot, "$name: the app's array and pairs are untouched";
+    }
 };
 
 subtest 'nothing in lib or examples teaches writing into a received header list' => sub {
