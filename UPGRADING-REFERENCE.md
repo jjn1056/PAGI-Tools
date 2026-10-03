@@ -1019,10 +1019,7 @@ built-in English body should assert the status and media type instead.
 
 | Component | Stock default now from Pages | Preserved locally |
 |---|---|---|
-| `PAGI::App::File` | 403, 404, 405, 416 | 405 `Allow: GET, HEAD`; 416 file length |
-| `PAGI::App::Directory` | listing 403 plus File's 403, 404, 405, 416 | listing rendering and I/O |
 | `PAGI::App::URLMap` | no-default 404 | mount selection |
-| `PAGI::Middleware::Static` | 403, 404, 416 | pass-through; 416 file length |
 | `PAGI::Middleware::Maintenance` | built-in 503 | `retry_after`; explicit `body`/`content_type` stay literal |
 | `PAGI::Middleware::Rewrite` | redirect-mode response | rule selection, code, target |
 

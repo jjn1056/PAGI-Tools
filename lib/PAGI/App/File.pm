@@ -10,8 +10,8 @@ use Fcntl qw(S_ISDIR S_ISREG);
 use File::Spec;
 use Scalar::Util qw(blessed);
 use PAGI::App::File::Result;
-use PAGI::Pages;
 use PAGI::Response::File;
+use PAGI::Response::Text ();
 use PAGI::Response::File::Plan ();
 use PAGI::Routing::HeadBoundary;
 use PAGI::Utils ();
@@ -114,6 +114,39 @@ An array reference of index names, examined in declaration order.  The first
 regular candidate ends selection; an unreadable regular candidate is
 forbidden rather than bypassed in favor of a later index.
 
+=head2 refuse
+
+File refuses four ways, each with a plain-text default:
+
+    method      405  Method Not Allowed      (with Allow: GET, HEAD)
+    not_found   404  Not Found               (a missing path or a directory)
+    forbidden   403  Forbidden               (unsafe, hidden or unreadable)
+    range       416  Range Not Satisfiable   (with Content-Range: bytes */LENGTH)
+
+C<refuse> replaces all four with one application -- a
+C<($scope, $receive, $send)> coderef or an object with C<to_app>, which
+includes every L<PAGI::Response> -- that finds the reason in the scope as
+C<pagi.file_failure>. File still sets C<Allow> and C<Content-Range> on its
+response, replacing any of the same name. Any plain value dies.
+
+For example, branded L<PAGI::Pages> for the failures people see, and plain
+values for the rest:
+
+    use PAGI::Pages;
+    use PAGI::Response qw(response);
+    use PAGI::Utils qw(invoke_app);
+
+    my %refusal = (
+        not_found => PAGI::Pages->not_found,
+        forbidden => PAGI::Pages->forbidden,
+        method    => response('Text', 'Method Not Allowed', status => 405),
+        range     => response('Text', 'Range Not Satisfiable', status => 416),
+    );
+    my $files = PAGI::App::File->new(root => $root, refuse => async sub {
+        my ($scope, $receive, $send) = @_;
+        await invoke_app($refusal{ $scope->{'pagi.file_failure'} }, $scope, $receive, $send);
+    });
+
 =head1 METHODS
 
 =head2 locate
@@ -139,11 +172,11 @@ request-time metadata, MIME, ETag, conditional-request, strict range, and file
 event plan. The response contains a PAGI C<file> body event, so the server owns
 the eventual open; C<serve> does not open the pathname itself.
 
-Missing and directory Results render a negotiated 404, while forbidden Results
-render a negotiated 403.  Callers may intercept a Result before choosing
-whether to pass it to C<serve>.  The method requires an explicit HTTP scope,
-owns only GET and HEAD, and renders a negotiated 405 with C<Allow: GET, HEAD>
-for other methods.  HEAD preserves the corresponding GET status and headers
+Missing and directory Results are refused with 404, while forbidden Results
+are refused with 403 (see L</refuse>).  Callers may intercept a Result before
+choosing whether to pass it to C<serve>.  The method requires an explicit HTTP
+scope, owns only GET and HEAD, and refuses other methods with a 405 carrying
+C<Allow: GET, HEAD>.  HEAD preserves the corresponding GET status and headers
 without emitting file or body bytes.
 
 Range handling accepts exactly one anchored ASCII C<bytes=start-end> interval,
@@ -211,7 +244,14 @@ sub new {
         default_type  => $args{default_type} // 'application/octet-stream',
         index         => $index,
         handle_ranges => $args{handle_ranges} // 1,
+        refuse        => PAGI::Utils::_refuse_option('File', \%args),
     }, $class;
+    $self->{_default_refusal} = {
+        method    => PAGI::Response::Text->new('Method Not Allowed', status => 405)->to_app,
+        not_found => PAGI::Response::Text->new('Not Found', status => 404)->to_app,
+        forbidden => PAGI::Response::Text->new('Forbidden', status => 403)->to_app,
+        range     => PAGI::Response::Text->new('Range Not Satisfiable', status => 416)->to_app,
+    };
     return $self;
 }
 
@@ -338,9 +378,8 @@ sub to_app {
         unless ($method eq 'GET' || $method eq 'HEAD') {
             my ($response_scope, $response_send)
                 = PAGI::Routing::HeadBoundary->prepare($scope, $send);
-            return await _respond_page(
-                $response_scope, $response_send, 'method_not_allowed',
-                allow => [qw(GET HEAD)],
+            return await $self->_refuse(
+                $response_scope, $response_send, 'method', [Allow => 'GET, HEAD'],
             );
         }
 
@@ -386,13 +425,12 @@ async sub serve {
     ($boundary_scope, $send)
         = PAGI::Routing::HeadBoundary->prepare($scope, $send);
 
-    return await _respond_page(
-        $boundary_scope, $send, 'method_not_allowed',
-        allow => [qw(GET HEAD)],
+    return await $self->_refuse(
+        $boundary_scope, $send, 'method', [Allow => 'GET, HEAD'],
     ) unless $method eq 'GET' || $method eq 'HEAD';
-    return await _respond_page($boundary_scope, $send, 'not_found')
+    return await $self->_refuse($boundary_scope, $send, 'not_found')
         if $result->is_missing || $result->is_directory;
-    return await _respond_page($boundary_scope, $send, 'forbidden')
+    return await $self->_refuse($boundary_scope, $send, 'forbidden')
         if $result->is_forbidden;
 
     my $file_path = $result->path;
@@ -410,9 +448,9 @@ async sub serve {
     );
     my $plan = $response->_plan_for_scope($boundary_scope);
     if ($plan->status == 416) {
-        return await _respond_page(
-            $boundary_scope, $send, 'range_not_satisfiable',
-            length => $plan->_logical_length,
+        return await $self->_refuse(
+            $boundary_scope, $send, 'range',
+            ['Content-Range' => 'bytes */' . $plan->_logical_length],
         );
     }
 
@@ -437,14 +475,32 @@ sub _get_header {
     return @values ? $values[0] : undef;
 }
 
-async sub _respond_page {
-    my ($scope, $send, $method, @options) = @_;
-    my $response = PAGI::Pages->$method(@options);
+# Answers a refused request: the caller's refuse application or the plain
+# default, with the reason in pagi.file_failure. The protocol fields a
+# status requires (Allow, Content-Range) are File's to set, whoever answers:
+# they replace any of the same name, on a copy of the response start.
+async sub _refuse {
+    my ($self, $scope, $send, $reason, @fields) = @_;
+    my $refusal = $self->{refuse} // $self->{_default_refusal}{$reason};
+    my %ours = map { lc($_->[0]) => 1 } @fields;
+    my $stamped_send = !@fields ? $send : async sub {
+        my ($event) = @_;
+        if ($event->{type} eq 'http.response.start') {
+            $event = {
+                %$event,
+                headers => [
+                    (grep { !$ours{lc $_->[0]} } @{ $event->{headers} // [] }),
+                    @fields,
+                ],
+            };
+        }
+        await $send->($event);
+    };
     my $receive = sub {
         return Future->done({ type => 'http.disconnect' });
     };
-    return await PAGI::Utils::invoke_app(
-        $response, $scope, $receive, $send,
+    return await $refusal->(
+        { %$scope, 'pagi.file_failure' => $reason }, $receive, $stamped_send,
     );
 }
 
@@ -506,13 +562,11 @@ response or file event. The component performs no production logging.
 
 =head1 CONFIGURATION
 
-Stock 403, 404, 405, and 416 errors are rendered by L<PAGI::Pages> and negotiate
-among HTML, problem JSON, and plain text from the request C<Accept> header.
-Unsafe, hidden, or unreadable paths are 403; missing paths and unintercepted
-directories are 404; and unsupported methods are 405. These defaults are
-non-cacheable. Only exact uppercase C<GET> and C<HEAD> methods are supported;
-405 responses advertise C<GET, HEAD>, and 416 responses include
-the known representation length. After safe selection, successful file
+Refusals are plain text by default (see L</refuse>): unsafe, hidden, or
+unreadable paths are 403; missing paths and unintercepted directories are 404;
+and unsupported methods are 405. Only exact uppercase C<GET> and C<HEAD>
+methods are supported; 405 responses advertise C<GET, HEAD>, and 416 responses
+include the known representation length. After safe selection, successful file
 metadata, MIME selection, streaming, caching, and range planning are delegated
 to L<PAGI::Response::File>. This component retains its C<default_type> seam for
 unknown suffixes.

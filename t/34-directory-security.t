@@ -204,12 +204,7 @@ subtest 'Directory adds only eligible listings over File request handling' => su
     });
     is($missing->status, 404,
         'missing directory candidate uses File not-found');
-    is($missing->json, {
-        type   => 'about:blank',
-        title  => 'Not Found',
-        status => 404,
-        detail => 'The requested resource was not found.',
-    }, 'missing Result uses the stock safe problem body');
+    is($missing->text, 'Not Found', 'missing Result uses the plain stock body');
     unlike($missing->content, qr/missing\.txt|\Q$root\E/,
         'missing response does not disclose request or filesystem paths');
     is($component->locate_calls, 1, 'missing request locates exactly once');
@@ -712,7 +707,7 @@ subtest 'non-UTF-8 byte filenames are omitted without corrupting listings' => su
         'JSON deterministically omits the unrepresentable filename');
 };
 
-subtest 'listing permission failure uses Pages forbidden where supported' => sub {
+subtest 'listing permission failure uses the plain File forbidden where supported' => sub {
     my $root = tempdir(CLEANUP => 1);
     my $locked = File::Spec->catdir($root, 'locked');
     mkdir $locked or die "Cannot create $locked: $!";
@@ -737,9 +732,9 @@ subtest 'listing permission failure uses Pages forbidden where supported' => sub
     die $permission_error if defined($permission_error) && length($permission_error);
 
     is($permission_response->status, 403,
-        'opendir permission failure uses Pages forbidden');
-    is($permission_response->content_type, 'application/problem+json',
-        'listing permission failure preserves Pages negotiation');
+        'opendir permission failure is forbidden');
+    is($permission_response->text, 'Forbidden',
+        'listing permission failure uses the plain File refusal');
 
 };
 

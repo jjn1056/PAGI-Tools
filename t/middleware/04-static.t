@@ -105,35 +105,25 @@ subtest 'Static delegates owned errors to File without changing seams' => sub {
     my $missing = $client->get('/private/missing.txt',
         headers => { Accept => 'application/problem+json' });
     is($missing->status, 404, 'owned missing file keeps its status');
-    is($missing->content_type, 'application/problem+json',
-        'owned missing file negotiates a problem response');
-    is($missing->json, {
-        type   => 'about:blank',
-        title  => 'Not Found',
-        status => 404,
-        detail => 'The requested resource was not found.',
-    }, 'Static uses the safe stock missing body');
+    is($missing->content_type, 'text/plain; charset=utf-8',
+        'owned missing file is plain text whatever the Accept');
+    is($missing->text, 'Not Found', 'Static uses the plain stock missing body');
     unlike($missing->content, qr/private|missing\.txt|\Q$test_root\E/,
         'Static missing response does not disclose paths');
-    is($missing->header('Cache-Control'), 'no-store',
-        'Static missing response is not stored');
-    is($missing->header('Vary'), 'Accept',
-        'Static missing response records negotiation');
 
     my $forbidden = $client->get('/../../../etc/passwd',
         headers => { Accept => 'text/html' });
     is($forbidden->status, 403, 'unsafe path keeps its forbidden status');
-    is($forbidden->content_type, 'text/html; charset=utf-8',
-        'unsafe path can negotiate stock HTML');
+    is($forbidden->content_type, 'text/plain; charset=utf-8',
+        'unsafe path is plain text whatever the Accept');
     unlike($forbidden->text, qr/etc\/passwd|\Q$test_root\E/,
-        'forbidden HTML does not disclose paths');
+        'forbidden response does not disclose paths');
 
     my $text_missing = $client->get('/absent.txt',
         headers => { Accept => 'text/plain' });
     is($text_missing->content_type, 'text/plain; charset=utf-8',
-        'owned missing response can negotiate stock text');
-    like($text_missing->text, qr/^404 Not Found\n/,
-        'text response identifies the stock status safely');
+        'owned missing response is plain text');
+    is($text_missing->text, 'Not Found', 'text response identifies the stock status safely');
 
     my $range = $client->get('/hello.txt', headers => {
         Accept => 'application/problem+json', Range => 'bytes=1000-2000',

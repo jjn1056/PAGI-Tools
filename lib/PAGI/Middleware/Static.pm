@@ -92,6 +92,12 @@ paths never pass through.
 
 Array of index file names to try for directory requests.
 
+=item * refuse (default: File's plain-text refusals)
+
+Passed to the File engine: an application that answers File's refusals
+instead of its plain-text defaults, finding the reason in
+C<pagi.file_failure>. See L<PAGI::App::File/refuse>.
+
 =item * allow_hidden (default: 0)
 
 Hidden request components are forbidden by default.  Set C<allow_hidden =E<gt>
@@ -136,6 +142,7 @@ sub _init {
         index         => $config->{index} // ['index.html', 'index.htm'],
         handle_ranges => $config->{handle_ranges} // 1,
         allow_hidden  => $config->{allow_hidden} // 0,
+        (exists $config->{refuse} ? (refuse => $config->{refuse}) : ()),
     );
 }
 
@@ -198,8 +205,8 @@ __END__
 
 The shared File engine forbids unsafe request paths, traversal components,
 mixed-separator traversal, null bytes, hidden components by default, and
-unreadable files.  Forbidden Results always receive File's negotiated 403
-response, even when C<pass_through> is enabled.
+unreadable files.  Forbidden Results always receive File's 403 refusal, even
+when C<pass_through> is enabled.
 
 As with L<PAGI::App::File>, configured symbolic links are trusted and may point
 outside the lexical root.  Use a dedicated tree that untrusted principals
@@ -218,7 +225,7 @@ same scope reference and original C<path>.
 
 L<PAGI::App::File> owns MIME selection, the default
 C<application/octet-stream> type, file metadata, ETags, conditional 304
-responses, byte ranges, HEAD boundaries, negotiated errors, and raw C<file>
+responses, byte ranges, HEAD boundaries, its refusals, and raw C<file>
 events.  Static does not open a filehandle, buffer a successful file into
 memory, or implement a second response sender.
 

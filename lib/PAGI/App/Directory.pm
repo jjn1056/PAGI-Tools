@@ -161,9 +161,8 @@ async sub _send_listing {
     my $open_errno = 0 + $!;
     my $open_error = "$!";
     unless ($dh) {
-        return await PAGI::App::File::_respond_page(
-            $scope, $send, 'forbidden',
-        ) if $open_errno == EACCES || $open_errno == EPERM;
+        return await $self->_refuse($scope, $send, 'forbidden')
+            if $open_errno == EACCES || $open_errno == EPERM;
         croak "Cannot open directory '$dir_path': $open_error";
     }
 
@@ -283,15 +282,15 @@ inherited C<locate> result for each GET or HEAD request and delegates every
 non-directory result to inherited C<serve>.
 
 L<PAGI::App::File> therefore remains the owner of safe file and index
-selection plus negotiated 403 and 404 responses, while selected files use the
+selection plus its 403 and 404 refusals (L<PAGI::App::File/refuse>), while selected files use the
 shared L<PAGI::Response::File> ETag, range, conditional, and file-event plan.
 The parent also handles unsupported methods before location and returns
-the negotiated 405 response with C<Allow: GET, HEAD>.  Directory listings are
+its 405 refusal with C<Allow: GET, HEAD>.  Directory listings are
 available only to GET and HEAD.  HEAD preserves the matching GET status and
 headers while emitting no listing bytes.
 
-An C<opendir> permission error uses the negotiated L<PAGI::Pages> forbidden
-response.  Unexpected directory listing I/O failures propagate to the server.
+An C<opendir> permission error is File's C<forbidden> refusal, so a C<refuse>
+application passed to Directory answers it too.  Unexpected directory listing I/O failures propagate to the server.
 As with L<PAGI::App::File>, configured symbolic links are trusted and may point
 outside the lexical root; use a tree that untrusted principals cannot modify.
 HTML listings declare and emit UTF-8; JSON listings are likewise UTF-8 octets.

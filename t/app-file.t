@@ -11,6 +11,7 @@ use lib 'lib';
 use lib "$Bin/app-file-fixtures/one/lib";
 use lib "$Bin/app-file-fixtures/two/lib";
 use PAGI::App::File;
+use PAGI::Response::Text ();
 use PAGI::Test::Client;
 use TestApps::AppFile::One ();
 use TestApps::AppFile::Two ();
@@ -80,7 +81,7 @@ sub assert_head_parity {
     return;
 }
 
-subtest 'stock file errors negotiate through Pages without changing file outcomes' => sub {
+subtest 'stock file errors are plain text without changing file outcomes' => sub {
     my $root = tempdir(CLEANUP => 1);
     my $file = File::Spec->catfile($root, 'sample.txt');
     open my $fh, '>', $file or die "cannot create $file: $!";
@@ -99,20 +100,11 @@ subtest 'stock file errors negotiate through Pages without changing file outcome
     my $missing = $client->get('/private/missing.txt',
         headers => { Accept => 'application/problem+json' });
     is($missing->status, 404, 'missing file keeps its status');
-    is($missing->content_type, 'application/problem+json',
-        'missing file negotiates a problem response');
-    is($missing->json, {
-        type   => 'about:blank',
-        title  => 'Not Found',
-        status => 404,
-        detail => 'The requested resource was not found.',
-    }, 'missing file uses the safe stock problem body');
+    is($missing->content_type, 'text/plain; charset=utf-8',
+        'missing file is plain text whatever the Accept');
+    is($missing->text, 'Not Found', 'missing file uses the plain stock body');
     unlike($missing->content, qr/private|missing\.txt|\Q$root\E/,
         'missing response does not disclose the request or filesystem path');
-    is($missing->header('Cache-Control'), 'no-store',
-        'missing response is not stored');
-    is($missing->header('Vary'), 'Accept',
-        'missing response records negotiation');
 
     my $method = $client->post('/sample.txt',
         headers => { Accept => 'application/problem+json' });
@@ -131,21 +123,19 @@ subtest 'stock file errors negotiate through Pages without changing file outcome
         headers => { Accept => 'text/plain' });
     is($bad->status, 403, 'null byte is forbidden by request-path policy');
     is($bad->content_type, 'text/plain; charset=utf-8',
-        'null-byte rejection can negotiate stock text');
-    like($bad->text, qr/^403 Forbidden\n/,
-        'text response identifies the stock status safely');
+        'null-byte rejection is plain text');
+    is($bad->text, 'Forbidden', 'text response identifies the stock status safely');
     unlike($bad->text, qr/bad|name|\Q$root\E/,
         'null-byte response does not disclose request or filesystem paths');
 
     my $forbidden = $client->get('/.secret',
         headers => { Accept => 'text/html' });
     is($forbidden->status, 403, 'hidden component keeps its forbidden status');
-    is($forbidden->content_type, 'text/html; charset=utf-8',
-        'forbidden response can negotiate stock HTML');
-    like($forbidden->text, qr/<title>403 Forbidden<\/title>/,
-        'HTML response identifies the stock status');
+    is($forbidden->content_type, 'text/plain; charset=utf-8',
+        'forbidden response is plain text whatever the Accept');
+    is($forbidden->text, 'Forbidden', 'and identifies the stock status');
     unlike($forbidden->text, qr/\.secret|\Q$root\E/,
-        'HTML response does not disclose the hidden or filesystem path');
+        'and does not disclose the hidden or filesystem path');
 
     my $full = $client->get('/sample.txt');
     is($full->status, 200, 'full file request still succeeds');
@@ -608,6 +598,72 @@ subtest 'development output does not rewrite a served file event' => sub {
     is($stdout, 'PAGI::App::File: attempting '
         . File::Spec->catfile($one_static, 'marker.txt') . "\n",
         'native request emits the same one-line diagnostic');
+};
+
+sub file_fixture {
+    my $root = tempdir(CLEANUP => 1);
+    my $file = File::Spec->catfile($root, 'sample.txt');
+    open my $fh, '>', $file or die "cannot create $file: $!";
+    print {$fh} '0123456789';
+    close $fh or die "cannot close $file: $!";
+    return $root;
+}
+
+subtest 'File refuses with plain text and the protocol fields' => sub {
+    my $client = PAGI::Test::Client->new(app => PAGI::App::File->new(root => file_fixture()));
+    my %accept = (headers => { Accept => 'application/problem+json' });
+    my $missing = $client->get('/missing.txt', %accept);
+    is [$missing->status, $missing->content_type, $missing->text],
+        [404, 'text/plain; charset=utf-8', 'Not Found'], 'missing: plain 404 whatever the Accept';
+    my $forbidden = $client->get('/../etc/passwd', %accept);
+    is [$forbidden->status, $forbidden->text], [403, 'Forbidden'], 'forbidden: plain 403';
+    my $method = $client->post('/sample.txt', %accept);
+    is [$method->status, $method->text, $method->header('Allow')],
+        [405, 'Method Not Allowed', 'GET, HEAD'], 'wrong method: plain 405 with Allow';
+    my $range = $client->get('/sample.txt',
+        headers => { Accept => 'application/problem+json', Range => 'bytes=20-30' });
+    is [$range->status, $range->text, $range->header('Content-Range')],
+        [416, 'Range Not Satisfiable', 'bytes */10'], 'bad range: plain 416 with Content-Range';
+};
+
+subtest "File's documented refuse example runs as published" => sub {
+    open my $fh, '<', 'lib/PAGI/App/File.pm' or die $!;
+    my $pod = do { local $/; <$fh> };
+    my ($example) = $pod =~ /^((?:    [^\n]*\n|\n)*?    [^\n]*pagi\.file_failure[^\n]*\n(?:    [^\n]*\n|\n)*)/m;
+    ok defined $example, 'File documents a refuse example that reads pagi.file_failure';
+    $example =~ s/^    //mg;
+    my $root = file_fixture();
+    my $files = eval "use v5.40; use Future::AsyncAwait; $example; \$files";
+    ok $files, 'the example builds a File' or diag $@;
+
+    my $client = PAGI::Test::Client->new(app => $files);
+    my $missing = $client->get('/missing.txt', headers => { Accept => 'text/html' });
+    is [$missing->status, $missing->content_type], [404, 'text/html; charset=utf-8'],
+        'the branded Pages 404 answers a missing file';
+    my $method = $client->post('/sample.txt');
+    is [$method->status, $method->text, $method->header('Allow')],
+        [405, 'Method Not Allowed', 'GET, HEAD'], 'the 405 still carries the Allow File sets';
+    my $range = $client->get('/sample.txt', headers => { Range => 'bytes=20-30' });
+    is [$range->status, $range->header('Content-Range')], [416, 'bytes */10'],
+        'the 416 still carries the Content-Range File sets';
+};
+
+subtest 'refuse reaches Static and Directory, and rejects plain values' => sub {
+    require PAGI::Middleware::Static;
+    require PAGI::App::Directory;
+    my $refuse = PAGI::Response::Text->new('nope', status => 404);
+    my $static = PAGI::Middleware::Static->new(root => file_fixture(), refuse => $refuse)
+        ->wrap(sub { die 'the inner app is not reached' });
+    is(PAGI::Test::Client->new(app => $static)->get('/missing.txt')->text, 'nope',
+        'Static hands refuse to its File engine');
+    my $directory = PAGI::App::Directory->new(root => file_fixture(), refuse => $refuse);
+    is(PAGI::Test::Client->new(app => $directory)->get('/missing.txt')->text, 'nope',
+        'Directory inherits it');
+    for my $value (undef, '', 0, 'yes') {
+        my $label = defined $value ? "'$value'" : 'undef';
+        like dies { PAGI::App::File->new(root => '.', refuse => $value) },
+            qr/\QFile 'refuse' must be an application\E/, "$label is refused";
+    }
 };
 
 done_testing;

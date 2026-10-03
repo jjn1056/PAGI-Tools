@@ -30,6 +30,10 @@
     logs, and HTTPSRedirect redirects to, the encoded request URI.
   - Stock error and redirect responses from first-party components
     negotiate HTML, problem JSON or text through Pages.
+  - App::File (and Directory and Static through it) refuses with 0.002002's
+    plain text, keeping the 405's Allow and the 416's Content-Range; its
+    refuse option replaces all four refusals, with the reason in
+    pagi.file_failure -- a branded PAGI::Pages page is one choice.
   - The Router's and Endpoint::HTTP's 405 is plain text with Allow, as in
     0.002002; an endpoint class answers it differently by overriding
     method_not_allowed, and the endpoint still sets Allow.

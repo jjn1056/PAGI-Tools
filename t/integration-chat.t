@@ -207,8 +207,8 @@ SKIP: {
     is($res{css}->content_type, 'text/css', 'with file MIME types');
     like($res{css}->text, qr/--accent-color:\s*#4a90d9/, 'and file contents');
     is($res{asset_missing}->status, 404, 'an unknown asset answers 404');
-    is($res{asset_missing}->content_type, 'application/problem+json',
-        'honoring problem JSON negotiation');
+    is([$res{asset_missing}->content_type, $res{asset_missing}->text],
+        ['text/plain; charset=utf-8', 'Not Found'], "with File's plain refusal");
 
     like($stderr, qr/\[lifespan\] Application starting up/, 'startup runs');
     like($stderr, qr/\[lifespan\] Application shutting down/, 'shutdown runs');
