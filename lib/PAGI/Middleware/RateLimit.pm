@@ -226,24 +226,10 @@ async sub _send_rate_limited {
         ['X-RateLimit-Remaining', 0],
         ['X-RateLimit-Reset',     $reset],
     );
-    my %ours = map { lc($_->[0]) => 1 } @fields;
 
-    # The rate-limit fields are this middleware's, whoever writes the body:
-    # they replace any the refusing application set, on a copy of its event.
-    my $stamped_send = async sub {
-        my ($event) = @_;
-        if ($event->{type} eq 'http.response.start') {
-            $event = {
-                %$event,
-                headers => [
-                    (grep { !$ours{lc $_->[0]} } @{$event->{headers} // []}),
-                    @fields,
-                ],
-            };
-        }
-        await $send->($event);
-    };
-    await $self->{refuse}->($scope, $receive, $stamped_send);
+    # The rate-limit fields are this middleware's, whoever writes the body.
+    await $self->{refuse}->($scope, $receive,
+        PAGI::Utils::_send_with_fields($send, @fields));
 }
 
 # Class method to reset rate limits (useful for testing)

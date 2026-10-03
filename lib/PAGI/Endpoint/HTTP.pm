@@ -85,19 +85,8 @@ sub _with_allow {
     my $app = PAGI::Utils::to_app($application);
     return PAGI::Utils::as_app_object(async sub {
         my ($scope, $receive, $send) = @_;
-        await $app->($scope, $receive, async sub {
-            my ($event) = @_;
-            if ($event->{type} eq 'http.response.start') {
-                $event = {
-                    %$event,
-                    headers => [
-                        (grep { lc($_->[0]) ne 'allow' } @{ $event->{headers} // [] }),
-                        ['Allow', $allow],
-                    ],
-                };
-            }
-            await $send->($event);
-        });
+        await $app->($scope, $receive,
+            PAGI::Utils::_send_with_fields($send, ['Allow', $allow]));
     });
 }
 

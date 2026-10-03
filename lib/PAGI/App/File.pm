@@ -482,25 +482,12 @@ sub _get_header {
 async sub _refuse {
     my ($self, $scope, $send, $reason, @fields) = @_;
     my $refusal = $self->{refuse} // $self->{_default_refusal}{$reason};
-    my %ours = map { lc($_->[0]) => 1 } @fields;
-    my $stamped_send = !@fields ? $send : async sub {
-        my ($event) = @_;
-        if ($event->{type} eq 'http.response.start') {
-            $event = {
-                %$event,
-                headers => [
-                    (grep { !$ours{lc $_->[0]} } @{ $event->{headers} // [] }),
-                    @fields,
-                ],
-            };
-        }
-        await $send->($event);
-    };
     my $receive = sub {
         return Future->done({ type => 'http.disconnect' });
     };
     return await $refusal->(
-        { %$scope, 'pagi.file_failure' => $reason }, $receive, $stamped_send,
+        { %$scope, 'pagi.file_failure' => $reason }, $receive,
+        PAGI::Utils::_send_with_fields($send, @fields),
     );
 }
 
