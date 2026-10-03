@@ -143,6 +143,8 @@ equivalent.
 
 =head1 CONFIGURATION
 
+An option not listed here dies at construction.
+
 =over 4
 
 =item * expire (default: 3600)
@@ -434,6 +436,8 @@ sub _init {
         require PAGI::Middleware::Session::Store::Memory;
         $self->{store} = PAGI::Middleware::Session::Store::Memory->new();
     }
+    PAGI::Utils::_reject_unknown_options('Session', $config,
+        qw(expire secret state store));
 }
 
 sub wrap {

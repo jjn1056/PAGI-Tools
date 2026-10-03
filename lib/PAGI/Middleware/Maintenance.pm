@@ -33,6 +33,8 @@ WebSocket and SSE connections pass through.
 
 =head1 CONFIGURATION
 
+An option not listed here dies at construction.
+
 =over 4
 
 =item * enabled (default: 0)
@@ -93,6 +95,8 @@ sub _init {
     $self->{bypass_ips} = $config->{bypass_ips} // [];
     $self->{bypass_paths} = $config->{bypass_paths} // [];
     $self->{retry_after} = $config->{retry_after};
+    PAGI::Utils::_reject_unknown_options('Maintenance', $config,
+        qw(bypass_ips bypass_paths enabled response retry_after));
 }
 
 sub wrap {

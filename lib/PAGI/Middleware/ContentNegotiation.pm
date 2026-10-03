@@ -55,6 +55,8 @@ L<PAGI::Request/preferred_type>.
 
 =head1 CONFIGURATION
 
+An option not listed here dies at construction.
+
 =over 4
 
 =item * supported_types (required)
@@ -109,6 +111,8 @@ sub _init {
         )->to_app
         : ref($refuse) ? $refuse
         : undef;
+    PAGI::Utils::_reject_unknown_options('ContentNegotiation', $config,
+        qw(refuse supported_types));
 }
 
 sub wrap {

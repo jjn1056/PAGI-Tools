@@ -215,7 +215,7 @@ subtest 'ErrorHandler answers plain text' => sub {
 subtest 'ErrorHandler rejects the removed content_type option' => sub {
     like dies {
         PAGI::Middleware::ErrorHandler->new(content_type => 'text/plain')
-    }, qr/unknown ErrorHandler option 'content_type'/,
+    }, qr/ErrorHandler has unknown option 'content_type'/,
         'fixed representations use a custom handler';
 };
 

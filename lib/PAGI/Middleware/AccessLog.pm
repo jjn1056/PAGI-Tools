@@ -31,6 +31,8 @@ It captures client IP, method, path, status, response size, and timing.
 
 =head1 CONFIGURATION
 
+An option not listed here dies at construction.
+
 =over 4
 
 =item * logger (default: warns to STDERR)
@@ -50,6 +52,8 @@ sub _init {
 
     $self->{logger} = $config->{logger} // sub { warn @_ };
     $self->{format} = $config->{format} // 'combined';
+    PAGI::Utils::_reject_unknown_options('AccessLog', $config,
+        qw(format logger));
 }
 
 sub wrap {

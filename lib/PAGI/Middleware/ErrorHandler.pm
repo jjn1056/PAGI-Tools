@@ -12,8 +12,6 @@ use PAGI::Request;
 use PAGI::ErrorContext ();
 use PAGI::Utils ();
 
-my %PUBLIC_OPTION = map { $_ => 1 } qw(development on_error status handler);
-
 # Statuses HTTP says must carry a field the built-in answer cannot supply.
 my %FIELD_REQUIRED = (
     401 => 'WWW-Authenticate', 405 => 'Allow',
@@ -57,6 +55,8 @@ reporting of your own, such as an error tracker; see
 L<PAGI::Tools::Cookbook/Who reports an application error>.
 
 =head1 CONFIGURATION
+
+An option not listed here dies at construction.
 
 =over 4
 
@@ -119,11 +119,6 @@ answer does not pass through inner middleware's send wrappers.
 sub _init {
     my ($self, $config) = @_;
 
-    for my $key (keys %$config) {
-        croak "unknown ErrorHandler option '$key'"
-            unless $PUBLIC_OPTION{$key};
-    }
-
     $self->{development} = $config->{development} // 0;
     $self->{on_error}    = $config->{on_error};
     $self->{status}      = $config->{status} // 500;
@@ -141,6 +136,8 @@ sub _init {
         . "$FIELD_REQUIRED{$self->{status}}, which the built-in answer cannot "
         . 'supply; a handler is required'
         if $FIELD_REQUIRED{$self->{status}} && !$self->_has_handler;
+    PAGI::Utils::_reject_unknown_options('ErrorHandler', $config,
+        qw(development handler on_error status));
 }
 
 sub _has_handler { $_[0]{handler_code} || $_[0]{handler_app} ? 1 : 0 }

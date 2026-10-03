@@ -6,6 +6,7 @@ use parent 'PAGI::Middleware';
 use Future::AsyncAwait;
 use PAGI::Headers ();
 use PAGI::Utils::Headers qw(etag_matches);
+use PAGI::Utils ();
 
 =head1 NAME
 
@@ -26,6 +27,8 @@ PAGI::Middleware::ConditionalGet - Conditional GET/HEAD request handling
 PAGI::Middleware::ConditionalGet returns 304 Not Modified for GET/HEAD
 requests when the client's conditional headers match. Supports:
 
+It takes no options; any option dies at construction.
+
 - If-None-Match: weakly compare every field value against a valid ETag;
   wildcard matches an eligible representation even without an ETag
 - If-Modified-Since: compare against Last-Modified only when
@@ -36,6 +39,11 @@ representation responses on exact HTTP GET/HEAD requests can become 304;
 204 and 205, errors, redirects, and other protocols pass through.
 
 =cut
+
+sub _init {
+    my ($self, $config) = @_;
+    PAGI::Utils::_reject_unknown_options('ConditionalGet', $config);
+}
 
 sub wrap {
     my ($self, $app) = @_;

@@ -37,6 +37,8 @@ Non-HTTP scopes continue to pass through unchanged without Host validation.
 
 =head1 CONFIGURATION
 
+An option not listed here dies at construction.
+
 =over 4
 
 =item * hosts (required)
@@ -89,6 +91,8 @@ sub _init {
         missing => PAGI::Response::Text->new('Missing Host header', status => 400)->to_app,
         invalid => PAGI::Response::Text->new('Invalid Host header', status => 400)->to_app,
     };
+    PAGI::Utils::_reject_unknown_options('TrustedHosts', $config,
+        qw(allow_empty hosts refuse));
 }
 
 sub _compile_pattern {

@@ -45,6 +45,8 @@ Malformed existing members raise rather than losing a cache dependency.
 
 =head1 CONFIGURATION
 
+An option not listed here dies at construction.
+
 =over 4
 
 =item * origins (default: ['*'])
@@ -91,6 +93,8 @@ sub _init {
            . "This allows any website to make credentialed cross-origin requests. "
            . "Consider specifying explicit origins.\n";
     }
+    PAGI::Utils::_reject_unknown_options('CORS', $config,
+        qw(credentials expose_headers headers max_age methods origins));
 }
 
 sub wrap {

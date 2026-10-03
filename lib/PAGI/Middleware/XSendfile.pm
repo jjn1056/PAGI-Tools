@@ -114,6 +114,8 @@ Then use:
 
 =head1 CONFIGURATION
 
+An option not listed here dies at construction.
+
 =over 4
 
 =item * type (required)
@@ -374,6 +376,8 @@ sub _init {
     $self->{mapping_type} = $mapping_type;
     $self->{mapping}      = $mapping;
     $self->{variation} = $config->{variation};
+    PAGI::Utils::_reject_unknown_options('XSendfile', $config,
+        qw(mapping type variation));
 }
 
 sub wrap {

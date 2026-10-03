@@ -6,6 +6,7 @@ use parent 'PAGI::Middleware';
 use Digest::MD5 qw(md5_hex);
 use PAGI::Middleware::BufferedResponse qw(buffer_whole_response);
 use PAGI::Utils::Headers qw(format_etag);
+use PAGI::Utils ();
 
 =head1 NAME
 
@@ -27,6 +28,8 @@ the response body content. Works best with buffered (non-streaming) responses.
 
 =head1 CONFIGURATION
 
+An option not listed here dies at construction.
+
 =over 4
 
 =item * weak (default: 0)
@@ -41,6 +44,8 @@ sub _init {
     my ($self, $config) = @_;
 
     $self->{weak} = $config->{weak} // 0;
+    PAGI::Utils::_reject_unknown_options('ETag', $config,
+        qw(weak));
 }
 
 sub wrap {

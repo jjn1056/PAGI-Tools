@@ -407,6 +407,18 @@ sub _refuse_option {
     return _application_option($component, $config, 'refuse', $may_decide);
 }
 
+# A PAGI-Tools middleware's last step in _init: an option it does not know is
+# a misspelling or a renamed option, and is never silently ignored. Run after
+# the middleware's own checks, so an option it removed keeps its own message.
+sub _reject_unknown_options {
+    my ($name, $config, @known) = @_;
+    my %known = map { $_ => 1 } @known;
+    for my $key (sort keys %$config) {
+        croak "$name has unknown option '$key'" unless $known{$key};
+    }
+    return;
+}
+
 # The same for any option whose value replaces a component's own response,
 # such as Maintenance's `response`.
 sub _application_option {

@@ -5,6 +5,7 @@ use warnings;
 use parent 'PAGI::Middleware';
 use Future::AsyncAwait;
 use Time::HiRes qw(time);
+use PAGI::Utils ();
 
 =head1 NAME
 
@@ -29,6 +30,8 @@ monitoring and debugging.
 
 =head1 CONFIGURATION
 
+An option not listed here dies at construction.
+
 =over 4
 
 =item * header (default: 'X-Runtime')
@@ -48,6 +51,8 @@ sub _init {
 
     $self->{header}    = $config->{header} // 'X-Runtime';
     $self->{precision} = $config->{precision} // 6;
+    PAGI::Utils::_reject_unknown_options('Runtime', $config,
+        qw(header precision));
 }
 
 sub wrap {

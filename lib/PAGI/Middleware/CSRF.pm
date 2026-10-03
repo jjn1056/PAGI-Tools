@@ -44,6 +44,8 @@ applications.
 
 =head1 CONFIGURATION
 
+An option not listed here dies at construction.
+
 =over 4
 
 =item * secret (required)
@@ -108,6 +110,8 @@ sub _init {
         )->to_app
         : ref($refuse) ? $refuse
         : undef;
+    PAGI::Utils::_reject_unknown_options('CSRF', $config,
+        qw(cookie_name refuse safe_methods secret secure token_header));
 }
 
 sub wrap {

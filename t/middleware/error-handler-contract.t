@@ -130,7 +130,7 @@ subtest 'public defaults and options are exact and environment-independent' => s
     for my $option (qw(content_type pages as renderer unknown)) {
         like dies {
             PAGI::Middleware::ErrorHandler->new($option => 'value')
-        }, qr/unknown ErrorHandler option '\Q$option\E'/,
+        }, qr/ErrorHandler has unknown option '\Q$option\E'/,
             "$option is not a public ErrorHandler option";
     }
     my ($future, $events) = invoke($middleware, async sub {
@@ -534,7 +534,7 @@ subtest 'private development resolver is not a public option' => sub {
         PAGI::Middleware::ErrorHandler->new(
             _development_resolver => sub { 1 },
         )
-    }, qr/unknown ErrorHandler option '_development_resolver'/,
+    }, qr/ErrorHandler has unknown option '_development_resolver'/,
         'ordinary construction rejects the private key';
 };
 

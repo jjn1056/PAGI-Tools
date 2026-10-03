@@ -4,6 +4,7 @@ use strict;
 use warnings;
 use parent 'PAGI::Middleware';
 use Future::AsyncAwait;
+use PAGI::Utils ();
 
 =head1 NAME
 
@@ -28,6 +29,8 @@ PAGI::Middleware::SecurityHeaders adds common security-related HTTP headers
 to responses. These headers help protect against various web vulnerabilities.
 
 =head1 CONFIGURATION
+
+An option not listed here dies at construction.
 
 =over 4
 
@@ -79,6 +82,10 @@ sub _init {
     $self->{strict_transport_security}  = $config->{strict_transport_security};
     $self->{content_security_policy}    = $config->{content_security_policy};
     $self->{permissions_policy}         = $config->{permissions_policy};
+    PAGI::Utils::_reject_unknown_options('SecurityHeaders', $config,
+        qw(content_security_policy permissions_policy referrer_policy
+           strict_transport_security x_content_type_options x_frame_options
+           x_xss_protection));
 }
 
 sub wrap {

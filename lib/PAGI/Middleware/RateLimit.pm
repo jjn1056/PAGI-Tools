@@ -45,6 +45,8 @@ this middleware does not have.
 
 =head1 CONFIGURATION
 
+An option not listed here dies at construction.
+
 =over 4
 
 =item * requests_per_second (default: 10)
@@ -126,6 +128,9 @@ sub _init {
     # Either way the middleware adds the rate-limit fields to its response.
     $self->{refuse} = PAGI::Utils::_refuse_option('RateLimit', $config)
         // PAGI::Response::Text->new('Rate limit exceeded. Try again later.', status => 429)->to_app;
+    PAGI::Utils::_reject_unknown_options('RateLimit', $config,
+        qw(burst cleanup_interval key_generator max_buckets refuse
+           requests_per_second));
 }
 
 sub wrap {

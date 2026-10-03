@@ -75,6 +75,8 @@ mode.
 
 =head1 CONFIGURATION
 
+An option not listed here dies at construction.
+
 =over 4
 
 =item * strict (default: 0)
@@ -102,6 +104,8 @@ sub _init {
     $self->{strict} = $config->{strict} // 0;
     $self->{on_warning} = $config->{on_warning};
     $self->{enabled} = $config->{enabled} // 1;
+    PAGI::Utils::_reject_unknown_options('Lint', $config,
+        qw(enabled on_warning strict));
 }
 
 my %H1_CONNECTION_SPECIFIC_HEADER = map { $_ => 1 } qw(connection transfer-encoding);

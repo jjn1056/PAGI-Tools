@@ -5,6 +5,7 @@ use warnings;
 use parent 'PAGI::Middleware';
 use Future::AsyncAwait;
 use Cookie::Baker ();
+use PAGI::Utils ();
 
 =head1 NAME
 
@@ -36,6 +37,8 @@ It also provides a helper for setting response cookies.
 
 =head1 CONFIGURATION
 
+An option not listed here dies at construction.
+
 =over 4
 
 =item * secret (optional)
@@ -50,6 +53,8 @@ sub _init {
     my ($self, $config) = @_;
 
     $self->{secret} = $config->{secret};
+    PAGI::Utils::_reject_unknown_options('Cookie', $config,
+        qw(secret));
 }
 
 sub wrap {

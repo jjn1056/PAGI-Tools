@@ -37,6 +37,8 @@ through unchanged.
 
 =head1 CONFIGURATION
 
+An option not listed here dies at construction.
+
 =over 4
 
 =item * trusted_proxies (default: ['127.0.0.1', '::1'])
@@ -96,6 +98,8 @@ sub _init {
     # The caller's refusing application, or a plain-text default built once.
     $self->{refuse} = PAGI::Utils::_refuse_option('ReverseProxy', $config)
         // PAGI::Response::Text->new('Invalid X-Forwarded-Host header', status => 400)->to_app;
+    PAGI::Utils::_reject_unknown_options('ReverseProxy', $config,
+        qw(refuse trust_all trusted_proxies));
 }
 
 sub wrap {

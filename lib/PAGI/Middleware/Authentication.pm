@@ -10,14 +10,11 @@ use Scalar::Util qw(blessed);
 use PAGI::Auth qw(auth);
 use PAGI::Request;
 use PAGI::Utils::Middleware qw(clone_scope);
+use PAGI::Utils ();
 
 sub _init {
     my ($self, $config) = @_;
 
-    for my $name (keys %$config) {
-        croak "Authentication has unknown option '$name'"
-            unless $name eq 'backend';
-    }
     croak 'Authentication requires backend'
         unless exists $config->{backend};
 
@@ -27,6 +24,8 @@ sub _init {
             || (blessed($backend) && $backend->can('authenticate'));
 
     $self->{backend} = $backend;
+    PAGI::Utils::_reject_unknown_options('Authentication', $config,
+        qw(backend));
 }
 
 sub wrap {

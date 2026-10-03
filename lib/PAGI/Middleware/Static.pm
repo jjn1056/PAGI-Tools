@@ -6,6 +6,7 @@ use parent 'PAGI::Middleware';
 use Future;
 use Future::AsyncAwait;
 use PAGI::App::File;
+use PAGI::Utils ();
 
 =head1 NAME
 
@@ -52,6 +53,8 @@ L<PAGI::App::File> engine constructed with the middleware.  The original
 request scope is never rewritten.
 
 =head1 CONFIGURATION
+
+An option not listed here dies at construction.
 
 =over 4
 
@@ -144,6 +147,8 @@ sub _init {
         allow_hidden  => $config->{allow_hidden} // 0,
         (exists $config->{refuse} ? (refuse => $config->{refuse}) : ()),
     );
+    PAGI::Utils::_reject_unknown_options('Static', $config,
+        qw(allow_hidden handle_ranges index pass_through path refuse root));
 }
 
 sub wrap {

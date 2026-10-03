@@ -4,6 +4,7 @@ use strict;
 use warnings;
 use parent 'PAGI::Middleware';
 use Future::AsyncAwait;
+use PAGI::Utils ();
 
 =head1 NAME
 
@@ -25,6 +26,8 @@ PAGI::Middleware::SSE::Retry adds the C<retry> field to SSE events,
 telling clients how long to wait before reconnecting after a disconnect.
 
 =head1 CONFIGURATION
+
+An option not listed here dies at construction.
 
 =over 4
 
@@ -50,6 +53,8 @@ sub _init {
     $self->{retry} = $config->{retry} // 3000;
     $self->{include_on_start} = $config->{include_on_start} // 1;
     $self->{include_on_events} = $config->{include_on_events} // 0;
+    PAGI::Utils::_reject_unknown_options('SSE::Retry', $config,
+        qw(include_on_events include_on_start retry));
 }
 
 sub wrap {

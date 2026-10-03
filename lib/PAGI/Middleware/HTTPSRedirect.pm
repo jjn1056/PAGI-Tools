@@ -51,6 +51,8 @@ Non-HTTP scopes continue to pass through unchanged without authority handling.
 
 =head1 CONFIGURATION
 
+An option not listed here dies at construction.
+
 =over 4
 
 =item * redirect_code (default: 301)
@@ -122,6 +124,8 @@ sub _init {
         host   => PAGI::Response::Text->new('Invalid Host header', status => 400)->to_app,
         target => PAGI::Response::Text->new('Invalid request target', status => 400)->to_app,
     };
+    PAGI::Utils::_reject_unknown_options('HTTPSRedirect', $config,
+        qw(exclude hsts hsts_max_age redirect_code refuse));
 }
 
 sub wrap {

@@ -4,6 +4,7 @@ use strict;
 use warnings;
 use parent 'PAGI::Middleware';
 use Future::AsyncAwait;
+use PAGI::Utils ();
 
 =head1 NAME
 
@@ -28,6 +29,8 @@ forms (which only support GET and POST) to submit PUT, PATCH, and
 DELETE requests.
 
 =head1 CONFIGURATION
+
+An option not listed here dies at construction.
 
 =over 4
 
@@ -67,6 +70,8 @@ sub _init {
 
     # Build allowed method lookup
     $self->{allowed_lookup} = { map { uc($_) => 1 } @{$self->{allowed_methods}} };
+    PAGI::Utils::_reject_unknown_options('MethodOverride', $config,
+        qw(allowed_methods check_header check_param header param));
 }
 
 sub wrap {
