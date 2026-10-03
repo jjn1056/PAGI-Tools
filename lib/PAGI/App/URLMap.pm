@@ -80,16 +80,14 @@ sub to_app {
                     path      => $new_path,
                     root_path => ($scope->{root_path} // '') . $prefix,
                 };
-                my $returned = $app->($new_scope, $receive, $send);
-                await Future->wrap($returned);
+                await PAGI::Utils::_await_native($app, $new_scope, $receive, $send);
                 return;
             }
         }
 
         # No match - use default or 404
         if ($default) {
-            my $returned = $default->($scope, $receive, $send);
-            await Future->wrap($returned);
+            await PAGI::Utils::_await_native($default, $scope, $receive, $send);
         } else {
             my $type = $scope->{type} // '<missing>';
             croak "URLMap has no default for scope type '$type'"

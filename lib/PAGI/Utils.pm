@@ -345,9 +345,20 @@ sub as_app_object {
 
 async sub invoke_app {
     my ($value, $scope, $receive, $send) = @_;
-    my $app = to_app($value);
-    my $returned = $app->($scope, $receive, $send);
-    return await Future->wrap($returned);
+    return await _await_native(to_app($value), $scope, $receive, $send);
+}
+
+# Runs a native application and passes back what it resolved to. It answers
+# by sending, so a returned response object is the sign of a ($request) handler
+# given where a native application belongs, and fails loudly instead of being
+# dropped.
+async sub _await_native {
+    my ($app, $scope, $receive, $send) = @_;
+    my $returned = await Future->wrap($app->($scope, $receive, $send));
+    croak 'a native ($scope, $receive, $send) application returned a response '
+        . 'instead of sending it; for a ($request) handler use request_response()'
+        if blessed($returned) && $returned->can('to_app');
+    return $returned;
 }
 
 # Resolve a short class name the way middleware() does: a leading '+' names
