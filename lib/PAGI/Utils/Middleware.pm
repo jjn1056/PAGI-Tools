@@ -6,8 +6,9 @@ use Carp qw(croak);
 use Exporter qw(import);
 use Future;
 use Future::AsyncAwait;
+use PAGI::Headers ();
 
-our @EXPORT_OK = qw(clone_scope wrap_send wrap_receive);
+our @EXPORT_OK = qw(clone_scope wrap_send wrap_receive wrap_response_headers);
 
 sub clone_scope {
     my ($scope, $changes) = @_;
@@ -46,6 +47,24 @@ sub wrap_receive {
     return async sub {
         my $returned = $interceptor->($receive);
         return await Future->wrap($returned);
+    };
+}
+
+# The response start's headers are edited on a private copy, and a new event is
+# sent: the event this layer was given, and everything it references, belong
+# to the layer that built it, which may send the same structures again.
+sub wrap_response_headers {
+    my ($send, $editor) = @_;
+    croak 'wrap_response_headers send must be a coderef' unless ref($send) eq 'CODE';
+    croak 'wrap_response_headers editor must be a coderef' unless ref($editor) eq 'CODE';
+    return async sub {
+        my ($event) = @_;
+        if (($event->{type} // '') eq 'http.response.start') {
+            my $headers = PAGI::Headers->new($event->{headers} // []);
+            await Future->wrap($editor->($headers, $event));
+            $event = { %$event, headers => $headers->to_pairs };
+        }
+        return await Future->wrap($send->($event));
     };
 }
 
@@ -119,5 +138,23 @@ invocation runs the interceptor; I/O occurs only if it calls the downstream
 receive. The interceptor may await once or repeatedly, return a replacement,
 or synthesize an event without I/O. Delegation is not automatic, and immediate
 values plus Future failures propagate through the wrapper.
+
+=head2 wrap_response_headers
+
+    use PAGI::Utils::Middleware qw(wrap_response_headers);
+
+    my $wrapped_send = wrap_response_headers($send, sub {
+        my ($headers, $event) = @_;
+        $headers->set('X-Runtime', $elapsed);
+    });
+
+Returns a send that, for each C<http.response.start>, calls C<$editor> with a
+L<PAGI::Headers> copy of the response's headers and the event, then sends a
+new event carrying the edited headers. The event it was given, its header
+list and the pairs in it are never changed: they belong to whoever built them,
+who may send them again (see L<PAGI::Spec/Middleware>). Use C<set> to replace a
+header, C<add> for one that repeats (C<Set-Cookie>), C<set_default> to keep a
+value the response already has, and C<add_vary> for C<Vary>. The editor may
+return a Future. Other events pass through unchanged.
 
 =cut

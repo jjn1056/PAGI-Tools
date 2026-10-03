@@ -380,20 +380,11 @@ sub _resolve_class {
 sub _send_with_fields {
     my ($send, @fields) = @_;
     return $send unless @fields;
-    my %ours = map { lc($_->[0]) => 1 } @fields;
-    return async sub {
-        my ($event) = @_;
-        if ($event->{type} eq 'http.response.start') {
-            $event = {
-                %$event,
-                headers => [
-                    (grep { !$ours{lc $_->[0]} } @{ $event->{headers} // [] }),
-                    @fields,
-                ],
-            };
-        }
-        await $send->($event);
-    };
+    require PAGI::Utils::Middleware;
+    return PAGI::Utils::Middleware::wrap_response_headers($send, sub {
+        my ($headers) = @_;
+        $headers->set($_->[0], $_->[1]) for @fields;
+    });
 }
 
 # A first-party component's `refuse` option: undef when the caller gave
