@@ -536,11 +536,10 @@ subtest 'TrustedHosts refuse replaces the refusal' => sub {
     # A refusing application that reads the request must not trip over the
     # malformed header that caused the refusal.
     my $seen_headers;
-    $mw = PAGI::Middleware::TrustedHosts->new(hosts => ['example.com'], refuse => async sub {
-        my ($scope, $receive, $send) = @_;
-        $seen_headers = $scope->{headers};
-        await $send->({ type => 'http.response.start', status => 400, headers => [] });
-        await $send->({ type => 'http.response.body', body => '', more => 0 });
+    $mw = PAGI::Middleware::TrustedHosts->new(hosts => ['example.com'], refuse => sub {
+        my ($request) = @_;
+        $seen_headers = $request->scope->{headers};
+        return PAGI::Response::Text->new('', status => 400);
     });
     trusted_hosts_request($mw, [['Host', ['a.example']], ['Accept', 'text/html']]);
     is $seen_headers, [['Accept', 'text/html']],
@@ -996,12 +995,9 @@ subtest 'CSRF refuse => 0 lets the application decide' => sub {
 subtest 'CSRF refuse accepts any application' => sub {
     my %apps = (
         'a Response' => response('JSON', { detail => 'nope' }, status => 403),
-        'a coderef'  => async sub {
-            my ($scope, $receive, $send) = @_;
-            await $send->({ type => 'http.response.start', status => 403,
-                headers => [['content-type', 'application/json']] });
-            await $send->({ type => 'http.response.body',
-                body => '{"detail":"nope"}', more => 0 });
+        'a coderef'  => sub {
+            my ($request) = @_;
+            return response('JSON', { detail => 'nope' }, status => 403);
         },
         'an object with to_app' => PAGI::Utils::as_app_object(async sub {
             my ($scope, $receive, $send) = @_;
@@ -1035,11 +1031,11 @@ subtest "CSRF never adds its cookie to an application's own header list" => sub 
     # An application may send the same headers arrayref every time; a
     # cookie added to it would reach every later client.
     my @shared = (['content-type', 'text/plain']);
-    my $refuse = async sub {
+    my $refuse = PAGI::Utils::as_app_object(async sub {
         my ($scope, $receive, $send) = @_;
         await $send->({ type => 'http.response.start', status => 403, headers => \@shared });
         await $send->({ type => 'http.response.body', body => 'no', more => 0 });
-    };
+    });
     my $mw = PAGI::Middleware::CSRF->new(secret => 's', refuse => $refuse);
     csrf_request($mw) for 1 .. 3;
     is scalar(@shared), 1, "the application's header list is unchanged";
@@ -1051,14 +1047,13 @@ subtest "CSRF never adds its cookie to an application's own header list" => sub 
 
 subtest 'CSRF refuse: the refusing application can read the reason' => sub {
     my $reason;
-    my $mw = PAGI::Middleware::CSRF->new(secret => 's', refuse => async sub {
-        my ($scope, $receive, $send) = @_;
-        $reason = csrf($scope)->failure;
-        await $send->({ type => 'http.response.start', status => 403, headers => [] });
-        await $send->({ type => 'http.response.body', body => '', more => 0 });
+    my $mw = PAGI::Middleware::CSRF->new(secret => 's', refuse => sub {
+        my ($request) = @_;
+        $reason = csrf($request)->failure;
+        return response('Text', '', status => 403);
     });
     csrf_request($mw);
-    is $reason, 'missing_cookie', 'csrf($scope) works inside the refusing application';
+    is $reason, 'missing_cookie', 'csrf($request) works inside the refusing handler';
 };
 
 subtest 'CSRF refusal of a first POST still issues the cookie' => sub {

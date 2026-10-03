@@ -89,10 +89,16 @@ without C<Content-Length> is read in full first, up to 10MB.
 
 =item * C<refuse> (default: the plain-text failures above)
 
-An application that answers a failure instead: a C<($scope, $receive, $send)>
-coderef or an object with C<to_app>, which includes every L<PAGI::Response>.
+An application that answers a failure instead: a Request handler (a coderef called with one
+L<PAGI::Request>, returning a Response or an application) or an object
+with C<to_app>, which includes every L<PAGI::Response>.
 It finds the reason in the scope as C<pagi.cgi_failure>: C<start>,
 C<headers>, C<timeout> or C<body_too_large>. Any plain value dies.
+
+A native C<($scope, $receive, $send)> application is passed as
+C<as_app_object($app)>. Objects -- every Response and L<PAGI::Pages> value --
+mean the same in every slot, and are the portable form for anything also
+given to middleware outside PAGI-Tools.
 
 =back
 

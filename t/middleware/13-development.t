@@ -11,6 +11,7 @@ use PAGI::Middleware::Debug;
 use PAGI::Middleware::Lint;
 use PAGI::Middleware::Maintenance;
 use PAGI::Response::HTML ();
+use PAGI::Utils ();
 use PAGI::Response::Text ();
 use PAGI::Middleware::Healthcheck;
 use PAGI::Middleware::MethodOverride;
@@ -316,7 +317,8 @@ subtest 'Maintenance middleware - response replaces the default' => sub {
         await $send->({ type => 'http.response.body', body => 'from an app', more => 0 });
     };
     ($status, undef, $retry, $body) = maintenance_events(
-        PAGI::Middleware::Maintenance->new(enabled => 1, response => $app));
+        PAGI::Middleware::Maintenance->new(enabled => 1,
+            response => PAGI::Utils::as_app_object($app)));
     is [$status, $retry, $body], [503, [], 'from an app'],
         'an application answers too; no retry_after, no Retry-After';
 };

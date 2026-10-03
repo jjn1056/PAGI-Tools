@@ -14,6 +14,7 @@ use PAGI::Middleware::ReverseProxy;
 use PAGI::Middleware::Healthcheck;
 use PAGI::Request;
 use PAGI::Response qw(response);
+use PAGI::Response::Text ();
 
 my $loop = IO::Async::Loop->new;
 
@@ -581,11 +582,10 @@ subtest 'HTTPSRedirect - refuse replaces the refusal' => sub {
     is decode_json($events[1]{body}), { detail => 'Cannot redirect' }, 'the refusing Response answers';
 
     my $seen_headers;
-    $redirect = PAGI::Middleware::HTTPSRedirect->new(refuse => async sub {
-        my ($scope, $receive, $send) = @_;
-        $seen_headers = $scope->{headers};
-        await $send->({ type => 'http.response.start', status => 400, headers => [] });
-        await $send->({ type => 'http.response.body', body => '', more => 0 });
+    $redirect = PAGI::Middleware::HTTPSRedirect->new(refuse => sub {
+        my ($request) = @_;
+        $seen_headers = $request->scope->{headers};
+        return PAGI::Response::Text->new('', status => 400);
     });
     run_async {
         $redirect->wrap(async sub { die 'downstream' })->(

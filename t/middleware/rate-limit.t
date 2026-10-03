@@ -12,6 +12,7 @@ use lib 'lib';
 
 use PAGI::Middleware::RateLimit;
 use PAGI::Response::JSON ();
+use PAGI::Utils ();
 use Time::HiRes ();
 
 my $loop = IO::Async::Loop->new;
@@ -128,11 +129,11 @@ subtest 'refuse writes the body; the middleware still sends the rate-limit field
     my @shared = (['content-type', 'text/plain'], ['Retry-After', '999']);
     (undef, $limited) = limited_once(PAGI::Middleware::RateLimit->new(
         requests_per_second => 0.1, burst => 1,
-        refuse => async sub {
+        refuse => PAGI::Utils::as_app_object(async sub {
             my ($scope, $receive, $send) = @_;
             await $send->({ type => 'http.response.start', status => 429, headers => \@shared });
             await $send->({ type => 'http.response.body', body => 'no', more => 0 });
-        }));
+        })));
     rate_limit_fields_ok($limited->[0], 'refuse application');
     is scalar(@shared), 2, "the application's header list is unchanged";
 

@@ -124,7 +124,9 @@ File refuses four ways, each with a plain-text default:
     range       416  Range Not Satisfiable   (with Content-Range: bytes */LENGTH)
 
 C<refuse> replaces all four with one application -- a
-C<($scope, $receive, $send)> coderef or an object with C<to_app>, which
+Request handler (a coderef called with one
+L<PAGI::Request>, returning a Response or an application) or an object
+with C<to_app>, which
 includes every L<PAGI::Response> -- that finds the reason in the scope as
 C<pagi.file_failure>. File still sets C<Allow> and C<Content-Range> on its
 response, replacing any of the same name. Any plain value dies.
@@ -134,7 +136,6 @@ values for the rest:
 
     use PAGI::Pages;
     use PAGI::Response qw(response);
-    use PAGI::Utils qw(invoke_app);
 
     my %refusal = (
         not_found => PAGI::Pages->not_found,
@@ -142,10 +143,14 @@ values for the rest:
         method    => response('Text', 'Method Not Allowed', status => 405),
         range     => response('Text', 'Range Not Satisfiable', status => 416),
     );
-    my $files = PAGI::App::File->new(root => $root, refuse => async sub {
-        my ($scope, $receive, $send) = @_;
-        await invoke_app($refusal{ $scope->{'pagi.file_failure'} }, $scope, $receive, $send);
+    my $files = PAGI::App::File->new(root => $root, refuse => sub ($request) {
+        return $refusal{ $request->scope->{'pagi.file_failure'} };
     });
+
+A native C<($scope, $receive, $send)> application is passed as
+C<as_app_object($app)>. Objects -- every Response and L<PAGI::Pages> value --
+mean the same in every slot, and are the portable form for anything also
+given to middleware outside PAGI-Tools.
 
 =head1 METHODS
 

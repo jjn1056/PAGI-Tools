@@ -72,11 +72,18 @@ for production HTTPS deployments, add C<< secure => 1 >>.
 
 What answers an unsafe request whose token check fails. Absent: a
 C<403 text/plain> response, C<CSRF token validation failed>. An application
--- a C<($scope, $receive, $send)> coderef or an object with C<to_app>, which
+-- a Request handler (a coderef called with one
+L<PAGI::Request>, returning a Response or an application) or an object
+with C<to_app>, which
 includes every L<PAGI::Response> -- answers instead, and can read the reason
-with C<< csrf($scope)->failure >>. Exactly C<0>: the middleware never refuses;
+with C<< csrf($request)->failure >>. Exactly C<0>: the middleware never refuses;
 the request reaches the application with the outcome recorded for
 C<< csrf($request)->valid >> and C<< ->failure >>. Any other plain value dies.
+
+A native C<($scope, $receive, $send)> application is passed as
+C<as_app_object($app)>. Objects -- every Response and L<PAGI::Pages> value --
+mean the same in every slot, and are the portable form for anything also
+given to middleware outside PAGI-Tools.
 
 =back
 

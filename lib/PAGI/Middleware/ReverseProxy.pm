@@ -50,8 +50,9 @@ If true, trust X-Forwarded headers from any source. Use with caution!
 =item * refuse (default: a 400 text response)
 
 An application that answers a refused request instead of the plain-text
-default: a C<($scope, $receive, $send)> coderef or an object with C<to_app>,
-which includes every L<PAGI::Response>:
+default: a Request handler (a coderef called with one
+L<PAGI::Request>, returning a Response or an application) or an object
+with C<to_app>, which includes every L<PAGI::Response>:
 
     middleware('ReverseProxy', trusted_proxies => ['10.0.0.0/8'],
         refuse => response('JSON', { detail => 'Bad forwarded host' }, status => 400));
@@ -59,6 +60,11 @@ which includes every L<PAGI::Response>:
 A refusal almost always means a misconfigured proxy, so there is no C<0> form
 that would pass the request on with the proxy's own Host. Any plain value
 dies.
+
+A native C<($scope, $receive, $send)> application is passed as
+C<as_app_object($app)>. Objects -- every Response and L<PAGI::Pages> value --
+mean the same in every slot, and are the portable form for anything also
+given to middleware outside PAGI-Tools.
 
 =back
 

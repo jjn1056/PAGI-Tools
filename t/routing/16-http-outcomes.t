@@ -214,8 +214,8 @@ subtest 'bare HTTP defaults are Request handlers whose results are applications'
             sub { return receive() },
             sub { push @invalid_events, $_[0]; return Future->done },
         ))->get;
-    }, qr/request handler must return a PAGI application: a native coderef or app object/,
-        'an invalid handler result gets the generalized diagnostic');
+    }, qr/request handler returned nothing; a native \(\$scope, \$receive, \$send\) application given as a handler needs as_app_object\(\)/,
+        'an undefined handler result names as_app_object');
     is(\@invalid_events, [],
         'an invalid handler result emits no response event');
 };

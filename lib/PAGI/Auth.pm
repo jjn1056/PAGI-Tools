@@ -92,8 +92,9 @@ sub requires {
     my $opts = _options('requires', { refuse => 1, redirect => 1 }, @rest);
     croak 'PAGI::Auth requires takes refuse or redirect, not both: a redirect replaces the refusal'
         if exists $opts->{refuse} && exists $opts->{redirect};
-    # An app object, not a bare coderef: WebSocket deny and SSE decline read
-    # a coderef as a ($request) handler.
+    # An app object, not a bare coderef: the option yields a native coderef,
+    # and WebSocket deny and SSE decline read a bare coderef as a ($request)
+    # handler.
     my $denied = PAGI::Utils::as_app_object(
         PAGI::Utils::_refuse_option('PAGI::Auth requires', $opts)
             // PAGI::Response::Text->new('Forbidden', status => 403)->to_app,
@@ -367,13 +368,19 @@ Otherwise it refuses, by default with a plain-text 403 C<Forbidden>. Options:
 
 =item * C<refuse>
 
-The refusal instead: an application -- a C<($scope, $receive, $send)> coderef
-or an object with C<to_app>, which includes every L<PAGI::Response>. A
+The refusal instead: an application -- a Request handler (a coderef called with one
+L<PAGI::Request>, returning a Response or an application) or an object
+with C<to_app>, which includes every L<PAGI::Response>. A
 404 hides the route from those without access; a L<PAGI::Pages> page brands
 it:
 
     refuse => response('Text', 'Not Found', status => 404)
     refuse => PAGI::Pages->forbidden
+
+A native C<($scope, $receive, $send)> application is passed as
+C<as_app_object($app)>. Objects -- every Response and L<PAGI::Pages> value --
+mean the same in every slot, and are the portable form for anything also
+given to middleware outside PAGI-Tools.
 
 =item * C<redirect>
 

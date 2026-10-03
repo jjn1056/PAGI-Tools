@@ -399,7 +399,8 @@ sub _send_with_fields {
 # A first-party component's `refuse` option: undef when the caller gave
 # none (the component uses its own default), the string '0' when the caller
 # asked the application to decide (only if $may_decide), else the caller's
-# application as a coderef. Any other plain value dies: an undefined or
+# application as a native coderef (a bare coderef given is run as a Request
+# handler). Any other plain value dies: an undefined or
 # mistyped setting must never switch a check off.
 sub _refuse_option {
     my ($component, $config, $may_decide) = @_;
@@ -417,6 +418,12 @@ sub _application_option {
         ? "$component '$key' must be an application, or 0 to let the application decide"
         : "$component '$key' must be an application"
         unless ref($value);
+    # The option answers a request, so a bare coderef is a Request handler, as
+    # at a Route; as_app_object() passes a native application.
+    if (ref($value) eq 'CODE') {
+        require PAGI::Routing::RequestResponse;
+        return PAGI::Routing::RequestResponse->new(handler => $value)->to_app;
+    }
     return to_app($value);
 }
 

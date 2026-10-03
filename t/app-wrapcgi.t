@@ -16,6 +16,7 @@ eval { require IO::Async::Loop; require IO::Async::Timer::Periodic; require Futu
 
 use PAGI::App::WrapCGI;
 use PAGI::Response::JSON ();
+use PAGI::Response::Text ();
 use PAGI::Test::ConnectionState;
 
 # Real CGI processes, driven through the same Future::IO binding a server
@@ -224,11 +225,10 @@ subtest 'a script that cannot start: 500' => sub {
 
 subtest 'refuse replaces every failure and can read the reason' => sub {
     my @reasons;
-    my $refuse = async sub {
-        my ($scope, $receive, $send) = @_;
-        push @reasons, $scope->{'pagi.cgi_failure'};
-        await $send->({ type => 'http.response.start', status => 503, headers => [] });
-        await $send->({ type => 'http.response.body', body => 'custom', more => 0 });
+    my $refuse = sub {
+        my ($request) = @_;
+        push @reasons, $request->scope->{'pagi.cgi_failure'};
+        return PAGI::Response::Text->new('custom', status => 503);
     };
     my ($status, undef, $body) = run_cgi(scope => { query => 'mode=garbage' }, options => { refuse => $refuse });
     is [$status, $body], [503, 'custom'], 'the refusing application answers';

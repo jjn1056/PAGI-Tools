@@ -71,8 +71,9 @@ half are evicted as a safety valve.
 =item * refuse (default: a 429 text response)
 
 An application that answers an over-limit request instead of the plain-text
-default: a C<($scope, $receive, $send)> coderef or an object with C<to_app>,
-which includes every L<PAGI::Response>:
+default: a Request handler (a coderef called with one
+L<PAGI::Request>, returning a Response or an application) or an object
+with C<to_app>, which includes every L<PAGI::Response>:
 
     middleware('RateLimit', requests_per_second => 5,
         refuse => response('JSON', { detail => 'Slow down' }, status => 429));
@@ -83,6 +84,11 @@ plain value dies.
 
 C<backend> was removed: it was documented as a pluggable store but never used.
 Passing it dies.
+
+A native C<($scope, $receive, $send)> application is passed as
+C<as_app_object($app)>. Objects -- every Response and L<PAGI::Pages> value --
+mean the same in every slot, and are the portable form for anything also
+given to middleware outside PAGI-Tools.
 
 =back
 

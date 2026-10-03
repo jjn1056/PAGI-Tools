@@ -65,8 +65,9 @@ first.
 =item * refuse (default: a 406 text response)
 
 An application that answers an unmatched request instead of the plain-text
-default: a C<($scope, $receive, $send)> coderef or an object with C<to_app>,
-which includes every L<PAGI::Response>. It receives the scope with
+default: a Request handler (a coderef called with one
+L<PAGI::Request>, returning a Response or an application) or an object
+with C<to_app>, which includes every L<PAGI::Response>. It receives the scope with
 C<pagi.accepted_types>.
 
 Exactly C<0>: the middleware never refuses. An unmatched request reaches the
@@ -78,6 +79,11 @@ fallback is the application's call:
 Any other plain value dies. C<strict> and C<default_type> were removed:
 refusing is the default, and C<refuse =E<gt> 0> replaces C<strict =E<gt> 0>;
 passing either dies.
+
+A native C<($scope, $receive, $send)> application is passed as
+C<as_app_object($app)>. Objects -- every Response and L<PAGI::Pages> value --
+mean the same in every slot, and are the portable form for anything also
+given to middleware outside PAGI-Tools.
 
 =back
 

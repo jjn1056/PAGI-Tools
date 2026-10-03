@@ -74,8 +74,9 @@ HSTS max-age in seconds (1 year default).
 =item * refuse (default: a 400 text response)
 
 An application that answers a refused request instead of the plain-text
-default: a C<($scope, $receive, $send)> coderef or an object with C<to_app>,
-which includes every L<PAGI::Response>:
+default: a Request handler (a coderef called with one
+L<PAGI::Request>, returning a Response or an application) or an object
+with C<to_app>, which includes every L<PAGI::Response>:
 
     middleware('HTTPSRedirect',
         refuse => response('JSON', { detail => 'Cannot redirect to HTTPS' }, status => 400));
@@ -84,6 +85,11 @@ For a malformed Host it receives a scope holding only the request's
 well-formed C<Accept> headers. A refused request is never passed on over
 plain HTTP, so there is no C<0> form; leave paths on HTTP with C<exclude>.
 Any plain value dies.
+
+A native C<($scope, $receive, $send)> application is passed as
+C<as_app_object($app)>. Objects -- every Response and L<PAGI::Pages> value --
+mean the same in every slot, and are the portable form for anything also
+given to middleware outside PAGI-Tools.
 
 =back
 

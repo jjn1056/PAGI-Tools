@@ -60,6 +60,9 @@ sub to_app {
             unless blessed($request) && $request->isa('PAGI::Request');
         my $handler_result = $handler->($request);
         my $returned = await Future->wrap($handler_result);
+        croak 'request handler returned nothing; a native ($scope, $receive, '
+            . '$send) application given as a handler needs as_app_object()'
+            unless defined $returned;
         PAGI::Utils::_validate_app_value(
             $returned,
             'request handler must return a PAGI application:',

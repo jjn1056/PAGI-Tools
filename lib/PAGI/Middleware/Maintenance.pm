@@ -55,7 +55,9 @@ whatever answers: it replaces any Retry-After a C<response> carries.
 =item * response
 
 The maintenance response instead of the plain-text default: an application --
-a C<($scope, $receive, $send)> coderef or an object with C<to_app>, which
+a Request handler (a coderef called with one
+L<PAGI::Request>, returning a Response or an application) or an object
+with C<to_app>, which
 includes every L<PAGI::Response>. Give it the 503 status yourself:
 
     enable 'Maintenance', enabled => 1, retry_after => 3600,
@@ -66,6 +68,11 @@ includes every L<PAGI::Response>. Give it the 503 status yourself:
 
 Any plain value dies, as do the C<body> and C<content_type> options that
 C<response> replaces.
+
+A native C<($scope, $receive, $send)> application is passed as
+C<as_app_object($app)>. Objects -- every Response and L<PAGI::Pages> value --
+mean the same in every slot, and are the portable form for anything also
+given to middleware outside PAGI-Tools.
 
 =back
 
