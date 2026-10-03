@@ -7,6 +7,7 @@ use Future;
 use Future::AsyncAwait;
 use Scalar::Util qw(blessed refaddr);
 use PAGI::Pages ();
+use PAGI::Response::Text ();
 use PAGI::Routing::HeadBoundary ();
 use PAGI::Routing::Middleware ();
 use PAGI::Routing::RequestResponse ();
@@ -159,10 +160,11 @@ sub _compile_dispatcher {
         my $state = $class->_allow_state($scope);
         croak 'Router authoritative Allow state is missing'
             unless $state;
+        # A plain 405 with the path's method union in Allow. To answer it
+        # differently, put a middleware around the Router that rewrites 405s.
         await PAGI::Utils::invoke_app(
-            PAGI::Pages->method_not_allowed(
-                allow => $state->{allowed_methods},
-            ),
+            PAGI::Response::Text->new('Method Not Allowed', status => 405,
+                headers => ['Allow' => join(', ', @{ $state->{allowed_methods} })]),
             $scope, $receive, $send,
         );
         return;

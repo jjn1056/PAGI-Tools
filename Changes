@@ -30,6 +30,9 @@
     logs, and HTTPSRedirect redirects to, the encoded request URI.
   - Stock error and redirect responses from first-party components
     negotiate HTML, problem JSON or text through Pages.
+  - The Router's and Endpoint::HTTP's 405 is plain text with Allow, as in
+    0.002002; an endpoint class answers it differently by overriding
+    method_not_allowed, and the endpoint still sets Allow.
   - CSRF, TrustedHosts, HTTPSRedirect, ReverseProxy, RateLimit and
     ContentNegotiation refuse with plain text (CSRF a 403, RateLimit a 429,
     ContentNegotiation a 406 listing the supported types, the others a

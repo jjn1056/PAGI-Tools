@@ -153,11 +153,11 @@ subtest 'Compose routes receive ordinary Router HTTP outcomes' => sub {
     is($full->text, 'get', 'selected route body is retained');
 
     my $partial = $client->delete('/items',
-        headers => { Accept => 'text/plain' });
-    assert_client_pages_error(
-        'Router method mismatch', $partial, 405, 'Method Not Allowed',
-        'text/plain; charset=utf-8',
-    );
+        headers => { Accept => 'application/problem+json' });
+    is($partial->status, 405, 'Router method mismatch status is 405');
+    is($partial->content_type, 'text/plain; charset=utf-8',
+        'Router method mismatch is plain text whatever the Accept');
+    is($partial->text, 'Method Not Allowed', 'Router method mismatch body is plain');
     is($partial->header('Allow'), 'GET, HEAD, POST',
         'Router 405 carries the deterministic union Allow');
     is(\@warnings, [], 'ordinary Router outcomes do not warn');

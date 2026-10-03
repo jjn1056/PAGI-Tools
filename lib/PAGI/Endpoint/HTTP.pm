@@ -7,9 +7,9 @@ use Future;
 use Future::AsyncAwait;
 use Carp qw(croak);
 use Scalar::Util qw(blessed);
-use PAGI::Pages;
 use PAGI::Request;
 use PAGI::Response::Empty ();
+use PAGI::Response::Text ();
 use PAGI::Utils qw(invoke_app);
 
 sub new {
@@ -57,11 +57,11 @@ async sub dispatch {
     elsif ($allowed{$http_method} && $self->can($http_method)) {
         $application = await Future->wrap($self->$http_method($request));
     }
-    # 405 Method Not Allowed
+    # 405 Method Not Allowed: the endpoint owns Allow, whatever answers
     else {
-        $application = PAGI::Pages->method_not_allowed(
-            allow => \@allowed_methods,
-        );
+        my $answer = await Future->wrap(
+            $self->method_not_allowed($request, @allowed_methods));
+        $application = _with_allow($answer, join(', ', @allowed_methods));
     }
 
     PAGI::Utils::_validate_app_value(
@@ -69,6 +69,36 @@ async sub dispatch {
         ref($self) . "->$http_method must return a PAGI application:",
     );
     return $application;
+}
+
+sub method_not_allowed {
+    my ($self, $request, @allowed) = @_;
+    return PAGI::Response::Text->new('Method Not Allowed', status => 405);
+}
+
+# Wraps an application so its response start carries exactly one Allow
+# field, ours, on a copy of the event.
+sub _with_allow {
+    my ($application, $allow) = @_;
+    PAGI::Utils::_validate_app_value($application,
+        'method_not_allowed must return a PAGI application:');
+    my $app = PAGI::Utils::to_app($application);
+    return PAGI::Utils::as_app_object(async sub {
+        my ($scope, $receive, $send) = @_;
+        await $app->($scope, $receive, async sub {
+            my ($event) = @_;
+            if ($event->{type} eq 'http.response.start') {
+                $event = {
+                    %$event,
+                    headers => [
+                        (grep { lc($_->[0]) ne 'allow' } @{ $event->{headers} // [] }),
+                        ['Allow', $allow],
+                    ],
+                };
+            }
+            await $send->($event);
+        });
+    });
 }
 
 sub to_app {
@@ -135,13 +165,11 @@ to handling HTTP requests. Define methods named after HTTP verbs (get,
 post, put, patch, delete, head, options) and the endpoint automatically
 dispatches to them.
 
-When no method handler exists, the automatic 405 response uses
-L<PAGI::Pages> to negotiate HTML, problem JSON, or plain text from the original
-request and retains the endpoint's complete, sorted C<allowed_methods> result
-in C<Allow>. Explicit method handlers and an explicit C<options> method remain
-authoritative custom-response seams. Automatic OPTIONS retains its existing
-empty response with C<Allow>. Endpoint::HTTP has no Pages configuration
-surface.
+When no method handler exists, L</method_not_allowed> answers -- by default a
+plain-text C<405 Method Not Allowed> -- and the endpoint sets C<Allow> to its
+complete, sorted C<allowed_methods> result. Explicit method handlers and an
+explicit C<options> method remain authoritative custom-response seams.
+Automatic OPTIONS retains its existing empty response with C<Allow>.
 
 An instantiated Endpoint object can be placed directly at a Route. With no
 explicit Route C<methods>, the Router snapshots C<allowed_methods> once at
@@ -239,6 +267,18 @@ exact instance and reuses it for the returned application's lifetime.
 
 Dispatches the request to the appropriate HTTP method handler and returns the
 resulting application without emitting it. Called automatically by C<to_app>.
+
+=head2 method_not_allowed
+
+    sub method_not_allowed ($self, $request, @allowed) {
+        return PAGI::Response::JSON->new({ detail => 'Not supported here' }, status => 405);
+    }
+
+Answers a request for a method this endpoint does not implement. The default
+is a plain-text C<405 Method Not Allowed>. Override it to answer differently;
+it receives the request and the allowed methods, and may return a Response,
+an application, or a Future of one. The endpoint sets the response's one
+C<Allow> field to the allowed methods, replacing any the answer carries.
 
 =head2 allowed_methods
 

@@ -10,8 +10,8 @@ ordinary shape without turning the example into a framework:
 - a numeric path constraint;
 - one pure route middleware factory captured in an explicit inspectable description;
 - distinct Compose-root and API Router `http_default` endpoints rendered
-  through `PAGI::Pages`, plus the child Router's authoritative stock 405 and
-  `Allow`;
+  through `PAGI::Pages`, plus the child Router's authoritative plain-text 405
+  and `Allow`;
 - absolute slash-addressed `path_for($request, ...)` and request-aware
   `url_for($request, ...)` from `PAGI::Routing::URL` (both return strings and
   perform no protocol I/O); and

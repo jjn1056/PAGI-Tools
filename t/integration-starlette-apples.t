@@ -296,7 +296,7 @@ subtest 'apple manager, welcome, routing outcomes, and apples CRUD' => sub {
         'known collection with unsupported method is 405');
     is($wrong_method->header('Allow'), 'GET, HEAD, POST',
         'selected child Router owns its method union');
-    is($wrong_method->json->{title}, 'Method Not Allowed',
+    is($wrong_method->text, 'Method Not Allowed',
         'selected child Router renders the stock method response');
 
     my $created = $client->post('/apples', json => {
@@ -359,7 +359,7 @@ subtest 'apple manager, welcome, routing outcomes, and apples CRUD' => sub {
         'known welcome path preserves its method-owned 405');
     is($welcome_wrong_method->header('Allow'), 'GET, HEAD',
         'known welcome path publishes its exact method union');
-    is($welcome_wrong_method->json->{title}, 'Method Not Allowed',
+    is($welcome_wrong_method->text, 'Method Not Allowed',
         'root default does not swallow a known-path 405');
     });
 };

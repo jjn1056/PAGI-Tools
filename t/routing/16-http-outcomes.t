@@ -111,7 +111,7 @@ sub mangle_allow_middleware {
     });
 }
 
-subtest 'Router renders direct NONE and PARTIAL outcomes with negotiated Pages responses' => sub {
+subtest 'Router renders NONE through Pages and PARTIAL as a plain 405' => sub {
     my $app = router(routes => [
         route('/items' => \&text_handler, methods => 'GET'),
         route('/items' => \&text_handler, methods => 'POST'),
@@ -137,15 +137,14 @@ subtest 'Router renders direct NONE and PARTIAL outcomes with negotiated Pages r
 
     my $partial = run_app(
         $app, method => 'TRACE', path => '/items', raw_path => '/items',
-        headers => [['accept', 'text/plain']],
+        headers => [['accept', 'application/problem+json']],
     );
     is(response_status($partial), 405, 'PARTIAL renders 405');
     is(response_header($partial, 'Content-Type'), 'text/plain; charset=utf-8',
-        'PARTIAL uses normal request negotiation');
+        'PARTIAL is plain text whatever the Accept');
     is(response_headers($partial, 'Allow'), ['GET, HEAD, POST'],
         'PARTIAL emits one first-seen method union');
-    like(response_body($partial), qr/405\s+Method Not Allowed/,
-        'PARTIAL text representation retains Pages status semantics');
+    is(response_body($partial), 'Method Not Allowed', 'with the plain body');
 };
 
 subtest 'bare HTTP defaults are Request handlers whose results are applications' => sub {

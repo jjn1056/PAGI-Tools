@@ -1025,7 +1025,6 @@ built-in English body should assert the status and media type instead.
 | `PAGI::Middleware::Static` | 403, 404, 416 | pass-through; 416 file length |
 | `PAGI::Middleware::Maintenance` | built-in 503 | `retry_after`; explicit `body`/`content_type` stay literal |
 | `PAGI::Middleware::Rewrite` | redirect-mode response | rule selection, code, target |
-| `PAGI::Endpoint::HTTP` | automatic 405 | computed `allowed_methods` |
 
 Custom handlers, application bodies and explicit Responses stay literal.
 URLMap with no default, on a WebSocket or SSE scope, now croaks instead of
