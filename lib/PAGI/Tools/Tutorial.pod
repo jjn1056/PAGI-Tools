@@ -1359,7 +1359,7 @@ Features:
 =back
 
 Use this component by default. It selects indexes and MIME types, streams with
-C<file> events, negotiates errors, and handles conditional and Range requests
+C<file> events, refuses in plain text (see its C<refuse>), and handles conditional and Range requests
 without loading file bodies into application memory.
 
 If custom authorization or response headers require a native handler, begin with

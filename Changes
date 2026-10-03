@@ -37,8 +37,9 @@
     Maintenance response, ErrorHandler handler, routes, http_default,
     deny/decline) reads a bare coderef as a Request handler; a slot that
     hosts an application (mount, URLMap, Cascade, Builder) reads it as a
-    native app. A native app that returns a response instead of sending it
-    now dies with a message naming request_response().
+    native app. A native app run by invoke_app, a mount, URLMap or Cascade
+    that returns a response instead of sending it now dies with a message
+    naming request_response().
   - ErrorHandler answers in plain text (reason phrase, or a client error's
     client_message) with Cache-Control: no-store; its handler is a Request
     handler that reads the error through PAGI::ErrorContext

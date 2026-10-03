@@ -637,8 +637,8 @@ constructs from C<routes>:
           Compose root Router
 
 Router 404/405 responses pass through this graph unchanged. Compose's stock
-error response is a negotiated, no-store Pages 500, with a final hardcoded
-UTF-8 text 500 only if Pages rendering itself fails. Put the application's
+error response is a plain-text, no-store 500, with a final hardcoded UTF-8
+text 500 only if an author handler itself fails. Put the application's
 official error policy inside request IDs, access logging, and security
 middleware so those layers observe it:
 

@@ -315,8 +315,8 @@ and application endpoints retain native event ownership. Every middleware
 wrapper remains a native C<($scope, $receive, $send)> application.
 
 The compiled application is a complete routing boundary. A path miss invokes
-the stock negotiated Pages 404. A path match with a method mismatch invokes
-the stock Pages 405 and reasserts the Router-authoritative Allow header. Its
+the stock plain-text 404. A path match with a method mismatch invokes the
+stock plain-text 405 and reasserts the Router-authoritative Allow header. Its
 HEAD boundary preserves calculated headers while suppressing body and file
 delivery. Lifespan completes inertly without reading or sending events.
 

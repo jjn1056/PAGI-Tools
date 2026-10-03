@@ -772,6 +772,13 @@ to execute an application value. The example above is equivalent to:
         $app->($scope, $receive, $send)
     );
 
+except for one check: a native application answers by sending, so if the
+application returns (or its Future resolves to) a response object instead,
+C<invoke_app> dies with C<a native ($scope, $receive, $send) application
+returned a response instead of sending it; for a ($request) handler use
+request_response()>. Mounts, L<PAGI::App::URLMap> and L<PAGI::App::Cascade>
+run their applications the same way.
+
 This is useful in a native PAGI application or middleware that wants to emit a
 L<PAGI::Response>, a L<PAGI::Pages> result, or another app object without
 open-coding the C<to_app> and immediate-or-Future handling:

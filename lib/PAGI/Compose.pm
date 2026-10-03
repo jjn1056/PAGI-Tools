@@ -495,10 +495,10 @@ application into a routing miss.
 Normal completion without a valid response lifecycle throws
 L<PAGI::Exception::IncompleteResponse>. Before response start, that exception,
 request-target failures, failed Futures, author-middleware failures, and author
-renderer failures are converted to one negotiated, no-store Pages 500. A
-selected silent native application is therefore guarded as 500. Pages
-construction itself is protected by ErrorHandler's final hardcoded
-UTF-8 text 500 path. Compose does not report the failure itself: once that 500
+handler failures are converted to one plain-text, no-store 500. A selected
+silent native application is therefore guarded as 500. An author handler
+that itself fails is answered by ErrorHandler's final hardcoded UTF-8 text
+500. Compose does not report the failure itself: once that 500
 is complete it re-raises the original exception, and the server reports it
 (L<PAGI::Spec::Www>, "Exceptions after the terminal event"). Explicit
 application responses, including matched 404, 405, and 500, pass unchanged and

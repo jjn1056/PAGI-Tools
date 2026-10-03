@@ -37,10 +37,11 @@ time (see [pagi.connection](#breaking-pagisse-and-pagiwebsocket-require-pagiconn
 
 **Changed behaviour:**
 
-- ErrorHandler re-raises server errors, renders through Pages, and loses
+- ErrorHandler re-raises server errors, answers in plain text unless its
+  `handler` (reading `error_context($request)`) answers, and loses
   `content_type` ([ErrorHandler](#breaking-errorhandler-re-raises-server-errors)).
-- Stock error and redirect responses negotiate HTML, problem JSON or text
-  ([changed defaults](#audit-changed-first-party-defaults)).
+- Stock refusals and error responses are plain text, each replaceable by one
+  option ([changed defaults](#audit-changed-first-party-defaults)).
 - WebSocket and SSE `state` is a `PAGI::State` object, and the helpers need
   `pagi.connection` ([state](#breaking-direct-websocket-and-sse-state-matches-request)).
 - Bad request bodies are 400/413; a body cut short by a disconnect croaks
@@ -812,7 +813,7 @@ What an application sees differently:
 | `PATH_INFO` the decoded path as characters; no `REQUEST_URI` | bytes; `REQUEST_URI` set; `HTTPS=on` for https |
 | repeated request headers: the last one wins | joined with `, ` |
 | a `Location` without `Status` answered 200 | 302 |
-| a script that could not start: a negotiated Pages 500 | plain-text 500; `refuse` replaces it |
+| a script that could not start: 500 `Internal Server Error` | 500 `CGI script could not be started`; `refuse` replaces it |
 
 Unix only, and Future::IO must be bound, as `pagi-server` does.
 
@@ -1038,16 +1039,21 @@ literal empty redirect use `response('Redirect', ...)`.
 
 ### Audit changed first-party defaults
 
-These components keep deciding *when* to answer with an error or redirect;
-only the stock body moved to Pages, so its body, `Content-Type`,
-`Content-Length`, `Vary` and cache fields may change. Tests that asserted a
-built-in English body should assert the status and media type instead.
+First-party components answer their refusals and errors in plain text, and
+each answer is replaced by one option; a `PAGI::Pages` page is the
+application's choice (`refuse => PAGI::Pages->forbidden`). A slot that
+answers a request reads a bare coderef as a `($request)` handler; pass a
+native application as `as_app_object($app)`. The 405s now carry `Allow`, and
+App::File's 416 `Content-Range`.
 
-| Component | Stock default now from Pages | Preserved locally |
-|---|---|---|
-| `PAGI::Middleware::Rewrite` | redirect-mode response | rule selection, code, target |
-
-Custom handlers, application bodies and explicit Responses stay literal.
+| Component | Option that replaces its answer |
+|---|---|
+| CSRF, TrustedHosts, HTTPSRedirect, ReverseProxy, RateLimit, ContentNegotiation, App::WrapCGI, App::File (Static, Directory), Auth `requires` | `refuse` |
+| Maintenance | `response` |
+| Router and Compose (404) | `http_default` |
+| URLMap | `default` |
+| ErrorHandler | `handler` |
+| Router 405 | a middleware around the Router; Endpoint::HTTP overrides `method_not_allowed` |
 URLMap with no default, on a WebSocket or SSE scope, now croaks instead of
 sending `http.response.*` on another protocol.
 

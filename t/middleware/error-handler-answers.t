@@ -70,6 +70,17 @@ subtest "a handler's explicit status and headers win" => sub {
     is [$status, $h->{'x-mine'}], [410, 1];
 };
 
+subtest 'a Response shared across errors takes each error\'s status' => sub {
+    my $page = response('Text', 'Something went wrong');
+    my %options = (handler => sub ($request) { $page });
+    my ($status, undef, undef, $failure) = run(
+        error => PAGI::Request::BodyError->new(message => 'bad'), options => \%options);
+    is [$status, $failure], [400, undef], 'the first error: 400, handled';
+    ($status, undef, undef, $failure) = run(error => "database down\n", options => \%options);
+    is [$status, $failure], [500, "database down\n"], 'the second error: 500, re-raised';
+    ok !$page->has_status, 'the shared Response is not changed';
+};
+
 subtest 'declining: the handler returns the built-in answer' => sub {
     my ($status, undef, $body) = run(error => "db\n", options => { handler => sub ($request) {
         my $error = error_context($request);

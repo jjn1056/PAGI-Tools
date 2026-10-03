@@ -40,8 +40,8 @@ in [UPGRADING-REFERENCE.md](UPGRADING-REFERENCE.md).
 | Directory `show_hidden` | `allow_hidden` ([details](UPGRADING-REFERENCE.md#rooted-file-serving-security-contract)) |
 | `WebSocket::RateLimit`, `SSE::Pubsub`, `WebSocket::Broadcast`/`Chat` | removed; Cookbook recipes ([details](UPGRADING-REFERENCE.md#other-breaking-changes)) |
 
-Behaviour that changes without a code change: stock error pages negotiate
-HTML, problem JSON or text ([details](UPGRADING-REFERENCE.md#audit-changed-first-party-defaults));
+Behaviour that changes without a code change: stock refusals and error
+responses are plain text, each replaceable by one option ([details](UPGRADING-REFERENCE.md#audit-changed-first-party-defaults));
 bad request bodies are 400/413 ([details](UPGRADING-REFERENCE.md#bad-request-bodies-answer-400-or-413-not-500));
 `raw_path` is the full requested path ([details](UPGRADING-REFERENCE.md#raw_path-request_uri-raw_path_info-and-serving-under-a-prefix));
 file serving is stricter ([details](UPGRADING-REFERENCE.md#rooted-file-serving-security-contract));

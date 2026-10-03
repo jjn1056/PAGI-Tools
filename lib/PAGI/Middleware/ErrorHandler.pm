@@ -222,9 +222,18 @@ async sub _answer {
         $answer = await Future->wrap($handler->(PAGI::Request->new($scope, $receive)));
         PAGI::Utils::_validate_app_value($answer,
             'ErrorHandler handler must return a PAGI application:');
-        # A Response that set no status of its own answers with the error's.
-        $answer->status_try($context->status)
-            if blessed($answer) && $answer->isa('PAGI::Response');
+        # A Response that set no status of its own answers with the error's,
+        # set on a copy of the response start: the Response itself may be
+        # shared, and must not keep this error's status for the next one.
+        if (blessed($answer) && $answer->isa('PAGI::Response') && !$answer->has_status) {
+            my ($status, $inner) = ($context->status, $send);
+            $send = async sub {
+                my ($event) = @_;
+                $event = { %$event, status => $status }
+                    if ($event->{type} // '') eq 'http.response.start';
+                await Future->wrap($inner->($event));
+            };
+        }
     }
     return await PAGI::Utils::invoke_app($answer, $scope, $receive, $send);
 }

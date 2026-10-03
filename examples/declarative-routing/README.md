@@ -23,7 +23,7 @@ ordinary shape without turning the example into a framework:
 The API Router owns exhaustion at its mount boundary, while Compose owns the
 root boundary. An API constraint miss receives `No API route matched`; an
 unknown root path receives `No root route matched`. A method mismatch never
-invokes `http_default`: the API Router renders its negotiated stock Method Not
+invokes `http_default`: the API Router renders its plain-text stock Method Not
 Allowed response with `Allow: GET, HEAD`. Compose adds application error,
 completion, and lifespan safety without interpreting those Router outcomes.
 

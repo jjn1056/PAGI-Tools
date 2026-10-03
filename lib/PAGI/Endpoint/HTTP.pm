@@ -178,7 +178,8 @@ dispatch and 405 responses itself.
 
 =item * Automatic method dispatch based on HTTP verb
 
-=item * Negotiated 405 Method Not Allowed for undefined methods
+=item * Plain-text 405 Method Not Allowed, with C<Allow>, for undefined methods
+(override C<method_not_allowed> to answer differently)
 
 =item * OPTIONS handling with Allow header
 
