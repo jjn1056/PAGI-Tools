@@ -5,8 +5,9 @@ use Future::AsyncAwait;
 use Future::IO;    # pagi-server binds the implementation
 
 use PAGI::Compose qw(compose);
+use PAGI::ErrorContext qw(error_context);
 use PAGI::Response qw(response);
-use PAGI::Routing qw(route websocket sse);
+use PAGI::Routing qw(route websocket sse middleware);
 use PAGI::Routing::URL qw(path_for url_for);
 
 # The runnable companion to PAGI::Tools' QUICK TOUR. Run with:
@@ -36,6 +37,14 @@ route('/echo' => async sub {
         headers => ['X-Echoed-Length' => length($body)],
     );
 }, methods => ['POST'], name => 'echo'),
+
+# POST JSON - a body that is not JSON is the client's mistake: $request->json
+# raises a 400, which the ErrorHandler below answers in JSON.
+route('/notes' => async sub {
+    my ($request) = @_;
+    my $note = await $request->json;
+    return response('JSON', { saved => $note }, status => 201);
+}, methods => ['POST'], name => 'notes'),
 
 # HTTP Streaming - sends chunks with delays
 route('/stream' => sub {
@@ -83,7 +92,7 @@ route('/routes' => sub {
     return response('JSON', {
         paths => {
             map { $_ => path_for($request, $_) }
-                qw(hello echo http_stream export ws_echo sse_events)
+                qw(hello echo notes http_stream export ws_echo sse_events)
         },
         export_url => url_for($request, 'export'),
     });
@@ -149,6 +158,17 @@ sse('/events' => async sub {
 
 compose(
     routes => \@routes,
+    middleware => [
+        # The client's mistakes (a 4xx, such as a body that is not JSON) answer
+        # in JSON like the rest of the API; anything else gets the built-in
+        # plain-text answer, which the server also logs.
+        middleware('ErrorHandler', handler => sub {
+            my ($request) = @_;
+            my $error = error_context($request);
+            return $error->default if $error->is_server_error;
+            return response('JSON', { error => $error->message });
+        }),
+    ],
     lifespan => {
         startup => async sub {
             my ($state) = @_;

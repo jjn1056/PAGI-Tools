@@ -57,7 +57,7 @@ for my $case (@examples) {
             unlike($source, qr/\$router->(?:get|post|websocket|sse|mount)\b/,
                 'full demo has no mutable route declarations');
             like($source,
-                qr/use PAGI::Routing qw\(route websocket sse\);/,
+                qr/use PAGI::Routing qw\(route websocket sse middleware\);/,
                 'full demo imports immutable route declarations');
             unlike($source, qr/\bas_app_object\s*\(/,
                 'full demo demonstrates direct high-level protocol handlers');

@@ -37,6 +37,10 @@ my %res;
             headers => { 'Content-Type' => 'text/plain' });
         $res{export} = $client->get('/export');
         $res{routes} = $client->get('/routes');
+        $res{note}     = $client->post('/notes', body => '{"text":"hi"}',
+            headers => { 'Content-Type' => 'application/json' });
+        $res{bad_note} = $client->post('/notes', body => '{nope',
+            headers => { 'Content-Type' => 'application/json' });
         $client->websocket('/ws/echo', sub {
             my ($ws) = @_;
             $ws->send_text('hi');
@@ -56,11 +60,17 @@ is([map { $_->{n} } @records], [1, 2, 3], 'one record per line');
 is($res{routes}->json->{paths}, {
     hello       => '/',
     echo        => '/echo',
+    notes       => '/notes',
     http_stream => '/stream',
     export      => '/export',
     ws_echo     => '/ws/echo',
     sse_events  => '/events',
 }, 'every route is reachable by name');
+is($res{note}->status, 201, 'a JSON note is saved');
+is([$res{bad_note}->status, $res{bad_note}->json],
+    [400, { error => 'The request body is not valid JSON.' }],
+    'a body that is not JSON answers 400 in JSON through the ErrorHandler');
+
 like($res{routes}->json->{export_url}, qr{\Ahttps?://[^/]+/export\z},
     'and url_for gives an absolute URL');
 
