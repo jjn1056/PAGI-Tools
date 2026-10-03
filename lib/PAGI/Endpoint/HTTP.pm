@@ -11,6 +11,7 @@ use PAGI::Request;
 use PAGI::Response::Empty ();
 use PAGI::Response::Text ();
 use PAGI::Utils qw(invoke_app);
+use PAGI::Utils::Middleware ();
 
 sub new {
     my ($class, %args) = @_;
@@ -86,7 +87,9 @@ sub _with_allow {
     return PAGI::Utils::as_app_object(async sub {
         my ($scope, $receive, $send) = @_;
         await $app->($scope, $receive,
-            PAGI::Utils::_send_with_fields($send, ['Allow', $allow]));
+            PAGI::Utils::Middleware::wrap_response_headers($send, sub {
+                $_[0]->set('Allow', $allow);
+            }));
     });
 }
 

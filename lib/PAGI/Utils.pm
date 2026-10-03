@@ -374,19 +374,6 @@ sub _resolve_class {
     return "${namespace}::$name";
 }
 
-# A send that sets the given [name, value] header fields on the response
-# start, replacing any of the same name, on a copy of the event: the fields
-# are the calling component's to set, whoever writes the response.
-sub _send_with_fields {
-    my ($send, @fields) = @_;
-    return $send unless @fields;
-    require PAGI::Utils::Middleware;
-    return PAGI::Utils::Middleware::wrap_response_headers($send, sub {
-        my ($headers) = @_;
-        $headers->set($_->[0], $_->[1]) for @fields;
-    });
-}
-
 # A first-party component's `refuse` option: undef when the caller gave
 # none (the component uses its own default), the string '0' when the caller
 # asked the application to decide (only if $may_decide), else the caller's

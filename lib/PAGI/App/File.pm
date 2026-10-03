@@ -15,6 +15,7 @@ use PAGI::Response::Text ();
 use PAGI::Response::File::Plan ();
 use PAGI::Routing::HeadBoundary;
 use PAGI::Utils ();
+use PAGI::Utils::Middleware ();
 
 =head1 NAME
 
@@ -492,7 +493,10 @@ async sub _refuse {
     };
     return await $refusal->(
         { %$scope, 'pagi.file_failure' => $reason }, $receive,
-        PAGI::Utils::_send_with_fields($send, @fields),
+        @fields ? PAGI::Utils::Middleware::wrap_response_headers($send, sub {
+            my ($headers) = @_;
+            $headers->set(@$_) for @fields;
+        }) : $send,
     );
 }
 

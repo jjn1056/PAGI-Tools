@@ -7,6 +7,7 @@ use Future;
 use Future::AsyncAwait;
 use PAGI::Response::Text ();
 use PAGI::Utils ();
+use PAGI::Utils::Middleware ();
 use POSIX ();
 use Scalar::Util qw(refaddr);
 use Time::HiRes ();
@@ -240,7 +241,10 @@ async sub _send_rate_limited {
 
     # The rate-limit fields are this middleware's, whoever writes the body.
     await $self->{refuse}->($scope, $receive,
-        PAGI::Utils::_send_with_fields($send, @fields));
+        PAGI::Utils::Middleware::wrap_response_headers($send, sub {
+            my ($headers) = @_;
+            $headers->set(@$_) for @fields;
+        }));
 }
 
 # Class method to reset rate limits (useful for testing)

@@ -7,6 +7,7 @@ use Future;
 use Future::AsyncAwait;
 use PAGI::Response::Text ();
 use PAGI::Utils ();
+use PAGI::Utils::Middleware ();
 
 =head1 NAME
 
@@ -193,10 +194,11 @@ sub _all_valid_octets {
 
 async sub _send_maintenance {
     my ($self, $scope, $receive, $send) = @_;
-    my @fields = defined $self->{retry_after}
-        ? (['Retry-After', $self->{retry_after}]) : ();
-    await $self->{response}->($scope, $receive,
-        PAGI::Utils::_send_with_fields($send, @fields));
+    my $retry_after = $self->{retry_after};
+    await $self->{response}->($scope, $receive, !defined $retry_after ? $send
+        : PAGI::Utils::Middleware::wrap_response_headers($send, sub {
+            $_[0]->set('Retry-After', $retry_after);
+        }));
 }
 
 1;
