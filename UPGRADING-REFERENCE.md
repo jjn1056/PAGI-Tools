@@ -1036,7 +1036,6 @@ built-in English body should assert the status and media type instead.
 
 | Component | Stock default now from Pages | Preserved locally |
 |---|---|---|
-| `PAGI::App::URLMap` | no-default 404 | mount selection |
 | `PAGI::Middleware::Rewrite` | redirect-mode response | rule selection, code, target |
 
 Custom handlers, application bodies and explicit Responses stay literal.

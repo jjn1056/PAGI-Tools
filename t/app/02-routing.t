@@ -89,7 +89,24 @@ subtest 'App::URLMap routes by path prefix' => sub {
         is $received_path, '/users/123', 'path adjusted (prefix removed)';
     };
 
-    subtest 'negotiates Pages 404 for unmatched HTTP path' => sub {
+    subtest 'answers an unmatched HTTP path with a plain 404' => sub {
+        my $urlmap = PAGI::App::URLMap->new;
+        $urlmap->mount('/api' => make_response_app(200, 'API'));
+        my @sent;
+        run_async(async sub {
+            await $urlmap->to_app->(
+                { type => 'http', path => '/unknown',
+                  headers => [['Accept', 'application/problem+json']] },
+                async sub { { type => 'http.disconnect' } },
+                async sub { my ($event) = @_; push @sent, $event },
+            );
+        });
+        my %headers = map { lc($_->[0]) => $_->[1] } @{$sent[0]{headers}};
+        is [$sent[0]{status}, $headers{'content-type'}, $sent[1]{body}],
+            [404, 'text/plain; charset=utf-8', 'Not Found'], 'plain text whatever the Accept';
+    };
+
+    subtest 'a Pages default negotiates its 404, by choice' => sub {
         my $urlmap = PAGI::App::URLMap->new(
             default => PAGI::Pages->not_found,
         );
