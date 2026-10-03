@@ -9,10 +9,16 @@ use Future;
 use Future::AsyncAwait;
 use Scalar::Util 'blessed';
 use PAGI::Request;
-use PAGI::Pages ();
+use PAGI::ErrorContext ();
 use PAGI::Utils ();
 
 my %PUBLIC_OPTION = map { $_ => 1 } qw(development on_error status handler);
+
+# Statuses HTTP says must carry a field the built-in answer cannot supply.
+my %FIELD_REQUIRED = (
+    401 => 'WWW-Authenticate', 405 => 'Allow',
+    407 => 'Proxy-Authenticate', 426 => 'Upgrade',
+);
 
 =head1 NAME
 
@@ -35,16 +41,18 @@ PAGI::Middleware::ErrorHandler - Exception handling middleware
 =head1 DESCRIPTION
 
 PAGI::Middleware::ErrorHandler catches exceptions thrown by the inner
-application and converts them to appropriate HTTP error responses. Its built-in
-renderer delegates to L<PAGI::Pages>, so request C<Accept> fields negotiate
-HTML, problem JSON, or text. Custom handlers retain full response ownership.
+application and converts them to HTTP error responses. Without a C<handler>,
+the answer is plain text -- the status's reason phrase, or a client error's
+C<client_message> -- with C<Cache-Control: no-store>, and in development the
+error's text after a blank line (see L<PAGI::ErrorContext/default>).
 
 ErrorHandler converts exceptions into responses; it does not report them.
-After the error response for a B<server error> (status 500 or above) is
-complete, the original exception is re-raised so the server reports it through
-its own log, as L<PAGI::Spec::Www> "Exceptions after the terminal event"
-describes. A handled exception whose C<status_code> claims a 4xx status is
-rendered and not re-raised: it is a response, not an error. Use C<on_error> for
+After the response is complete, the original exception is re-raised so the
+server reports it through its own log, as L<PAGI::Spec::Www> "Exceptions after
+the terminal event" describes, when the status actually sent is 500 or above:
+what the client was sent decides. A 4xx sent is a handled outcome, not an
+error. If the handler dies or answers nothing, a last-resort 500 is sent, the
+handler's failure is warned, and the original error is re-raised. Use C<on_error> for
 reporting of your own, such as an error tracker; see
 L<PAGI::Tools::Cookbook/Who reports an application error>.
 
@@ -76,36 +84,33 @@ is still re-raised to the server after rendering (see L</DESCRIPTION>).
 
 =item * status (default: 500)
 
-HTTP status code for general exceptions. Without a custom C<handler>, this must
-be a registered error that Pages can render without missing mandatory response
-facts. Statuses such as 401, 405, 407, and 426 therefore require a handler.
+The status for an exception that claims none, from 400 to 599. A status HTTP
+says must carry a field the built-in answer cannot supply -- 401
+(C<WWW-Authenticate>), 405 (C<Allow>), 407 (C<Proxy-Authenticate>), 426
+(C<Upgrade>) -- needs a C<handler>. An exception's C<status_code> outside
+400-599, or one of those without a handler, answers 500 with a diagnostic.
 
-=item * handler (default: undef)
+=item * handler (default: the built-in answer)
 
-Optional renderer invoked as C<< $handler->($request, $original_error) >>.
-It must return an immediate or Future-backed concrete L<PAGI::Response> value.
-ErrorHandler applies the configured or exception-provided
-status through C<status_try> only after the handler returns; an explicit
-renderer status wins. It then emits the value through
-the Response application contract. A custom renderer owns its response
-content type and cache policy unchanged.
+The answer to an error, given the scope with the error as C<pagi.error>; read
+it with L<PAGI::ErrorContext>. A coderef is a Request handler: it receives a
+L<PAGI::Request> and returns a Response or an application. A returned Response
+that set no status of its own is sent with the error's status. An object is an
+application; a native C<($scope, $receive, $send)> app is passed as
+C<as_app_object($app)>.
 
-Use the handler seam to force a fixed representation:
+    use PAGI::ErrorContext qw(error_context);
 
-    use PAGI::Response qw(response);
     handler => sub {
-        my ($request, $error) = @_;
-        return response('Problem', {
-            title  => 'Internal Server Error',
-            status => 500,
-        });
+        my ($request) = @_;
+        my $error = error_context($request);
+        return $error->default if $error->is_server_error;   # the built-in answer
+        return response('JSON', { error => $error->message });
     }
 
-The wrapper may inspect C<$request> or C<$error> when it deliberately chooses
-safe response fields. ErrorHandler requires a concrete Response from this
-custom renderer; source-free Pages application values belong at Route, Mount,
-or Router-default application boundaries instead. Pages does not
-consume that callback metadata itself.
+The handler sees the request as this layer sees it: scope keys added further
+in (C<path_params>, a Request subclass, CSRF's token) are not there, and its
+answer does not pass through inner middleware's send wrappers.
 
 =back
 
@@ -122,13 +127,23 @@ sub _init {
     $self->{development} = $config->{development} // 0;
     $self->{on_error}    = $config->{on_error};
     $self->{status}      = $config->{status} // 500;
-    $self->{handler}     = $config->{handler};
-
-    unless ($self->{handler}) {
-        croak 'ErrorHandler configured status cannot be rendered completely; a handler is required'
-            unless $self->_pages_accepts_status($self->{status});
+    croak 'ErrorHandler status must be an integer from 400 to 599'
+        unless $self->{status} =~ /\A[45][0-9][0-9]\z/;
+    if (exists $config->{handler}) {
+        my $handler = $config->{handler};
+        PAGI::Utils::_validate_app_value($handler, 'ErrorHandler handler', 'Request handler');
+        # A bare coderef is a Request handler, as at a Route; an object is an
+        # application, invoked with the scope that carries pagi.error.
+        if (ref($handler) eq 'CODE') { $self->{handler_code} = $handler }
+        else                         { $self->{handler_app} = PAGI::Utils::to_app($handler) }
     }
+    croak "ErrorHandler status $self->{status} must carry "
+        . "$FIELD_REQUIRED{$self->{status}}, which the built-in answer cannot "
+        . 'supply; a handler is required'
+        if $FIELD_REQUIRED{$self->{status}} && !$self->_has_handler;
 }
+
+sub _has_handler { $_[0]{handler_code} || $_[0]{handler_app} ? 1 : 0 }
 
 sub _new_compose_failsafe {
     my ($class, %config) = @_;
@@ -149,86 +164,72 @@ sub wrap {
             return;
         }
 
-        my $response_started = 0;
-
-        # Intercept send to track if response has started
-        my $wrapped_send = async sub  {
+        my ($started, $sent_status) = (0, undef);
+        my $wrapped_send = async sub {
             my ($event) = @_;
             if (($event->{type} // '') eq 'http.response.start') {
-                $response_started = 1;
+                $started = 1;
+                $sent_status = $event->{status};
             }
             await Future->wrap($send->($event));
         };
 
-        # Try to run the app, preserving the exact exception value.
-        my $error;
         my $completed = eval {
             await Future->wrap($app->($scope, $receive, $wrapped_send));
             1;
         };
-        $error = $@ unless $completed;
+        return if $completed;
+        my $error = $@;
 
-        # Handle error if one occurred
-        unless ($completed) {
-            await $self->_report_error($error, $scope);
+        await $self->_report_error($error, $scope);
+        _reraise($error) if $started;
 
-            # If response already started, we can't send error page
-            if ($response_started) {
-                _reraise($error);
-            }
-
-            my $status = $self->_status_for_error($error);
-            my $request_scope = defined($scope->{type})
-                ? $scope : { %$scope, type => 'http' };
-            my $request = PAGI::Request->new($request_scope, $receive);
-
-            my $response;
-            if ($self->{handler}) {
-                $response = await Future->wrap(
-                    $self->{handler}->($request, $error),
-                );
-                croak 'handler did not return a PAGI::Response'
-                    unless blessed($response)
-                        && $response->isa('PAGI::Response');
-                $response->status_try($status);
-            }
-            else {
-                my $development = await $self->_development_for_request;
-                my @detail;
-                if ($development) {
-                    my $error_text;
-                    my $stringified = eval {
-                        $error_text = "$error";
-                        1;
-                    };
-                    @detail = (detail => $error_text) if $stringified;
-                }
-
-                my $rendered = eval {
-                    $response = PAGI::Pages->status(
-                        $status, @detail,
-                    );
-                    1;
-                };
-                unless ($rendered) {
-                    await $self->_send_last_resort($wrapped_send);
-                    _reraise($error) if $status >= 500;
-                    return;
-                }
-            }
-
-            await PAGI::Utils::invoke_app(
-                $response,
-                $request_scope,
-                $receive,
-                $wrapped_send,
-            );
-
-            # The response is complete. A server error still belongs to the
-            # server, which logs it; a handled 4xx exception does not.
-            _reraise($error) if $status >= 500;
+        my $error_scope = {
+            %$scope,
+            (defined($scope->{type}) ? () : (type => 'http')),
+            'pagi.error' => {
+                exception   => $error,
+                status      => $self->_status_for_error($error),
+                development => await $self->_development_for_request,
+            },
+        };
+        my $answered = eval {
+            await $self->_answer($error_scope, $receive, $wrapped_send);
+            1;
+        };
+        my $handler_failure = $answered ? undef : $@;
+        if (!$answered || !$started) {
+            # The handler failed, or finished without answering: send the
+            # last resort if nothing went out, and report the error that
+            # started it, not the renderer's.
+            my $reason = defined($handler_failure)
+                ? "$handler_failure" : "it finished without starting a response\n";
+            chomp $reason;
+            eval { warn "PAGI ErrorHandler handler failed: $reason\n"; 1 };
+            await $self->_send_last_resort($wrapped_send) unless $started;
+            _reraise($error);
         }
+        # What the client was sent decides whether the server logs it.
+        _reraise($error) if $sent_status >= 500;
     };
+}
+
+async sub _answer {
+    my ($self, $scope, $receive, $send) = @_;
+    if (my $app = $self->{handler_app}) {
+        return await PAGI::Utils::_await_native($app, $scope, $receive, $send);
+    }
+    my $context = PAGI::ErrorContext->new($scope);
+    my $answer = $context->default;
+    if (my $handler = $self->{handler_code}) {
+        $answer = await Future->wrap($handler->(PAGI::Request->new($scope, $receive)));
+        PAGI::Utils::_validate_app_value($answer,
+            'ErrorHandler handler must return a PAGI application:');
+        # A Response that set no status of its own answers with the error's.
+        $answer->status_try($context->status)
+            if blessed($answer) && $answer->isa('PAGI::Response');
+    }
+    return await PAGI::Utils::invoke_app($answer, $scope, $receive, $send);
 }
 
 # A failed Future must carry a true exception, and Future tests it for
@@ -274,14 +275,6 @@ async sub _development_for_request {
     return $development ? 1 : 0;
 }
 
-sub _pages_accepts_status {
-    my ($self, $status) = @_;
-    return eval {
-        PAGI::Pages->status($status);
-        1;
-    } ? 1 : 0;
-}
-
 sub _status_for_error {
     my ($self, $error) = @_;
     return $self->{status} unless blessed($error);
@@ -310,15 +303,13 @@ sub _status_for_error {
         return 500;
     }
     my $numeric = 0 + $claimed;
-    unless ($numeric >= 100 && $numeric <= 599) {
-        $self->_diagnose_rejected_status(
-            "status $claimed is outside 100-599",
-        );
+    unless ($numeric >= 400 && $numeric <= 599) {
+        $self->_diagnose_rejected_status("status $claimed is outside 400-599");
         return 500;
     }
-    unless ($self->{handler} || $self->_pages_accepts_status($claimed)) {
+    if ($FIELD_REQUIRED{$numeric} && !$self->_has_handler) {
         $self->_diagnose_rejected_status(
-            "status $claimed is not a complete registered Pages error",
+            "status $claimed must carry $FIELD_REQUIRED{$numeric}, which the built-in answer cannot supply",
         );
         return 500;
     }
@@ -404,8 +395,8 @@ selected. Router NONE and PARTIAL are already ordinary 404/405 responses, not
 exceptions; customize NONE with Router C<http_default>.
 
 If a database call throws or returns a failed Future before response start,
-C<on_error> settles before the custom or built-in renderer runs, and once the
-500 is complete the database exception is re-raised for the server to log.
+C<on_error> settles before the handler or the built-in answer runs, and once
+the 500 is complete the database exception is re-raised for the server to log.
 When ErrorHandlers are nested, the outer one sees the inner one's complete
 500 as a started response and re-raises in turn, so an C<on_error> configured
 on each of them runs for the same error. If the same
@@ -427,10 +418,11 @@ boundary if author policy itself fails.
 =head1 EXCEPTION HANDLING
 
 The middleware supports exception objects with a C<status_code> method. The
-claim is called exception-safely and, for the built-in renderer, is preserved
-only when it names a registered error Pages can render completely. Throwing,
-Future-valued, reference-valued, malformed, unknown, non-error, and incomplete
-claims fall back to 500 without replacing the original exception:
+claim is called exception-safely and kept when it is an integer from 400 to
+599 (and, without a handler, not one of the statuses that need a field the
+built-in answer lacks; see C<status>). Throwing, Future-valued,
+reference-valued, malformed and out-of-range claims fall back to 500 without
+replacing the original exception:
 
     package My::Exception;
     sub new { bless { status => $_[1], message => $_[2] }, $_[0] }
@@ -439,9 +431,9 @@ claims fall back to 500 without replacing the original exception:
     # In app:
     die My::Exception->new(404, 'Resource not found');
 
-A preserved 4xx claim is a handled outcome: the response is sent and the
-exception is not re-raised. Any status of 500 or above, including a claim that
-fell back to 500, is a server error and is re-raised after the response.
+Whether the exception is re-raised follows the status sent: a 4xx is a
+handled outcome; 500 or above, including a claim that fell back to 500, is a
+server error and is re-raised after the response.
 
 An exception object whose boolean or string overload throws cannot be carried
 by a failed Future. After the response, such an exception is re-raised as the
@@ -453,19 +445,19 @@ happened.
 
 =over 4
 
-=item * Before response start, C<on_error> settles before the custom or built-in
-renderer runs. Built-in HTML, plain-text, and problem-JSON responses are UTF-8
-octet strings with byte-correct C<Content-Length> and
-C<Cache-Control: no-store>. Custom renderers control their own content and
-cache headers.
+=item * Before response start, C<on_error> settles before the handler or the
+built-in answer runs. The built-in answer is a UTF-8 octet string with a
+byte-correct C<Content-Length> and C<Cache-Control: no-store>. A handler
+controls its own content and cache headers.
 
-=item * If built-in Pages construction fails before response start, the
-middleware emits one hardcoded UTF-8 plain-text 500 with C<no-store>. That last
-resort contains no exception or renderer data. A failure while sending it
-propagates without another response attempt. After it is sent, a server error
-is re-raised as after any other error response.
+=item * If the handler dies, returns something that is not an application, or
+answers without starting a response, the middleware emits one hardcoded UTF-8
+plain-text 500 with C<no-store>, warns C<PAGI ErrorHandler handler failed: ...>,
+and re-raises the original exception. That last resort contains no exception
+or handler data. A failure while sending it propagates without another
+response attempt.
 
-=item * If the response has already started when an error occurs, no renderer
+=item * If the response has already started when an error occurs, no handler
 is invoked and no replacement response is started. The middleware awaits
 C<on_error> and then rethrows the original exception either way, but what
 that rethrow does to the connection depends on whether the response had
@@ -489,9 +481,9 @@ caller/logs without touching what was already sent.
 This intentionally reverses the earlier behavior that warned and swallowed
 post-start failures.
 
-=item * In development mode, a successfully stringified original exception is
-used as detail. In production, Pages' catalog-safe detail is used and the
-exception is never stringified for presentation.
+=item * In development mode, a successfully stringified original exception
+follows the built-in answer's message. In production the exception is never
+stringified for presentation.
 
 =item * A missing scope type is treated as HTTP. Defined non-HTTP requests
 (including WebSocket and SSE) pass through, so errors propagate without
@@ -502,6 +494,8 @@ transformation.
 =head1 SEE ALSO
 
 L<PAGI::Middleware> - Base class for middleware
+
+L<PAGI::ErrorContext> - the error a handler answers
 
 L<PAGI::Routing>, L<PAGI::Routing::Mount>, and L<PAGI::Compose> - routing,
 placement, and application-root ownership

@@ -9,6 +9,7 @@ use lib "$Bin/../../lib";
 use PAGI::Compose qw(compose);
 use PAGI::Request;
 use PAGI::Response qw(response);
+use PAGI::ErrorContext qw(error_context);
 use PAGI::Routing qw(middleware route);
 use PAGI::Test::Client;
 
@@ -98,8 +99,9 @@ subtest 'a Compose application answers 400 or 413, and logs nothing' => sub {
         $res{form} = $client->post('/form', body => part('note', 'x' x 50) . "--$boundary--\r\n",
             headers => { 'Content-Type' => "multipart/form-data; boundary=$boundary", Accept => 'application/json' });
     }
-    is([$res{json}->status, $res{json}->header('content-type')], [400, 'application/problem+json'],
-        'invalid JSON is a negotiated 400');
+    is([$res{json}->status, $res{json}->header('content-type'), $res{json}->text],
+        [400, 'text/plain; charset=utf-8', 'The request body is not valid JSON.'],
+        'invalid JSON is a plain 400 carrying the client message');
     is($res{form}->status, 413, 'an oversized part is a 413');
     is($stderr, '', 'and neither is reported as a server error');
 };
@@ -107,10 +109,10 @@ subtest 'a Compose application answers 400 or 413, and logs nothing' => sub {
 subtest 'an application can render body errors its own way' => sub {
     my $app = compose(
         middleware => [middleware('ErrorHandler', handler => sub {
-            my ($request, $error) = @_;
-            return response('JSON', { error => $error->message }, status => $error->status_code)
-                if ref $error && $error->isa('PAGI::Request::BodyError');
-            return response('JSON', { error => 'Something went wrong.' }, status => 500);
+            my ($request) = @_;
+            my $error = error_context($request);
+            return $error->default if $error->is_server_error;
+            return response('JSON', { error => $error->message });
         })],
         routes => [route('/json' => async sub { my ($r) = @_; response('JSON', await $r->json) },
             methods => ['POST'])],

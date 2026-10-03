@@ -1151,27 +1151,25 @@ Catch and format errors:
   enable 'ErrorHandler', development => 1;  # Safely stringified development detail
   enable 'ErrorHandler';                    # Production (default): generic errors, no detail leak
 
-C<ErrorHandler>'s built-in response negotiates through L<PAGI::Pages>. Supply
-a concrete Response through the existing handler seam to fix its representation:
+C<ErrorHandler>'s built-in answer is plain text. To answer another way, give
+it a C<handler> -- a Request handler that reads the error with
+C<error_context($request)>:
 
+  use PAGI::ErrorContext qw(error_context);
   use PAGI::Response qw(response);
 
   enable 'ErrorHandler',
       handler => sub {
-          my ($request, $error) = @_;
-          return response('Problem', {
-              title  => 'Internal Server Error',
-              status => 500,
-          });
+          my ($request) = @_;
+          my $error = error_context($request);
+          return $error->default if $error->is_server_error;
+          return response('JSON', { error => $error->message });
       };
 
-Use C<response('HTML', ...)> or C<response('Text', ...)> for other fixed forms. Ordinary
-construction has static C<development =E<gt> 0> behavior and
-does not consult C<PAGI_ENV>. Its optional C<handler> receives
-C<($request, $error)> and returns an immediate or Future-backed Response.
-The wrapper may inspect C<$error> to choose
-safe response fields; the Response factory does not consume the exception
-implicitly.
+Ordinary construction has static C<development =E<gt> 0> behavior and does
+not consult C<PAGI_ENV>. The handler returns a Response or an application,
+immediately or as a Future; a Response that sets no status is sent with the
+error's.
 C<on_error> is awaited reporting, not rendering; reporter failure is contained.
 It receives C<($error, $scope)>.
 Before response start, ErrorHandler reports and renders, then re-raises a

@@ -119,6 +119,7 @@ builder {
 use v5.40;
 use Future::AsyncAwait;
 use PAGI::Compose qw(compose);
+use PAGI::ErrorContext qw(error_context);
 use PAGI::Response qw(response);
 use PAGI::Routing qw(middleware route);
 use PAGI::Session qw(session);
@@ -159,8 +160,8 @@ compose(
     ],
     middleware => [
         middleware('Session'),
-        middleware('ErrorHandler', handler => sub ($request, $error) {
-            return response('Problem', { title => 'Internal Server Error', status => 500 });
+        middleware('ErrorHandler', handler => sub ($request) {
+            return response('JSON', { error => error_context($request)->message });
         }),
     ],
 );
@@ -179,5 +180,6 @@ What changed, line by line:
   with `app_state($request)`.
 - `$ctx->session` became `session($request)`; Session no longer takes
   `secret`.
-- ErrorHandler's `content_type` became a `handler` returning a Response.
+- ErrorHandler's `content_type` became a `handler`: a Request handler that
+  reads the error with `error_context($request)` and returns a Response.
 - `:id` became `{id}`, and `post` became `methods => ['POST']`.

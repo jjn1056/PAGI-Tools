@@ -1162,8 +1162,8 @@ C<uploads>) throw a L<PAGI::Request::BodyError>. It carries C<status_code>
 underlying C<cause>.
 
 Most applications do nothing: every L<PAGI::Compose> application answers with
-that status, as a negotiated L<PAGI::Pages> response (C<application/problem+json>
-or HTML), and treats it as handled rather than as a server error.
+that status and the error's client message as plain text, and treats it as
+handled rather than as a server error.
 
     my $data = await $request->json;    # bad JSON: the client gets a 400
 

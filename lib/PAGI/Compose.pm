@@ -520,6 +520,7 @@ The completion guard never replaces an inner exception.
 Install ordinary author middleware for the application's official error
 policy:
 
+    use PAGI::ErrorContext qw(error_context);
     use PAGI::Response qw(response);
 
     middleware => [
@@ -528,16 +529,15 @@ policy:
         middleware('SecurityHeaders'),
         middleware('ErrorHandler',
             handler  => sub {
-                my ($request, $error) = @_;
-                return response('Problem', {
-                    title  => 'Internal Server Error',
-                    status => 500,
-                });
+                my ($request) = @_;
+                my $error = error_context($request);
+                return $error->default if $error->is_server_error;
+                return response('JSON', { error => $error->message });
             },
             on_error => \&report_error),
     ]
 
-This renderer runs inside the root last resort. Earlier listed author
+This handler runs inside the root last resort. Earlier listed author
 middleware can attach request identity, log, add security headers, or otherwise
 observe its response. If custom policy fails or leaves HTTP unanswered, the
 root boundary still protects the deployed application. Both the author and

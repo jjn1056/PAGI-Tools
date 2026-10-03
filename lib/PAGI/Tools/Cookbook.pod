@@ -666,32 +666,29 @@ author ErrorHandler, reported through C<on_error>, rendered by
 C<server_error>, and then re-raised so the server logs it too (see
 L</Who reports an application error>). C<on_error> may return immediately or
 through a Future; its failure is contained. If the database fails after a streaming response has
-started, ErrorHandler awaits reporting, calls no renderer, emits no second
+started, ErrorHandler awaits reporting, calls no handler, emits no second
 start, and rethrows the original database exception so the server can abort.
 
 Ordinary ErrorHandler instances default to static production mode and never
 consult C<PAGI_ENV>. Compose's private outer instance resolves development per
 handled request and falls back to safe production output if resolution fails.
-The built-in renderer negotiates through Pages. To fix one representation, use
-the existing handler seam:
+The built-in answer is plain text. To answer another way, give ErrorHandler a
+C<handler>:
 
+  use PAGI::ErrorContext qw(error_context);
   use PAGI::Response qw(response);
 
   middleware('ErrorHandler',
       handler => sub {
-          my ($request, $error) = @_;
-          return response('Problem', {
-              title  => 'Internal Server Error',
-              status => 500,
-          });
+          my ($request) = @_;
+          my $error = error_context($request);
+          return $error->default if $error->is_server_error;   # the built-in answer
+          return response('JSON', { error => $error->message });
       })
 
-The callback receives C<($request, $error)> and may use either value to choose
-safe fields before returning a concrete Response. Source-free Pages values are
-applications; this custom ErrorHandler seam deliberately retains its concrete
-Response contract.
-
-A custom renderer remains authoritative for its own content and headers.
+C<error_context($request)> gives the error, its status and a client-safe
+message; returning C<< $error->default >> leaves an error to the built-in
+answer. A handler is authoritative for its own content and headers.
 
 =head3 Who reports an application error
 
@@ -2682,8 +2679,8 @@ it; one that wants its own response catches the error:
   use PAGI::Response qw(response);
   use PAGI::Routing qw(middleware route);
 
-  # No code: a body that is not JSON becomes a negotiated 400
-  # (application/problem+json for API clients, an HTML page for browsers).
+  # No code: a body that is not JSON becomes a plain-text 400 carrying
+  # "The request body is not valid JSON."
   async sub create_note ($request) {
       my $data = await $request->json;
       return response('JSON', { created => $data }, status => 201);
@@ -2709,14 +2706,17 @@ it; one that wants its own response catches the error:
   ]);
 
 To give every route the same shape instead, give ErrorHandler a C<handler>.
-It receives the BodyError, whose C<status_code> and C<message> are safe to
-send; C<cause> holds the underlying error for logs:
+C<error_context($request)> carries the BodyError; its C<message> is the
+BodyError's client-safe sentence, and the BodyError's C<cause> holds the
+underlying error for logs:
+
+  use PAGI::ErrorContext qw(error_context);
 
   my $uniform = compose(
-      middleware => [middleware('ErrorHandler', handler => sub ($request, $error) {
-          return response('JSON', { error => $error->message }, status => $error->status_code)
-              if ref $error && $error->isa('PAGI::Request::BodyError');
-          return response('JSON', { error => 'Something went wrong.' }, status => 500);
+      middleware => [middleware('ErrorHandler', handler => sub ($request) {
+          my $error = error_context($request);
+          return $error->default if $error->is_server_error;
+          return response('JSON', { error => $error->message });
       })],
       routes => [route('/notes' => \&create_note, methods => ['POST'])],
   );

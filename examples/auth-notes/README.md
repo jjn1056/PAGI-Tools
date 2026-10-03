@@ -133,7 +133,8 @@ Changing that token to `alice-editor` returns 201 with a new note containing its
 ID, `author_id: "alice"`, and the supplied text. The request cannot choose another
 author. Publishing expects a JSON object with a nonempty `text` string; invalid
 note input returns 400 before the publishing service runs. A body that is not
-JSON at all is refused by `$request->json` itself, as a 400 problem document.
+JSON at all is refused by `$request->json` itself, as a plain-text 400
+saying "The request body is not valid JSON."
 
 Duplicate Authorization fields and malformed Bearer syntax produce the local
 failure code `malformed_authorization`. Protected handlers turn that into 400

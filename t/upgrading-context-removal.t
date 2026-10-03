@@ -9,6 +9,7 @@ use PAGI::Endpoint::HTTP;
 use PAGI::Endpoint::SSE;
 use PAGI::Endpoint::WebSocket;
 use PAGI::Middleware::ErrorHandler;
+use PAGI::ErrorContext ();
 use PAGI::Response qw(response);
 use PAGI::Routing qw(route router sse websocket);
 use PAGI::Stash qw(stash);
@@ -138,12 +139,13 @@ subtest 'direct Response factories replace the four HTTP shortcuts' => sub {
         'redirect constructs the complete response directly');
 };
 
-subtest 'ErrorHandler receives Request and preserves explicit status' => sub {
+subtest 'ErrorHandler handler receives a Request and its explicit status wins' => sub {
     my ($request_seen, $error_seen);
     my $error = Local::UpgradeStatusError->new(503);
     my $app = PAGI::Middleware::ErrorHandler->new(
         handler => sub {
-            ($request_seen, $error_seen) = @_;
+            ($request_seen) = @_;
+            $error_seen = PAGI::ErrorContext->new($request_seen)->exception;
             return response('Text', 'custom error', status => 409);
         },
     )->wrap(sub { die $error });
@@ -153,11 +155,9 @@ subtest 'ErrorHandler receives Request and preserves explicit status' => sub {
         local $SIG{__WARN__} = sub { push @warnings, @_ };
         $response = PAGI::Test::Client->new(app => $app)->get('/');
     }
-    is(scalar @warnings, 1, 'the 503 server error is re-raised once');
-    like($warnings[0], qr/^exception after response completed: Local::UpgradeStatusError=/,
-        'Test::Client reports the re-raised error as a server would');
+    is(\@warnings, [], 'the 503 error answered 409 is not re-raised: the status sent decides');
     isa_ok($request_seen, 'PAGI::Request');
-    is($error_seen, exact_ref($error), 'callback receives the original error');
+    is($error_seen, exact_ref($error), 'the error context carries the original error');
     is($response->status, 409,
         'explicit response status wins over exception status');
     is($response->text, 'custom error', 'custom response is emitted');

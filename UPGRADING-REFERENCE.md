@@ -525,15 +525,20 @@ handler => sub {
 }
 ```
 
-**After:** it receives `($request, $error)` and returns a complete Response;
-an explicit status wins over ErrorHandler's fallback.
+**After:** it is a Request handler: it receives a Request, reads the error
+with `error_context($request)`, and returns a Response (or any application).
+A Response that sets no status is sent with the error's; an explicit status
+wins.
 
 ```perl
+use PAGI::ErrorContext qw(error_context);
 use PAGI::Response qw(response);
 
 handler => sub {
-    my ($request, $error) = @_;
-    return response('JSON', { error => 'request failed' }, status => 503);
+    my ($request) = @_;
+    my $error = error_context($request);
+    return $error->default if $error->is_server_error;   # the built-in answer
+    return response('JSON', { error => $error->message });
 }
 ```
 
@@ -970,27 +975,31 @@ like $warnings[0], qr/^exception after response completed: database unreachable/
 
 ### Replace ErrorHandler content_type
 
-`content_type` is removed; the built-in page negotiates HTML, problem JSON or
-text. To fix one representation, use `handler`:
+`content_type` is removed; the built-in answer is plain text. To answer
+another way, use `handler`:
 
 ```perl
 # Before
 enable 'ErrorHandler', content_type => 'application/json';
 
 # After
+use PAGI::ErrorContext qw(error_context);
 use PAGI::Response qw(response);
 
 enable 'ErrorHandler',
     handler => sub {
-        my ($request, $error) = @_;
-        return response('Problem', { title => 'Internal Server Error', status => 500 });
+        my ($request) = @_;
+        my $error = error_context($request);
+        return $error->default if $error->is_server_error;
+        return response('JSON', { error => $error->message });
     };
 ```
 
 Use `response('HTML', ...)` or `response('Text', ...)` the same way for the other two.
-Without a handler, an exception's `status_code` is kept only for a
-registered error status that needs no extra protocol facts; bare 401, 405,
-407 and 426, and anything malformed, fall back to 500.
+An exception's `status_code` is kept when it is 400-599; without a handler,
+401, 405, 407 and 426 (which need a field the built-in answer lacks) fall
+back to 500, as does anything malformed. The error is re-raised to the server
+when the status sent is 500 or above.
 
 ## Pages replaces the stock response applications
 
