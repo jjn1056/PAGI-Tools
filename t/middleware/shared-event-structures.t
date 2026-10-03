@@ -6,6 +6,7 @@ use lib 'lib';
 use PAGI::Middleware::Runtime;
 use PAGI::Middleware::Debug;
 use PAGI::Middleware::SecurityHeaders;
+use PAGI::Middleware::CORS;
 
 my @shared;
 sub shared_app ($body = 'ok', $type = 'text/plain') {
@@ -79,6 +80,29 @@ subtest 'SecurityHeaders' => sub {
         ->wrap(app_sending(headers => [['Content-Security-Policy', "default-src 'none'"]]));
     (undef, $events) = request($route);
     is values_of($events, 'Content-Security-Policy'), ["default-src 'none'"], "a route's own CSP wins";
+};
+
+subtest 'CORS' => sub {
+    my @mine = (['content-type', 'text/plain']);
+    my $mw = PAGI::Middleware::CORS->new(origins => ['https://a.example', 'https://b.example']);
+    my $shared = $mw->wrap(app_sending(headers => \@mine));
+    my $from = sub ($origin) {
+        my (undef, $events) = request($shared, headers => $origin ? [['origin', $origin]] : []);
+        return values_of($events, 'Access-Control-Allow-Origin');
+    };
+    is $from->('https://a.example'), ['https://a.example'], 'allowed a: its own origin';
+    is $from->('https://b.example'), ['https://b.example'], 'allowed b: only its own origin';
+    is $from->('https://evil.example'), [], 'a disallowed origin: none';
+    is $from->(undef), [], 'no origin: none';
+    is scalar(@mine), 1, "the app's array is untouched";
+
+    my (undef, $events) = request($mw->wrap(app_sending()), headers => [['origin', 'https://a.example']]);
+    is values_of($events, 'Access-Control-Allow-Origin'), ['https://a.example'],
+        'added when the app omits headers';
+
+    (undef, $events) = request($mw->wrap(app_sending(headers => [['Access-Control-Allow-Origin', '*']])),
+        headers => [['origin', 'https://a.example']]);
+    is values_of($events, 'Access-Control-Allow-Origin'), ['https://a.example'], "one value: CORS's";
 };
 
 done_testing;

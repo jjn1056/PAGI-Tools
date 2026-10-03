@@ -228,8 +228,10 @@ subtest 'CORS adds headers to actual requests' => sub {
         'CORS merges Origin with existing Vary fields';
     is [response_header_values($sent[0], 'Set-Cookie')], ['a=1', 'b=2'],
         'CORS preserves repeated Set-Cookie fields';
-    is refaddr($sent[0]), refaddr($start),
-        'credentialed CORS mutates literal response metadata in place';
+    isnt refaddr($sent[0]), refaddr($start),
+        'credentialed CORS sends a new response start';
+    ok !(grep { lc($_->[0]) =~ /^access-control-/ } @{ $start->{headers} }),
+        "the application's own start event is untouched";
     is refaddr($sent[1]), refaddr($body),
         'credentialed CORS forwards the downstream body event by identity';
     is $sent[0]{extension_sentinel}, 'kept',
