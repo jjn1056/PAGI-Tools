@@ -14,6 +14,8 @@
     Stream and NDJSON, built by name with response('Name', ...) -- resolved
     like middleware(), '+' for a Response class from another distribution.
   - PAGI::Pages: negotiated welcome, error and redirect responses.
+  - PAGI::ErrorContext (error_context): the error an ErrorHandler handler
+    answers. PAGI::Request::BodyError gains client_message.
   - PAGI::Auth (auth, auth_result, unauth_result, www_authenticate,
     requires) and PAGI::Middleware::Authentication.
   - PAGI::State, PAGI::CSRF, PAGI::Transport and PAGI::Routing::URL
@@ -28,8 +30,24 @@
   [Changed]
   - raw_path is the full requested path at every mount level; AccessLog
     logs, and HTTPSRedirect redirects to, the encoded request URI.
-  - Stock error and redirect responses from first-party components
-    negotiate HTML, problem JSON or text through Pages.
+  - Stock error responses from first-party components are plain text, each
+    replaceable by one option (refuse, response, http_default, default or
+    ErrorHandler's handler); a PAGI::Pages page is the application's choice.
+  - One coderef convention: a slot that answers a request (every refuse,
+    Maintenance response, ErrorHandler handler, routes, http_default,
+    deny/decline) reads a bare coderef as a Request handler; a slot that
+    hosts an application (mount, URLMap, Cascade, Builder) reads it as a
+    native app. A native app that returns a response instead of sending it
+    now dies with a message naming request_response().
+  - ErrorHandler answers in plain text (reason phrase, or a client error's
+    client_message) with Cache-Control: no-store; its handler is a Request
+    handler that reads the error through PAGI::ErrorContext
+    (error_context($request)), may return any application, and declines by
+    returning $error->default. The error is re-raised when the status sent
+    is 5xx; a failing handler gets a last-resort 500 and the original error
+    is re-raised. Status claims outside 400-599 answer 500.
+  - PAGI-Tools middleware reject unknown options: a misspelt or renamed
+    option (CORS `origin`, CSRF `invalid`) dies at construction.
   - The Router's stock HTTP default is 0.002002's plain-text 404 "Not
     Found"; http_default stays the override.
   - URLMap answers an unmatched request with 0.002002's plain-text 404
@@ -86,8 +104,8 @@
   - Session takes no secret, cookie_name or cookie_options: the cookie is
     configured on State::Cookie, which sets no Max-Age by default and
     merges its cookie_options into the defaults.
-  - ErrorHandler re-raises server errors (5xx) to the server after the
-    error page, and rethrows an exception raised after the response
+  - ErrorHandler re-raises server errors to the server after the error
+    response (when the status sent is 5xx), and rethrows an exception raised after the response
     started instead of swallowing it.
   - PAGI::WebSocket and PAGI::SSE require pagi.connection (PAGI::Server
     0.002014); their state is a PAGI::State object; deny takes a response.
