@@ -94,6 +94,11 @@
     rate limiter.
   - PAGI::App::Proxy is removed: its blocking socket I/O froze the event
     loop for every proxied request.
+  - PAGI::App::WrapCGI is rewritten on Future::IO. It no longer blocks the
+    event loop, streams the script's output, passes it the request body
+    (it never did), enforces its timeout (it never did), stops the script
+    when the client goes away, and builds the environment per RFC 3875 --
+    never HTTP_PROXY (httpoxy, CVE-2016-5385). Unix only.
   - ContentNegotiation refuses an unmatched request by default; strict and
     default_type are removed (refuse => 0 replaces strict => 0); passing
     either dies.

@@ -770,6 +770,30 @@ my $id = $request->scope->{'pagi.request_id'};
 Code that reads the CSRF token through `csrf($request)->token` is
 unaffected. The CSRF cookie and form field are still named `csrf_token`.
 
+## Changed: `PAGI::App::WrapCGI` is rewritten
+
+0.002002's WrapCGI blocked the event loop while a script ran, never passed a
+POST body to the script (it inherited the server's own standard input), never
+applied its documented `timeout`, and let a client's `Proxy:` header become
+`HTTP_PROXY` (httpoxy, CVE-2016-5385). It now runs the script without blocking
+and streams its output, feeds it the request body, kills it on timeout or when
+the client goes away, and builds the environment per RFC 3875.
+
+What an application sees differently:
+
+| 0.002002 | Now |
+|---|---|
+| the whole output buffered, then sent | streamed with backpressure |
+| a POST body never reached the script | it does |
+| `timeout` ignored | enforced: 504 before the headers, the stream cut off after |
+| the script's whole environment replaced, `PATH` dropped | the CGI variables plus the server's `PATH` |
+| `PATH_INFO` the decoded path as characters; no `REQUEST_URI` | bytes; `REQUEST_URI` set; `HTTPS=on` for https |
+| repeated request headers: the last one wins | joined with `, ` |
+| a `Location` without `Status` answered 200 | 302 |
+| a script that could not start: a negotiated Pages 500 | plain-text 500; `refuse` replaces it |
+
+Unix only, and Future::IO must be bound, as `pagi-server` does.
+
 ## Breaking: `PAGI::App::Proxy` is removed
 
 It read the backend with blocking socket I/O, which froze the whole event
@@ -998,7 +1022,6 @@ built-in English body should assert the status and media type instead.
 | `PAGI::App::File` | 403, 404, 405, 416 | 405 `Allow: GET, HEAD`; 416 file length |
 | `PAGI::App::Directory` | listing 403 plus File's 403, 404, 405, 416 | listing rendering and I/O |
 | `PAGI::App::URLMap` | no-default 404 | mount selection |
-| `PAGI::App::WrapCGI` | process-start 500 | CGI execution and responses |
 | `PAGI::Middleware::Static` | 403, 404, 416 | pass-through; 416 file length |
 | `PAGI::Middleware::Maintenance` | built-in 503 | `retry_after`; explicit `body`/`content_type` stay literal |
 | `PAGI::Middleware::Rewrite` | redirect-mode response | rule selection, code, target |
