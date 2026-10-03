@@ -1774,8 +1774,8 @@ tokens require TLS in real deployments.
 
 C<requires(SCOPES, HANDLER, %options)> is Starlette's C<@requires>: it returns
 a handler that runs HANDLER only for an authenticated user holding every scope,
-and otherwise refuses with a 403 (a negotiated Pages response), C<status>, or a
-C<redirect>. It works for C<route>, C<websocket> and C<sse> handlers (the last
+and otherwise refuses with a plain 403, a C<refuse> application of your own, or
+a C<redirect>. It works for C<route>, C<websocket> and C<sse> handlers (the last
 two are denied or declined before they start), and needs the Authentication
 middleware in front of the route.
 
@@ -1810,7 +1810,7 @@ middleware in front of the route.
           # Hide the route's existence from those without access.
           route('/audit' => requires(['admin'], sub ($request) {
               response('JSON', { audit => [] });
-          }, status => 404)),
+          }, refuse => response('Text', 'Not Found', status => 404))),
           # Browsers: go to the route named 'login', with ?next= set.
           route('/home' => requires([], sub ($request) {
               response('JSON', { home => 1 });
@@ -1943,7 +1943,7 @@ flow, including login and logout methods. It requires Perl 5.40 or newer.
 =head2 Deliberate 404 Concealment
 
 B<Request handler:> when disclosing resource existence is itself sensitive,
-make concealment explicit policy -- C<< requires([...], \&handler, status => 404) >>
+make concealment explicit policy -- C<< requires([...], \&handler, refuse => response('Text', 'Not Found', status => 404)) >>
 when the rule is "these scopes", or by hand when it is something else:
 
   use PAGI::Pages qw(not_found);

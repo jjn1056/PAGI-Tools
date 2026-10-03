@@ -30,6 +30,9 @@
     logs, and HTTPSRedirect redirects to, the encoded request URI.
   - Stock error and redirect responses from first-party components
     negotiate HTML, problem JSON or text through Pages.
+  - PAGI::Auth's requires refuses with a plain 403 and takes refuse (any
+    application) in place of status; its redirect is a
+    PAGI::Response::Redirect 303.
   - App::File (and Directory and Static through it) refuses with 0.002002's
     plain text, keeping the 405's Allow and the 416's Content-Range; its
     refuse option replaces all four refusals, with the reason in
