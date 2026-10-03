@@ -7,6 +7,7 @@ use Future::AsyncAwait;
 use Time::HiRes qw(time);
 use JSON::MaybeXS ();
 use PAGI::Utils ();
+use PAGI::Headers ();
 
 =head1 NAME
 
@@ -105,7 +106,9 @@ sub wrap {
         my ($event) = @_;
             if ($event->{type} eq 'http.response.start') {
                 $response_status = $event->{status};
-                @response_headers = @{$event->{headers} // []};
+                # Its own copy of the pairs: Content-Length is rewritten below,
+                # and the response's pairs belong to whoever built them.
+                @response_headers = @{ PAGI::Headers->new($event->{headers} // [])->to_pairs };
 
                 # Check if HTML response
                 for my $h (@response_headers) {

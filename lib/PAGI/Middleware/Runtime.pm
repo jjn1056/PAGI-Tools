@@ -6,6 +6,7 @@ use parent 'PAGI::Middleware';
 use Future::AsyncAwait;
 use Time::HiRes qw(time);
 use PAGI::Utils ();
+use PAGI::Utils::Middleware ();
 
 =head1 NAME
 
@@ -27,6 +28,10 @@ PAGI::Middleware::Runtime - Request timing middleware
 PAGI::Middleware::Runtime measures the time taken to process a request
 and adds it as a response header. This is useful for performance
 monitoring and debugging.
+
+The header is added to a copy of the response's headers; the application's own
+list is never changed. If the response already has the header, it is left as
+it is, no second one is added, and a warning says so.
 
 =head1 CONFIGURATION
 
@@ -68,16 +73,19 @@ sub wrap {
 
         my $start_time = time();
 
-        # Intercept send to add runtime header
-        my $wrapped_send = async sub  {
-        my ($event) = @_;
-            if ($event->{type} eq 'http.response.start') {
-                my $duration = time() - $start_time;
-                my $formatted = sprintf('%.*f', $self->{precision}, $duration);
-                push @{$event->{headers}}, [$self->{header}, $formatted];
+        # The header goes on a copy: the response's own header list belongs
+        # to whoever built it, who may send it again. A value the response
+        # already carries is the application's, and stays.
+        my $wrapped_send = PAGI::Utils::Middleware::wrap_response_headers($send, sub {
+            my ($headers) = @_;
+            if ($headers->has($self->{header})) {
+                warn "PAGI::Middleware::Runtime: the response already has an "
+                    . "$self->{header} header; leaving it and adding none\n";
+                return;
             }
-            await $send->($event);
-        };
+            $headers->set($self->{header},
+                sprintf('%.*f', $self->{precision}, time() - $start_time));
+        });
 
         await $app->($scope, $receive, $wrapped_send);
     };
