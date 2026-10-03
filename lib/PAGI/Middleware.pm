@@ -141,11 +141,18 @@ return a Future.
     my $wrapped_send = $self->intercept_send($send, async sub  {
         my ($event, $original_send) = @_;
         if ($event->{type} eq 'http.response.start') {
-            # Modify headers
-            push @{$event->{headers}}, ['x-custom', 'value'];
+            # Send a new event: the one given belongs to whoever built it,
+            # who may send the same header list again.
+            $event = {
+                %$event,
+                headers => [ @{ $event->{headers} // [] }, ['x-custom', 'value'] ],
+            };
         }
         await $original_send->($event);
     });
+
+To change only headers, L<PAGI::Utils::Middleware/wrap_response_headers> does
+the copying and hands you a L<PAGI::Headers> to edit.
 
 =cut
 

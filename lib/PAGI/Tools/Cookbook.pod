@@ -1740,6 +1740,34 @@ The independent C<merge_vary(\@existing_values, @names)> function returns a
 single value when no Headers container is available. Both paths reject a
 malformed Vary field instead of silently dropping an existing dependency.
 
+=head2 Add a header from middleware
+
+A middleware adds response headers on a copy: the response's own header list
+belongs to whoever built it, and an application may send the same list for
+every response (see L<PAGI::Spec/Middleware>). C<wrap_response_headers> hands
+you a L<PAGI::Headers> copy and sends a new event with your changes:
+
+  use Future::AsyncAwait;
+  use PAGI::Utils::Middleware qw(wrap_response_headers);
+
+  sub with_build_header {
+      my ($app) = @_;
+      return async sub {
+          my ($scope, $receive, $send) = @_;
+          my $wrapped_send = wrap_response_headers($send, sub {
+              my ($headers) = @_;
+              $headers->set('X-Build', $ENV{BUILD_ID} // 'dev');   # replace
+              $headers->add_vary('Accept-Language');                 # merge Vary
+          });
+          await $app->($scope, $receive, $wrapped_send);
+      };
+  }
+
+Use C<add> for a header that repeats (C<Set-Cookie>) and C<set_default> to keep
+a value the response already has. To hear back from layers further in, seed a
+shared reference before calling inward -- L<PAGI::Stash>, or the spec
+Cookbook's "Reporting back to an outer layer" recipe.
+
 =head2 Compare conditional entity tags
 
 For an existing representation selected by a successful GET or HEAD, read all

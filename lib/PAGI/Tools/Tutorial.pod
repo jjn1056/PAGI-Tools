@@ -865,11 +865,16 @@ C<http.response.start> event by wrapping C<$send>:
       return async sub {
           my ($scope, $receive, $send) = @_;
 
-          # Wrap $send so we can edit the response-start event on its way out
+          # Wrap $send so we can change the response start on its way out.
+          # The event belongs to the app, which may send the same header
+          # list every time, so we send a new event rather than edit it.
           my $wrapped_send = async sub {
               my ($event) = @_;
               if ($event->{type} eq 'http.response.start') {
-                  push @{ $event->{headers} }, ['x-powered-by', 'PAGI'];
+                  $event = {
+                      %$event,
+                      headers => [ @{ $event->{headers} // [] }, ['x-powered-by', 'PAGI'] ],
+                  };
               }
               await $send->($event);
           };
@@ -886,24 +891,24 @@ the running order:
 
 =head3 The PAGI::Middleware version
 
-Here is the same middleware as a L<PAGI::Middleware> subclass. The base class
-supplies the wrapping helpers; C<intercept_send> hands your callback each
-outgoing C<$event> together with the original C<$send> to forward it to:
+Here is the same middleware as a L<PAGI::Middleware> subclass, with
+L<PAGI::Utils::Middleware>'s C<wrap_response_headers> doing the copying: it
+hands your callback a L<PAGI::Headers> copy of the response's headers and sends
+a new event with what you changed:
 
   package MyApp::Middleware::PoweredBy;
   use parent 'PAGI::Middleware';
   use Future::AsyncAwait;
+  use PAGI::Utils::Middleware qw(wrap_response_headers);
 
   sub wrap {
       my ($self, $app) = @_;
       return async sub {
           my ($scope, $receive, $send) = @_;
 
-          my $wrapped_send = $self->intercept_send($send, async sub {
-              my ($event, $orig_send) = @_;
-              push @{ $event->{headers} }, ['x-powered-by', 'PAGI']
-                  if $event->{type} eq 'http.response.start';
-              await $orig_send->($event);
+          my $wrapped_send = wrap_response_headers($send, sub {
+              my ($headers) = @_;
+              $headers->set('x-powered-by', 'PAGI');
           });
 
           await $app->($scope, $receive, $wrapped_send);
@@ -1280,19 +1285,20 @@ Add data for downstream handlers:
 
 =item * Intercept responses
 
-Modify outgoing events:
+Change outgoing events. Never edit the event you are given -- it belongs to
+the layer that built it -- but send a new one; for headers,
+C<wrap_response_headers> does that for you:
+
+  use PAGI::Utils::Middleware qw(wrap_response_headers);
 
   sub wrap {
       my ($self, $app) = @_;
       return async sub {
           my ($scope, $receive, $send) = @_;
 
-          my $wrapped_send = $self->intercept_send($send, async sub {
-              my ($event, $original_send) = @_;
-              if ($event->{type} eq 'http.response.start') {
-                  push @{$event->{headers}}, ['x-custom', 'value'];
-              }
-              await $original_send->($event);
+          my $wrapped_send = wrap_response_headers($send, sub {
+              my ($headers) = @_;
+              $headers->set('x-custom', 'value');
           });
 
           await $app->($scope, $receive, $wrapped_send);

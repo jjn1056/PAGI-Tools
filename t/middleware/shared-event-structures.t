@@ -105,4 +105,17 @@ subtest 'CORS' => sub {
     is values_of($events, 'Access-Control-Allow-Origin'), ['https://a.example'], "one value: CORS's";
 };
 
+subtest 'nothing in lib or examples teaches writing into a received header list' => sub {
+    require File::Find;
+    my @hits;
+    File::Find::find(sub {
+        return unless -f && /\.(?:pm|pl|pod|t)\z/;
+        open my $fh, '<', $_ or die "$File::Find::name: $!";
+        while (my $line = <$fh>) {
+            push @hits, "$File::Find::name:$." if $line =~ /push\s*\@\{\s*\$\w+->\{headers\}\s*\}/;
+        }
+    }, 'lib', 'examples');
+    is \@hits, [], 'no push into $event->{headers}';
+};
+
 done_testing;

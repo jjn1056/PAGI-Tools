@@ -291,7 +291,9 @@ The Compose-level `RequestId` middleware adds `X-Request-ID` to every HTTP
 response. The exported functional middleware in
 [`lib/AppleApp/Middleware.pm`](lib/AppleApp/Middleware.pm) wraps only the
 `/apples` mount and adds `X-Apples-API: 1`, demonstrating that middleware can
-be global or scoped to one routing boundary.
+be global or scoped to one routing boundary. It sets the header with
+`wrap_response_headers`, on a copy of the response's headers, never on the
+list the handler sent.
 
 ## Run
 
