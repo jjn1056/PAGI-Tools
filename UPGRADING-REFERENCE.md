@@ -745,6 +745,23 @@ with 0.002002's `406 text/plain` listing the supported types.
 
 Passing `strict` or `default_type` dies.
 
+## Breaking: Maintenance `body` and `content_type` are replaced by `response`
+
+Maintenance's default 503 is now the plain text `Service Unavailable` rather
+than 0.002002's built-in HTML page. One option, `response`, replaces it with any
+application; `retry_after` still sets Retry-After on whatever answers.
+
+```perl
+# 0.002002
+enable 'Maintenance', enabled => 1, body => $page, content_type => 'text/html';
+
+# Now
+enable 'Maintenance', enabled => 1,
+    response => response('HTML', $page, status => 503);
+```
+
+Passing `body` or `content_type` dies.
+
 ## Breaking: middleware scope keys move under `pagi.*`
 
 PAGI::Spec::Www reserves keys without a dot for the core spec and `pagi.*`
@@ -1020,7 +1037,6 @@ built-in English body should assert the status and media type instead.
 | Component | Stock default now from Pages | Preserved locally |
 |---|---|---|
 | `PAGI::App::URLMap` | no-default 404 | mount selection |
-| `PAGI::Middleware::Maintenance` | built-in 503 | `retry_after`; explicit `body`/`content_type` stay literal |
 | `PAGI::Middleware::Rewrite` | redirect-mode response | rule selection, code, target |
 
 Custom handlers, application bodies and explicit Responses stay literal.

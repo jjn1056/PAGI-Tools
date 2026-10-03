@@ -27,6 +27,7 @@ in [UPGRADING-REFERENCE.md](UPGRADING-REFERENCE.md).
 | `PAGI::App::Proxy` | removed: it blocked the event loop; proxy in front with nginx, HAProxy or Caddy ([details](UPGRADING-REFERENCE.md#breaking-pagiappproxy-is-removed)) |
 | `PAGI::App::WrapCGI` | rewritten: no longer blocks the loop; POST bodies, `timeout` and the CGI environment now work; `refuse` ([details](UPGRADING-REFERENCE.md#changed-pagiappwrapcgi-is-rewritten)) |
 | scope keys `csrf_token`, `original_client`, `original_method`, `original_path`, `request_id` | the same names under `pagi.` ([details](UPGRADING-REFERENCE.md#breaking-middleware-scope-keys-move-under-pagi)) |
+| Maintenance `body`, `content_type` | `response => response('HTML', $page, status => 503)`; the default is now plain text; both options now die ([details](UPGRADING-REFERENCE.md#breaking-maintenance-body-and-content_type-are-replaced-by-response)) |
 | ContentNegotiation `strict`, `default_type` | refusing is the default; `refuse => 0` lets the application decide; both options now die ([details](UPGRADING-REFERENCE.md#breaking-contentnegotiation-refuses-by-default-strict-and-default_type-are-removed)) |
 | `Auth::Basic`, `Auth::Bearer` | `Authentication` with a backend, plus `requires` ([details](UPGRADING-REFERENCE.md#breaking-authbasic-and-authbearer-are-replaced-by-authentication)) |
 | `FormBody`, `JSONBody` middleware | `$request->form_params`, `$request->json` ([details](UPGRADING-REFERENCE.md#breaking-pagimiddlewareformbody-and-pagimiddlewarejsonbody-are-removed)) |

@@ -30,6 +30,9 @@
     logs, and HTTPSRedirect redirects to, the encoded request URI.
   - Stock error and redirect responses from first-party components
     negotiate HTML, problem JSON or text through Pages.
+  - Maintenance answers with a plain-text 503 by default; its response
+    option (any application) replaces the body and content_type options,
+    which now die.
   - PAGI::Auth's requires refuses with a plain 403 and takes refuse (any
     application) in place of status; its redirect is a
     PAGI::Response::Redirect 303.

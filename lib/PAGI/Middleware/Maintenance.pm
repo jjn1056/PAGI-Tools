@@ -5,8 +5,7 @@ use warnings;
 use parent 'PAGI::Middleware';
 use Future;
 use Future::AsyncAwait;
-use PAGI::Pages;
-use PAGI::Response;
+use PAGI::Response::Text ();
 use PAGI::Utils ();
 
 =head1 NAME
@@ -27,16 +26,10 @@ PAGI::Middleware::Maintenance - Serve maintenance page when enabled
 
 =head1 DESCRIPTION
 
-PAGI::Middleware::Maintenance serves a 503 Service Unavailable page
-when maintenance mode is enabled. Supports IP-based bypass for admins.
-
-With neither C<body> nor C<content_type> supplied, the built-in response uses
-L<PAGI::Pages> to negotiate HTML, problem JSON, or plain text from the original
-request. It retains the configured C<Retry-After> value. Supplying either
-C<body> or C<content_type> selects the existing literal response branch;
-C<Retry-After> remains effective there as well. Enabled, disabled, and bypass
-decisions remain local to this middleware, and there is no Pages configuration
-surface.
+PAGI::Middleware::Maintenance answers every HTTP request with a 503 while
+maintenance mode is enabled -- by default the plain text
+C<Service Unavailable> -- except for bypassed client addresses and paths.
+WebSocket and SSE connections pass through.
 
 =head1 CONFIGURATION
 
@@ -56,19 +49,23 @@ Arrayref of paths that bypass maintenance mode (e.g., health checks).
 
 =item * retry_after (optional)
 
-Seconds until maintenance expected to end. Sets Retry-After header.
+Seconds until maintenance expected to end. Sets Retry-After header, on
+whatever answers: it replaces any Retry-After a C<response> carries.
 
-=item * content_type
+=item * response
 
-Explicit Content-Type for a literal maintenance response. Supplying it selects
-the literal custom-response branch. When only C<body> is supplied, this branch
-defaults to C<text/html>.
+The maintenance response instead of the plain-text default: an application --
+a C<($scope, $receive, $send)> coderef or an object with C<to_app>, which
+includes every L<PAGI::Response>. Give it the 503 status yourself:
 
-=item * body
+    enable 'Maintenance', enabled => 1, retry_after => 3600,
+        response => response('HTML', $maintenance_page, status => 503);
 
-Explicit literal maintenance page body. Supplying it selects the literal
-custom-response branch. When only C<content_type> is supplied, the existing
-built-in HTML body is used literally.
+    enable 'Maintenance', enabled => 1,
+        response => PAGI::Pages->service_unavailable;   # negotiated
+
+Any plain value dies, as do the C<body> and C<content_type> options that
+C<response> replaces.
 
 =back
 
@@ -77,14 +74,18 @@ built-in HTML body is used literally.
 sub _init {
     my ($self, $config) = @_;
 
-    $self->{_custom_response} =
-        exists $config->{body} || exists $config->{content_type};
+    for my $option (qw(body content_type)) {
+        die "Maintenance '$option' is replaced by 'response': "
+            . "response => response('HTML', \$page, status => 503)"
+            if exists $config->{$option};
+    }
+    $self->{response} = PAGI::Utils::_application_option(
+        'Maintenance', $config, 'response',
+    ) // PAGI::Response::Text->new('Service Unavailable', status => 503)->to_app;
     $self->{enabled} = $config->{enabled} // 0;
     $self->{bypass_ips} = $config->{bypass_ips} // [];
     $self->{bypass_paths} = $config->{bypass_paths} // [];
     $self->{retry_after} = $config->{retry_after};
-    $self->{content_type} = $config->{content_type} // 'text/html';
-    $self->{body} = $config->{body} // $self->_default_body();
 }
 
 sub wrap {
@@ -181,73 +182,10 @@ sub _all_valid_octets {
 
 async sub _send_maintenance {
     my ($self, $scope, $receive, $send) = @_;
-
-    unless ($self->{_custom_response}) {
-        my @options;
-        push @options, retry_after => $self->{retry_after}
-            if defined $self->{retry_after};
-        my $response = PAGI::Pages->service_unavailable(@options);
-        await PAGI::Utils::invoke_app(
-            $response, $scope, $receive, $send,
-        );
-        return;
-    }
-
-    my $body = $self->{body};
-    my @headers;
-    push @headers, 'Retry-After' => $self->{retry_after}
-        if defined $self->{retry_after};
-    my $response = PAGI::Response->new(
-        $body,
-        status       => 503,
-        content_type => $self->{content_type},
-        headers      => \@headers,
-    );
-    await PAGI::Utils::invoke_app($response, $scope, $receive, $send);
-}
-
-sub _default_body {
-    my ($self) = @_;
-
-    return <<'HTML';
-<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Maintenance</title>
-    <style>
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            background: #f5f5f5;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            min-height: 100vh;
-            margin: 0;
-        }
-        .container {
-            background: white;
-            padding: 40px;
-            border-radius: 8px;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
-            text-align: center;
-            max-width: 500px;
-        }
-        h1 { color: #333; margin-bottom: 10px; }
-        p { color: #666; line-height: 1.6; }
-        .icon { font-size: 64px; margin-bottom: 20px; }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <div class="icon">🔧</div>
-        <h1>Under Maintenance</h1>
-        <p>We're currently performing scheduled maintenance. Please check back soon.</p>
-    </div>
-</body>
-</html>
-HTML
+    my @fields = defined $self->{retry_after}
+        ? (['Retry-After', $self->{retry_after}]) : ();
+    await $self->{response}->($scope, $receive,
+        PAGI::Utils::_send_with_fields($send, @fields));
 }
 
 1;

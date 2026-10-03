@@ -392,14 +392,21 @@ sub _send_with_fields {
 # mistyped setting must never switch a check off.
 sub _refuse_option {
     my ($component, $config, $may_decide) = @_;
-    return undef unless exists $config->{refuse};
-    my $refuse = $config->{refuse};
-    return '0' if $may_decide && defined($refuse) && !ref($refuse) && $refuse eq '0';
+    return _application_option($component, $config, 'refuse', $may_decide);
+}
+
+# The same for any option whose value replaces a component's own response,
+# such as Maintenance's `response`.
+sub _application_option {
+    my ($component, $config, $key, $may_decide) = @_;
+    return undef unless exists $config->{$key};
+    my $value = $config->{$key};
+    return '0' if $may_decide && defined($value) && !ref($value) && $value eq '0';
     die $may_decide
-        ? "$component 'refuse' must be an application, or 0 to let the application decide"
-        : "$component 'refuse' must be an application"
-        unless ref($refuse);
-    return to_app($refuse);
+        ? "$component '$key' must be an application, or 0 to let the application decide"
+        : "$component '$key' must be an application"
+        unless ref($value);
+    return to_app($value);
 }
 
 # On a case-insensitive filesystem, require 'Foo/json.pm' opens Foo/JSON.pm
