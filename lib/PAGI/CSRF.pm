@@ -39,7 +39,8 @@ PAGI::CSRF - Strict access to an issued CSRF token
     # 2. The application handles it. A plain HTML form sends its token in the
     #    body, which the middleware does not read: with refuse => 0 every
     #    request reaches the application, which verifies the parsed field.
-    #    (csrf($scope)->valid and ->failure report the header check, if any.)
+    #    (csrf($scope)->valid and ->failure report the middleware's origin and
+    #    header checks, if any; verify also fails a cross-origin request.)
     my $form = PAGI::Middleware::CSRF->new(refuse => 0)->wrap(async sub {
         my ($scope, $receive, $send) = @_;
         my $guard = csrf($scope);
@@ -154,7 +155,7 @@ sub verify {
 
     return $refused unless csrf($request)->valid;
 
-Returns 1 unless L<PAGI::Middleware::CSRF> recorded a failed header check
+Returns 1 unless L<PAGI::Middleware::CSRF> recorded a failed origin or header check
 for this request, else 0. Safe methods are not checked and report valid. A
 token sent in a form field is not seen by the middleware: verify it with
 L</verify> once the form is parsed.

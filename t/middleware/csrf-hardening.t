@@ -131,6 +131,17 @@ subtest 'trusted_origins' => sub {
             "'$bad' dies");
     }
     ok(lives { PAGI::Middleware::CSRF->new(trusted_origins => ['http://localhost:3000']) }, 'a port is fine');
+    for my $bad ('https://*.example.com', 'https://user@app.example.com', 'ftp://app.example.com') {
+        like(dies { PAGI::Middleware::CSRF->new(trusted_origins => [$bad]) },
+            qr/\QCSRF trusted_origins entries must be a scheme and host\E/, "'$bad' dies");
+    }
+    ok(lives { PAGI::Middleware::CSRF->new(trusted_origins => ['http://[::1]:3000']) }, 'an IPv6 host is fine');
+    my $default_port = PAGI::Middleware::CSRF->new(
+        trusted_origins => ['https://app.example.com:443', 'http://localhost:80']);
+    ($sent) = post_with_token($default_port, ['sec-fetch-site', 'cross-site'], ['origin', 'https://app.example.com']);
+    is($sent->[0]{status}, 200, 'a default port is dropped, as browsers drop it from Origin');
+    ($sent) = post_with_token($default_port, ['sec-fetch-site', 'cross-site'], ['origin', 'http://localhost']);
+    is($sent->[0]{status}, 200, 'for http as well');
 };
 
 subtest 'a cross-origin request is recorded under refuse => 0' => sub {

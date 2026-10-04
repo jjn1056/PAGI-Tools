@@ -41,8 +41,8 @@ the token travels in a hidden `csrf_token` field, which the middleware does
 not read: the app runs it with `refuse => 0`, and each POST handler checks
 the parsed field with `csrf($request)->verify` and answers 403 when it does
 not match. The token lives in the session (`session => 1`), so there is no
-CSRF cookie to plant, and the middleware refuses a cross-site post before
-the handler runs.
+CSRF cookie to plant. A cross-site post is caught by the middleware's origin
+check, which records it, and the handler's `verify` answers it with the 403.
 
 ## Serving it under a prefix
 

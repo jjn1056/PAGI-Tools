@@ -98,12 +98,13 @@ combined with C<httponly>.
 Origins, besides the request's own, whose unsafe requests may pass the
 origin check -- for example an application on C<https://app.example.com>
 posting to an API on C<https://api.example.com>. Each is a scheme and host
-with an optional port (C<http://localhost:3000>), nothing else. The token
-check still applies.
+with an optional port (C<http://localhost:3000>, C<http://[::1]:3000>),
+nothing else; a default port is dropped, as browsers drop it from
+C<Origin>. The token check still applies.
 
 =item * refuse (default: a 403 text response)
 
-What answers an unsafe request whose token check fails. Absent: a
+What answers an unsafe request that fails the origin or token check. Absent: a
 C<403 text/plain> response, C<CSRF token validation failed>. An application
 -- a Request handler (a coderef called with one
 L<PAGI::Request>, returning a Response or an application) or an object
@@ -161,15 +162,22 @@ sub _flag {
 }
 
 # trusted_origins as a lookup of lowercased origins: each a scheme and a
-# host with an optional port, and nothing else.
+# host (a name or a bracketed IPv6 address) with an optional port, and
+# nothing else. A default port is dropped, as browsers drop it from Origin,
+# so the entry can match.
 sub _trusted_origins {
     my ($origins) = @_;
     die 'CSRF trusted_origins must be an arrayref of origins' unless ref($origins) eq 'ARRAY';
     my %trusted;
     for my $origin (@$origins) {
+        my ($scheme, $host, $port) = defined($origin) && !ref($origin)
+            ? $origin =~ m{\A(https?)://([a-z0-9.-]+|\[[0-9a-f:.]+\])(?::([0-9]+))?\z}i
+            : ();
         die 'CSRF trusted_origins entries must be a scheme and host, like https://app.example.com'
-            unless defined($origin) && !ref($origin) && $origin =~ m{\Ahttps?://[^/?#\s]+\z}i;
-        $trusted{lc $origin} = 1;
+            unless defined $scheme;
+        $scheme = lc $scheme;
+        undef $port if defined($port) && $port eq ($scheme eq 'https' ? '443' : '80');
+        $trusted{lc("$scheme://$host" . (defined $port ? ":$port" : ''))} = 1;
     }
     return \%trusted;
 }
@@ -229,7 +237,6 @@ sub _failure_for {
     return undef;
 }
 
-# 32 bytes from the system's secure random source, as 64 hex characters.
 # The token for this request and the one it must match. Under session => 1
 # both are the session's, created there on first use; otherwise the client's
 # existing cookie -- never a regenerated one, so a token the client already
@@ -270,6 +277,7 @@ sub _origin_failure {
     return 'cross_origin';
 }
 
+# 32 bytes from the system's secure random source, as 64 hex characters.
 sub _generate_token {
     return unpack('H*', secure_random_bytes(32));
 }
@@ -379,9 +387,9 @@ cookies for your domain can plant a token they know -- OWASP: the pattern
 "is bypassable by an attacker who can write cookies on the target domain
 (e.g., via a vulnerable sibling subdomain, DNS takeover, or plaintext-HTTP
 cookie injection on a non-C<__Host-> cookie)". The origin check narrows
-this: current browsers send C<Sec-Fetch-Site>, so a forged request from a
-sibling subdomain (C<same-site>) is still refused, but a client that sends
-neither C<Sec-Fetch-Site> nor C<Origin> is protected by the token alone.
+this: browsers send C<Sec-Fetch-Site> over HTTPS and C<Origin> on a POST,
+so a forged request from a sibling subdomain is still refused, but a client
+that sends neither header is protected by the token alone.
 
 =over 4
 
@@ -393,8 +401,11 @@ stops subdomains overwriting the cookie (browsers refuse a C<__Host->
 cookie set with a C<Domain>, without C<Secure>, or off C<Path=/>).
 
 =item * The origin check compares C<Origin> with the C<Host> header this
-middleware is handed. Put L<PAGI::Middleware::ReverseProxy> outside it when
-a proxy rewrites C<Host>, or list the public origin in C<trusted_origins>.
+middleware is handed. When a proxy rewrites C<Host>, put
+L<PAGI::Middleware::ReverseProxy> outside this middleware and have the proxy
+send C<X-Forwarded-Host> with the public host, including any non-default
+port (ReverseProxy restores C<Host> only from that header, and only from a
+trusted proxy); or list the public origin in C<trusted_origins>.
 
 =back
 
