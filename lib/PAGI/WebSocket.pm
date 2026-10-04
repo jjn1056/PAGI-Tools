@@ -448,6 +448,23 @@ async sub deny {
     return $self;
 }
 
+# End the socket however its state allows: refuse the handshake before
+# accept, close an accepted socket, and do nothing once the connection is
+# gone -- a client that hung up is not the application's error.
+async sub close_or_deny {
+    my ($self, $code, $reason, $response) = @_;
+    return $self if $self->_response_claimed_before_start;
+    if ($self->connection_state eq 'connecting') {
+        require PAGI::Response::Text;
+        await $self->deny($response // PAGI::Response::Text->new(
+            (defined($reason) && length($reason) ? $reason : 'Forbidden'), status => 403,
+        ));
+        return $self;
+    }
+    await $self->close($code, $reason);
+    return $self;
+}
+
 # Send text message
 async sub send_text {
     my ($self, $text) = @_;
@@ -1153,6 +1170,22 @@ application objects, and wrapped native applications, with matching SSE call
 sites.
 
 See L<PAGI::Spec::Www/"WebSocket Denial Response">.
+
+=head2 close_or_deny
+
+    await $ws->close_or_deny(1011, 'Internal Server Error');
+    await $ws->close_or_deny(4004, 'Not Found',
+        response('Text', 'Not Found', status => 404));
+
+Ends the socket however its state allows, for code that cannot know
+whether the handshake was accepted -- an error handler, a framework's
+dispatch. Before L</accept> it refuses with L</deny>: the given Response,
+or a C<403 text/plain> whose body is C<$reason> (C<Forbidden> when there
+is none), as ASGI answers a close before accept. After accept it calls
+L</close> with C<$code> and C<$reason>. Once the connection is closed --
+the client hung up, or the socket was already ended -- it sends nothing and
+does not die, so a client that left is not reported as an application
+error.
 
 =head1 STATE ACCESSORS
 
