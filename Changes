@@ -26,6 +26,8 @@
   - Session's session_state and session_store constructors.
   - PAGI::Test::Client root_path; PAGI::Middleware::BufferedResponse;
     App::File from_app_path; the process-streaming example.
+  - PAGI::WebSocket close_or_deny: ends a socket however its state allows
+    -- deny before accept, close after, nothing once the client has gone.
   - PAGI::Middleware::CSRF: session => 1 keeps the token in the session
     and replaces it when the session is regenerated (at login);
     an origin check (Sec-Fetch-Site, then Origin vs Host) on unsafe
