@@ -129,12 +129,7 @@ sub to_app {
                 return $send->($event);
             };
 
-            my $completed = eval {
-                await Future->wrap($app->($scope, $receive, $observing_send));
-                1;
-            };
-            my $error = $@ unless $completed;
-            die $error unless $completed;
+            await Future->wrap($app->($scope, $receive, $observing_send));
             die $body_before_start if $body_before_start;
 
             if ($start_seen) {
