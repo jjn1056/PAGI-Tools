@@ -45,7 +45,7 @@ PAGI::CSRF - Strict access to an issued CSRF token
         my $guard = csrf($scope);
         my $response;
         if ($scope->{method} eq 'GET') {
-            # The cookie holding the token is HttpOnly, so the page hands it over.
+            # A plain form cannot read cookies or set headers, so the page hands it over.
             my $token = $guard->token;
             $response = response('HTML', qq{<form method="post">}
                 . qq{<input type="hidden" name="csrf_token" value="$token">}

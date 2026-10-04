@@ -1060,7 +1060,7 @@ subtest 'CSRF refuse: the refusing application can read the reason' => sub {
 subtest 'CSRF refusal of a first POST still issues the cookie' => sub {
     my ($sent) = csrf_request(PAGI::Middleware::CSRF->new);
     my ($cookie) = response_header_values($sent->[0], 'Set-Cookie');
-    like $cookie, qr/\Acsrf_token=[0-9a-f]+; Path=\/; HttpOnly; SameSite=Strict\z/,
+    like $cookie, qr/\Acsrf_token=[0-9a-f]+; Path=\/; SameSite=Strict\z/,
         'the refusal sets the minted token';
 };
 

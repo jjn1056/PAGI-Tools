@@ -65,6 +65,15 @@ Add the C<Secure> attribute to the CSRF cookie, restricting it to HTTPS
 requests. Off by default so plain-HTTP development setups keep working;
 for production HTTPS deployments, add C<< secure => 1 >>.
 
+=item * httponly (default: 0)
+
+Add C<HttpOnly> to the CSRF cookie, so scripts cannot read it. Off by
+default: the double-submit pattern needs the page's script to send the
+token back, and front-end libraries (Angular, Axios) read it from the
+cookie. C<HttpOnly> adds no protection against cross-site requests; turn it
+on if an audit requires it, and render C<< csrf($request)->token >> into
+the page instead (see L</USAGE>).
+
 =item * refuse (default: a 403 text response)
 
 What answers an unsafe request whose token check fails. Absent: a
@@ -98,6 +107,7 @@ sub _init {
     $self->{cookie_name}  = $config->{cookie_name} // 'csrf_token';
     $self->{safe_methods} = { map { $_ => 1 } @{$config->{safe_methods} // [qw(GET HEAD OPTIONS TRACE)]} };
     $self->{secure}       = $config->{secure} // 0;
+    $self->{httponly}     = _flag($config, 'httponly');
 
     # Absent: the default refusal. Exactly 0: the application decides.
     my $refuse = PAGI::Utils::_refuse_option('CSRF', $config, 1);
@@ -107,7 +117,16 @@ sub _init {
         : ref($refuse) ? $refuse
         : undef;
     PAGI::Utils::_reject_unknown_options('CSRF', $config,
-        qw(cookie_name refuse safe_methods secure token_header));
+        qw(cookie_name httponly refuse safe_methods secure token_header));
+}
+
+# A 0-or-1 option; absent is 0.
+sub _flag {
+    my ($config, $name) = @_;
+    my $value = $config->{$name} // 0;
+    die "CSRF $name must be 0 or 1"
+        unless !ref($value) && ($value eq '0' || $value eq '1');
+    return $value + 0;
 }
 
 sub wrap {
@@ -138,7 +157,9 @@ sub wrap {
         my $wrapped_send = defined $cookie_token ? $send : async sub {
             my ($event) = @_;
             if ($event->{type} eq 'http.response.start') {
-                my $cookie = "$self->{cookie_name}=$token; Path=/; HttpOnly; SameSite=Strict";
+                my $cookie = "$self->{cookie_name}=$token; Path=/"
+                    . ($self->{httponly} ? '; HttpOnly' : '')
+                    . '; SameSite=Strict';
                 $cookie .= "; Secure" if $self->{secure};
                 $event = {
                     %$event,
@@ -203,13 +224,11 @@ __END__
 
 =head1 USAGE
 
-The CSRF middleware always uses a double-submit cookie pattern: a token is
-generated and stored in an C<HttpOnly> cookie, and a request is only valid if
-it also carries that same token some other way -- because C<HttpOnly> means
-client-side JavaScript cannot read the cookie itself (C<document.cookie>
-won't show it, and neither would a hypothetical C<getCookie> helper). That
-"some other way" is a request header (the default) or a form field
-(C<refuse =E<gt> 0>).
+The CSRF middleware uses a double-submit token: it issues a random token
+in a cookie, and an unsafe request is valid only if it also carries the
+same token another way -- a request header (the default) or a form field
+(C<refuse =E<gt> 0>). The page's script can read the cookie, or the page
+can carry the token itself (required under C<httponly> or C<session>).
 
 =head2 Header flow (the default)
 
@@ -218,8 +237,8 @@ header. The middleware validates the header itself; the app is never called
 on a mismatch.
 
 Render the token into the page once (a C<< <meta> >> tag is the usual spot),
-reading it from the CSRF facade -- B<not> from the cookie, which
-JavaScript cannot see:
+reading it from the CSRF facade (or let the script read the cookie, unless
+C<httponly> is on):
 
     my $guard = csrf($request);
     my $token = $guard->token;

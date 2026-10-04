@@ -55,4 +55,18 @@ subtest 'tokens are random hex' => sub {
     isnt($first->[0]{'pagi.csrf_token'}, $second->[0]{'pagi.csrf_token'}, 'a fresh token per new client');
 };
 
+subtest 'the cookie is readable by JavaScript by default' => sub {
+    my ($sent) = run_csrf(PAGI::Middleware::CSRF->new, method => 'GET');
+    like(set_cookie_of($sent), qr/\Acsrf_token=[0-9a-f]{64}; Path=\/; SameSite=Strict\z/,
+        'no HttpOnly');
+};
+
+subtest 'httponly => 1 flags it' => sub {
+    my ($sent) = run_csrf(PAGI::Middleware::CSRF->new(httponly => 1), method => 'GET');
+    like(set_cookie_of($sent), qr/\Acsrf_token=[0-9a-f]{64}; Path=\/; HttpOnly; SameSite=Strict\z/,
+        'HttpOnly when asked');
+    like(dies { PAGI::Middleware::CSRF->new(httponly => 'yes') },
+        qr/\QCSRF httponly must be 0 or 1\E/, 'any other value dies');
+};
+
 done_testing;
