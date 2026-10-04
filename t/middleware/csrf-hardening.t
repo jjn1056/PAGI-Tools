@@ -217,4 +217,45 @@ subtest 'session => 1 with the real Session middleware' => sub {
     is($client->post('/', headers => { 'X-CSRF-Token' => 'abc' })->status, 403, 'another does not');
 };
 
+subtest 'session => 1 replaces the token when the session is regenerated' => sub {
+    my $mw = PAGI::Middleware::CSRF->new(session => 1);
+    my $session = { csrf_token => 'a' x 64, _regenerated => 1 };
+    run_csrf($mw, method => 'GET', scope => { 'pagi.session' => $session });
+    like($session->{csrf_token}, qr/\A[0-9a-f]{64}\z/, 'a fresh token');
+    isnt($session->{csrf_token}, 'a' x 64, 'not the one held before');
+
+    my $kept = { csrf_token => 'b' x 64 };
+    run_csrf($mw, method => 'GET', scope => { 'pagi.session' => $kept });
+    is($kept->{csrf_token}, 'b' x 64, 'an unregenerated session keeps its token');
+};
+
+subtest 'a token known before login is useless after it' => sub {
+    require PAGI::Middleware::Session;
+    require PAGI::Session;
+    require PAGI::Test::Client;
+    my $app = PAGI::Middleware::Session->new->wrap(
+        PAGI::Middleware::CSRF->new(session => 1)->wrap(async sub {
+            my ($scope, $receive, $send) = @_;
+            my $session = PAGI::Session->new($scope);
+            $session->regenerate if $scope->{path} eq '/login';
+            $session->destroy    if $scope->{path} eq '/logout';
+            await $send->({ type => 'http.response.start', status => 200,
+                headers => [['content-type', 'text/plain']] });
+            await $send->({ type => 'http.response.body', body => $scope->{'pagi.csrf_token'}, more => 0 });
+        }));
+    my $client = PAGI::Test::Client->new(app => $app);
+    my $before = $client->get('/')->text;
+    is($client->post('/login', headers => { 'X-CSRF-Token' => $before })->status, 200, 'log in');
+    my $after = $client->get('/')->text;
+    like($after, qr/\A[0-9a-f]{64}\z/, 'the session has a token after login');
+    isnt($after, $before, 'and it is a new one');
+    is($client->post('/', headers => { 'X-CSRF-Token' => $before })->status, 403,
+        'the token from before login is refused');
+    is($client->post('/', headers => { 'X-CSRF-Token' => $after })->status, 200, 'the new one passes');
+
+    is($client->post('/logout', headers => { 'X-CSRF-Token' => $after })->status, 200, 'log out');
+    my $fresh = $client->get('/')->text;
+    isnt($fresh, $after, 'a destroyed session starts over with a new token');
+};
+
 done_testing;

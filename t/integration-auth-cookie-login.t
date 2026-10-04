@@ -78,6 +78,9 @@ for my $case (['at the root', '', $app], ['under /app', '/app', compose(routes =
 
         my $home = $client->get("$p/account/");
         is($home->status, 200, 'authenticated home succeeds');
+        isnt(form_token($home->text), $token, 'login replaced the CSRF token');
+        is($client->post("$p/account/logout", form => { csrf_token => $token })->status, 403,
+            'the token from before login no longer verifies');
         like($home->text, qr/Hello, demo/, 'and greets the user');
         like($home->text, qr{<form method="post" action="\Q$p\E/account/logout">}, 'logout posts to the mounted route');
 

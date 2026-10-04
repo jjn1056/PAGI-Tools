@@ -93,6 +93,12 @@ this middleware; an C<http> request without it dies. No CSRF cookie is set,
 so the page carries the token (C<< csrf($request)->token >>). Cannot be
 combined with C<httponly>.
 
+When the application regenerates the session -- as it should at login --
+the token is replaced as that response starts, so a token known before
+login is refused after it. A page rendered in that same response still
+carries the old token: redirect after login, as usual, so the next page
+gets the new one.
+
 =item * trusted_origins (default: [])
 
 Origins, besides the request's own, whose unsafe requests may pass the
@@ -206,7 +212,8 @@ sub wrap {
         # included, so the client's next attempt can carry it. The event is
         # copied: an application may reuse its headers arrayref, and a
         # cookie added to it would reach every later client.
-        my $wrapped_send = $self->{session} || defined $stored ? $send : async sub {
+        my $wrapped_send = $self->{session} ? $self->_rotating_send($scope, $send)
+            : defined $stored ? $send : async sub {
             my ($event) = @_;
             if ($event->{type} eq 'http.response.start') {
                 my $cookie = "$self->{cookie_name}=$token; Path=/"
@@ -235,6 +242,21 @@ sub _failure_for {
     return 'missing_token' unless defined($submitted) && length($submitted);
     return 'mismatch' unless secure_compare($submitted, $cookie_token);
     return undef;
+}
+
+# Under session => 1: when the application regenerated the session (at
+# login), the session gets a new token as the response starts -- before
+# Session, outside this middleware, saves it -- so a token known before
+# login, perhaps through a planted session cookie, is useless after it.
+sub _rotating_send {
+    my ($self, $scope, $send) = @_;
+    return async sub {
+        my ($event) = @_;
+        my $session = $scope->{'pagi.session'};
+        $session->{csrf_token} = $self->_generate_token()
+            if $event->{type} eq 'http.response.start' && $session->{_regenerated};
+        await $send->($event);
+    };
 }
 
 # The token for this request and the one it must match. Under session => 1
@@ -394,7 +416,9 @@ that sends neither header is protected by the token alone.
 =over 4
 
 =item * C<session =E<gt> 1> binds the token to the session, so a planted
-cookie is useless. Use it whenever the application has a session.
+CSRF cookie is useless, and replaces it when the session is regenerated at
+login, so neither is a planted session cookie's token. Use it whenever the
+application has a session.
 
 =item * Over HTTPS, C<< cookie_name => '__Host-csrf_token', secure => 1 >>
 stops subdomains overwriting the cookie (browsers refuse a C<__Host->
