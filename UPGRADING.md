@@ -19,9 +19,17 @@ in [UPGRADING-REFERENCE.md](UPGRADING-REFERENCE.md).
 | `$ctx->stash`, `session`, `state`, `csrf_verify`, `on_drain` | `stash($request)`, `session($request)`, `app_state($request)`, `csrf($request)`, `transport($request)` ([details](UPGRADING-REFERENCE.md#import-optional-capabilities-from-their-owners)) |
 | App::Router handlers as native `($scope, $receive, $send)` apps | Route CODE gets one Request; wrap natives with `as_app_object` ([details](UPGRADING-REFERENCE.md#migrate-app-router-declarations)) |
 | `PAGI::App::NotFound`, `PAGI::App::Redirect` | `PAGI::Pages` `not_found`, `redirect` ([details](UPGRADING-REFERENCE.md#pages-replaces-the-stock-response-applications)) |
-| ErrorHandler `content_type`; errors swallowed after start | a `handler` that returns a Response; 5xx re-raised to the server ([details](UPGRADING-REFERENCE.md#breaking-errorhandler-re-raises-server-errors)) |
+| ErrorHandler `content_type`; errors swallowed after start | a Request-handler `handler` reading `error_context($request)`; 5xx re-raised to the server ([details](UPGRADING-REFERENCE.md#breaking-errorhandler-re-raises-server-errors)) |
+| an unknown middleware option | now dies; check spelling and renamed options (`invalid` → `refuse`) |
 | Session `secret`, `cookie_name`, `cookie_options`; `State::Bearer` | `state => session_state('Cookie', ...)`; no secret ([details](UPGRADING-REFERENCE.md#breaking-the-session-cookie-is-configured-on-statecookie-not-on-the-middleware)) |
-| CSRF `enforce => 'header'` / `enforce => 'app'` | the default / `invalid => 0`; `enforce` now dies ([details](UPGRADING-REFERENCE.md#breaking-csrf-enforce-is-replaced-by-invalid)) |
+| CSRF `enforce => 'header'` / `enforce => 'app'` | the default / `refuse => 0`; `enforce` now dies ([details](UPGRADING-REFERENCE.md#breaking-csrf-enforce-is-replaced-by-refuse)) |
+| RateLimit `backend` | removed (it was never used); passing it dies ([details](UPGRADING-REFERENCE.md#breaking-ratelimit-backend-is-removed-limiters-no-longer-share-buckets)) |
+| `PAGI::App::Throttle` | `middleware('RateLimit', ...)`; `key_generator => sub { 'global' }` for one bucket ([details](UPGRADING-REFERENCE.md#breaking-pagiappthrottle-is-removed)) |
+| `PAGI::App::Proxy` | removed: it blocked the event loop; proxy in front with nginx, HAProxy or Caddy ([details](UPGRADING-REFERENCE.md#breaking-pagiappproxy-is-removed)) |
+| `PAGI::App::WrapCGI` | rewritten: no longer blocks the loop; POST bodies, `timeout` and the CGI environment now work; `refuse` ([details](UPGRADING-REFERENCE.md#changed-pagiappwrapcgi-is-rewritten)) |
+| scope keys `csrf_token`, `original_client`, `original_method`, `original_path`, `request_id` | the same names under `pagi.` ([details](UPGRADING-REFERENCE.md#breaking-middleware-scope-keys-move-under-pagi)) |
+| Maintenance `body`, `content_type` | `response => response('HTML', $page, status => 503)`; the default is now plain text; both options now die ([details](UPGRADING-REFERENCE.md#breaking-maintenance-body-and-content_type-are-replaced-by-response)) |
+| ContentNegotiation `strict`, `default_type` | refusing is the default; `refuse => 0` lets the application decide; both options now die ([details](UPGRADING-REFERENCE.md#breaking-contentnegotiation-refuses-by-default-strict-and-default_type-are-removed)) |
 | `Auth::Basic`, `Auth::Bearer` | `Authentication` with a backend, plus `requires` ([details](UPGRADING-REFERENCE.md#breaking-authbasic-and-authbearer-are-replaced-by-authentication)) |
 | `FormBody`, `JSONBody` middleware | `$request->form_params`, `$request->json` ([details](UPGRADING-REFERENCE.md#breaking-pagimiddlewareformbody-and-pagimiddlewarejsonbody-are-removed)) |
 | `PAGI::App::Loader` | `pagi-server --app`, or `do $file` ([details](UPGRADING-REFERENCE.md#breaking-pagiapploader-is-removed)) |
@@ -32,8 +40,8 @@ in [UPGRADING-REFERENCE.md](UPGRADING-REFERENCE.md).
 | Directory `show_hidden` | `allow_hidden` ([details](UPGRADING-REFERENCE.md#rooted-file-serving-security-contract)) |
 | `WebSocket::RateLimit`, `SSE::Pubsub`, `WebSocket::Broadcast`/`Chat` | removed; Cookbook recipes ([details](UPGRADING-REFERENCE.md#other-breaking-changes)) |
 
-Behaviour that changes without a code change: stock error pages negotiate
-HTML, problem JSON or text ([details](UPGRADING-REFERENCE.md#audit-changed-first-party-defaults));
+Behaviour that changes without a code change: stock refusals and error
+responses are plain text, each replaceable by one option ([details](UPGRADING-REFERENCE.md#audit-changed-first-party-defaults));
 bad request bodies are 400/413 ([details](UPGRADING-REFERENCE.md#bad-request-bodies-answer-400-or-413-not-500));
 `raw_path` is the full requested path ([details](UPGRADING-REFERENCE.md#raw_path-request_uri-raw_path_info-and-serving-under-a-prefix));
 file serving is stricter ([details](UPGRADING-REFERENCE.md#rooted-file-serving-security-contract));
@@ -112,6 +120,7 @@ builder {
 use v5.40;
 use Future::AsyncAwait;
 use PAGI::Compose qw(compose);
+use PAGI::ErrorContext qw(error_context);
 use PAGI::Response qw(response);
 use PAGI::Routing qw(middleware route);
 use PAGI::Session qw(session);
@@ -152,8 +161,8 @@ compose(
     ],
     middleware => [
         middleware('Session'),
-        middleware('ErrorHandler', handler => sub ($request, $error) {
-            return response('Problem', { title => 'Internal Server Error', status => 500 });
+        middleware('ErrorHandler', handler => sub ($request) {
+            return response('JSON', { error => error_context($request)->message });
         }),
     ],
 );
@@ -172,5 +181,6 @@ What changed, line by line:
   with `app_state($request)`.
 - `$ctx->session` became `session($request)`; Session no longer takes
   `secret`.
-- ErrorHandler's `content_type` became a `handler` returning a Response.
+- ErrorHandler's `content_type` became a `handler`: a Request handler that
+  reads the error with `error_context($request)` and returns a Response.
 - `:id` became `{id}`, and `post` became `methods => ['POST']`.

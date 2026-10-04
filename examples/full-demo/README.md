@@ -8,6 +8,7 @@ application -- the runnable companion to the QUICK TOUR in `PAGI::Tools`.
 - **Lifespan Management** - Startup/shutdown hooks with shared state
 - **HTTP GET** - Hello World endpoint
 - **HTTP POST** - Request body echo
+- **Errors** - Client mistakes answered in JSON by an ErrorHandler `handler`
 - **HTTP Streaming** - Chunked response with delays
 - **NDJSON** - One JSON record per line, written as produced
 - **Route names** - Links built with `path_for` / `url_for`
@@ -26,6 +27,7 @@ pagi-server --app examples/full-demo/app.pl --port 5000
 |----------|-------------|-------------|
 | `/` | GET | Returns "Hello, World!" |
 | `/echo` | POST | Echoes back the request body |
+| `/notes` | POST | Saves a JSON note; a body that is not JSON answers 400 in JSON |
 | `/stream` | GET | Streams 5 chunks with 0.5s delays |
 | `/export` | GET | NDJSON: three records, one per line |
 | `/routes` | GET | Every route's path, looked up by name |
@@ -51,6 +53,20 @@ curl -X POST -H "Content-Type: application/json" \
      -d '{"message":"test"}' http://localhost:5000/echo
 # {"message":"test"}
 ```
+
+### Errors
+
+```bash
+curl -X POST -H "Content-Type: application/json" -d '{"text":"hi"}' http://localhost:5000/notes
+# {"saved":{"text":"hi"}}
+
+curl -X POST -H "Content-Type: application/json" -d '{nope' http://localhost:5000/notes
+# {"error":"The request body is not valid JSON."}   (400)
+```
+
+`$request->json` raises a 400 for a body that is not JSON. The ErrorHandler at
+the end of `app.pl` reads it with `error_context($request)` and answers the
+client's mistakes in JSON; server errors get the built-in plain-text answer.
 
 ### HTTP Streaming
 

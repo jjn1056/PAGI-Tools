@@ -111,41 +111,27 @@ sub mangle_allow_middleware {
     });
 }
 
-subtest 'Router renders direct NONE and PARTIAL outcomes with negotiated Pages responses' => sub {
+subtest 'Router renders NONE as a plain 404 and PARTIAL as a plain 405' => sub {
     my $app = router(routes => [
         route('/items' => \&text_handler, methods => 'GET'),
         route('/items' => \&text_handler, methods => 'POST'),
     ])->to_app;
 
-    my $none = run_app($app, path => '/missing', raw_path => '/missing');
-    is(response_status($none), 404, 'NONE renders 404');
-    is(response_header($none, 'Content-Type'), 'application/problem+json',
-        'NONE uses normal request negotiation');
-    like(response_body($none), qr/"status"\s*:\s*404/,
-        'NONE emits the negotiated problem representation');
-
-    my $none_text = run_app(
-        $app,
-        path => '/missing', raw_path => '/missing',
-        headers => [['accept', 'text/plain']],
-    );
-    is(response_header($none_text, 'Content-Type'),
-        'text/plain; charset=utf-8',
-        'NONE also negotiates the concrete text representation');
-    like(response_body($none_text), qr/404\s+Not Found/,
-        'NONE text representation retains Pages status semantics');
+    my $none = run_app($app, path => '/missing', raw_path => '/missing',
+        headers => [['accept', 'application/problem+json']]);
+    is([response_status($none), response_header($none, 'Content-Type'), response_body($none)],
+        [404, 'text/plain; charset=utf-8', 'Not Found'], 'NONE is plain text whatever the Accept');
 
     my $partial = run_app(
         $app, method => 'TRACE', path => '/items', raw_path => '/items',
-        headers => [['accept', 'text/plain']],
+        headers => [['accept', 'application/problem+json']],
     );
     is(response_status($partial), 405, 'PARTIAL renders 405');
     is(response_header($partial, 'Content-Type'), 'text/plain; charset=utf-8',
-        'PARTIAL uses normal request negotiation');
+        'PARTIAL is plain text whatever the Accept');
     is(response_headers($partial, 'Allow'), ['GET, HEAD, POST'],
         'PARTIAL emits one first-seen method union');
-    like(response_body($partial), qr/405\s+Method Not Allowed/,
-        'PARTIAL text representation retains Pages status semantics');
+    is(response_body($partial), 'Method Not Allowed', 'with the plain body');
 };
 
 subtest 'bare HTTP defaults are Request handlers whose results are applications' => sub {
@@ -228,8 +214,8 @@ subtest 'bare HTTP defaults are Request handlers whose results are applications'
             sub { return receive() },
             sub { push @invalid_events, $_[0]; return Future->done },
         ))->get;
-    }, qr/request handler must return a PAGI application: a native coderef or app object/,
-        'an invalid handler result gets the generalized diagnostic');
+    }, qr/request handler returned nothing; a native \(\$scope, \$receive, \$send\) application given as a handler needs as_app_object\(\)/,
+        'an undefined handler result names as_app_object');
     is(\@invalid_events, [],
         'an invalid handler result emits no response event');
 };

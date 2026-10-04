@@ -4,6 +4,7 @@ use strict;
 use warnings;
 use parent 'PAGI::Middleware';
 use PAGI::Middleware::BufferedResponse qw(buffer_whole_response);
+use PAGI::Utils ();
 
 =head1 NAME
 
@@ -29,6 +30,8 @@ length upfront, but you want to avoid chunked encoding.
 
 =head1 CONFIGURATION
 
+An option not listed here dies at construction.
+
 =over 4
 
 =item * auto_chunked (default: 0)
@@ -44,6 +47,8 @@ sub _init {
     my ($self, $config) = @_;
 
     $self->{auto_chunked} = $config->{auto_chunked} // 0;
+    PAGI::Utils::_reject_unknown_options('ContentLength', $config,
+        qw(auto_chunked));
 }
 
 sub wrap {

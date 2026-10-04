@@ -5,7 +5,7 @@ use warnings;
 use parent 'PAGI::Middleware';
 use Future;
 use Future::AsyncAwait;
-use PAGI::Pages;
+use PAGI::Response::Text ();
 use PAGI::Request::Negotiate;
 use PAGI::Utils ();
 
@@ -15,51 +15,77 @@ PAGI::Middleware::ContentNegotiation - HTTP content negotiation middleware
 
 =head1 SYNOPSIS
 
-    use PAGI::Middleware::Builder;
+    use PAGI::Response qw(response);
+    use PAGI::Routing qw(middleware mount);
 
-    my $app = builder {
-        enable 'ContentNegotiation',
-            supported_types => ['application/json', 'text/html', 'text/plain'],
-            default_type => 'application/json';
-        $my_app;
-    };
+    # An API that only speaks JSON: anything else is refused with a 406
+    # before a handler runs.
+    mount('/api', routes => [...], middleware => [
+        middleware('ContentNegotiation', supported_types => ['application/json']),
+    ]);
 
-    # In your app:
-    async sub app {
-        my ($scope, $receive, $send) = @_;
+    # Two representations; handlers read the choice from the scope.
+    middleware('ContentNegotiation', supported_types => ['application/json', 'text/html'])
 
-        my $preferred = $scope->{'pagi.preferred_content_type'};
-        if ($preferred eq 'application/json') {
-            # Return JSON
-        } else {
-            # Return HTML
-        }
+    async sub show ($request) {
+        my $type = $request->scope->{'pagi.preferred_content_type'};
+        return $type eq 'text/html' ? response('HTML', render($item))
+                                    : response('JSON', $item);
     }
+
+    # Refuse your own way
+    middleware('ContentNegotiation', supported_types => ['application/json'],
+        refuse => response('JSON', { detail => 'This API only speaks JSON' }, status => 406))
 
 =head1 DESCRIPTION
 
-PAGI::Middleware::ContentNegotiation parses the Accept header and determines
-the best content type to return using the shared L<PAGI::Request::Negotiate>
-matching rules. It adds the preferred type and parsed accepted types to the
-scope for the application to use. In strict mode, an unmatched request is
-answered directly with a negotiated L<PAGI::Pages> 406 response; the wrapped
-application is not redispatched.
+PAGI::Middleware::ContentNegotiation picks the best of C<supported_types>
+for the request's C<Accept> header, using the shared
+L<PAGI::Request::Negotiate> rules, and puts it in the scope for the wrapped
+application. A request without C<Accept> accepts anything and gets the first
+supported type, so the order of C<supported_types> is the default.
+
+A request that accepts none of them is refused with C<406 text/plain>,
+C<Not Acceptable. Supported types: ...> -- the list RFC 9110 suggests a 406
+carry -- and the wrapped application does not run. C<refuse> replaces the
+refusal, or with C<0> lets the application decide.
+
+To negotiate inside one handler without a middleware, use
+L<PAGI::Request/preferred_type>.
 
 =head1 CONFIGURATION
+
+An option not listed here dies at construction.
 
 =over 4
 
 =item * supported_types (required)
 
-Array of MIME types the application supports.
+Array of MIME types this part of the application can produce, most preferred
+first.
 
-=item * default_type (optional)
+=item * refuse (default: a 406 text response)
 
-Default type when no Accept header or no match. Defaults to first supported type.
+An application that answers an unmatched request instead of the plain-text
+default: a Request handler (a coderef called with one
+L<PAGI::Request>, returning a Response or an application) or an object
+with C<to_app>, which includes every L<PAGI::Response>. It receives the scope with
+C<pagi.accepted_types>.
 
-=item * strict (default: 0)
+Exactly C<0>: the middleware never refuses. An unmatched request reaches the
+application with C<pagi.preferred_content_type> undef, and choosing a
+fallback is the application's call:
 
-If true, return 406 Not Acceptable when no supported type matches.
+    my $type = $request->scope->{'pagi.preferred_content_type'} // 'application/json';
+
+Any other plain value dies. C<strict> and C<default_type> were removed:
+refusing is the default, and C<refuse =E<gt> 0> replaces C<strict =E<gt> 0>;
+passing either dies.
+
+A native C<($scope, $receive, $send)> application is passed as
+C<as_app_object($app)>. Objects -- every Response and L<PAGI::Pages> value --
+mean the same in every slot, and are the portable form for anything also
+given to middleware outside PAGI-Tools.
 
 =back
 
@@ -68,11 +94,25 @@ If true, return 406 Not Acceptable when no supported type matches.
 sub _init {
     my ($self, $config) = @_;
 
+    die "ContentNegotiation 'strict' was removed: it refuses an unmatched request by default; refuse => 0 lets the application decide"
+        if exists $config->{strict};
+    die "ContentNegotiation 'default_type' was removed: a request without Accept gets the first supported type; with refuse => 0 an unmatched request has no preferred type"
+        if exists $config->{default_type};
+
     $self->{supported_types} = $config->{supported_types}
         // die "ContentNegotiation requires 'supported_types' option";
-    $self->{default_type} = $config->{default_type}
-        // $self->{supported_types}[0];
-    $self->{strict} = $config->{strict} // 0;
+
+    # Absent: a plain-text 406 listing the supported types, as RFC 9110
+    # suggests. Exactly 0: the application decides.
+    my $refuse = PAGI::Utils::_refuse_option('ContentNegotiation', $config, 1);
+    my $supported = join(', ', @{$self->{supported_types}});
+    $self->{refuse} = !defined($refuse) ? PAGI::Response::Text->new(
+            "Not Acceptable. Supported types: $supported", status => 406,
+        )->to_app
+        : ref($refuse) ? $refuse
+        : undef;
+    PAGI::Utils::_reject_unknown_options('ContentNegotiation', $config,
+        qw(refuse supported_types));
 }
 
 sub wrap {
@@ -91,21 +131,15 @@ sub wrap {
             $self->{supported_types}, $accept,
         );
 
-        if (!$preferred && $self->{strict}) {
-            await $self->_send_not_acceptable($scope, $receive, $send);
-            return;
-        }
-
-        $preferred //= $self->{default_type};
-
-        # Add preferred type to scope
+        # The preferred type is undef when nothing matched.
         my @accepted = $self->_parse_accept($accept);
         my $new_scope = $self->modify_scope($scope, {
             'pagi.preferred_content_type' => $preferred,
             'pagi.accepted_types' => \@accepted,
         });
 
-        await $app->($new_scope, $receive, $send);
+        my $target = !defined($preferred) && $self->{refuse} ? $self->{refuse} : $app;
+        await $target->($new_scope, $receive, $send);
     };
 }
 
@@ -129,16 +163,6 @@ sub _get_header {
     return join(', ', @values);
 }
 
-async sub _send_not_acceptable {
-    my ($self, $scope, $receive, $send) = @_;
-
-    my $supported = join(', ', @{$self->{supported_types}});
-    my $response = PAGI::Pages->not_acceptable(
-        detail => "Not Acceptable. Supported types: $supported",
-    );
-    await PAGI::Utils::invoke_app($response, $scope, $receive, $send);
-}
-
 1;
 
 __END__
@@ -151,7 +175,8 @@ This middleware adds the following to $scope:
 
 =item * pagi.preferred_content_type
 
-The best matching MIME type from the supported types.
+The best matching MIME type from the supported types; undef when nothing
+matched (only reachable with C<refuse =E<gt> 0>).
 
 =item * pagi.accepted_types
 
@@ -172,8 +197,6 @@ preference. The default is q=1.0.
 =head1 SEE ALSO
 
 L<PAGI::Middleware> - Base class for middleware
-
-L<PAGI::Pages> - Negotiated default responses
 
 L<PAGI::Request::Negotiate> - Shared Accept matching
 

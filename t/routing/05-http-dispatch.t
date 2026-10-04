@@ -503,7 +503,8 @@ subtest 'invalid normal returns retain the shared diagnostic' => sub {
         my ($receive, $send, $events) = channels();
         like(
             dies { $app->(scope(path => '/bad'), $receive, $send)->get },
-            qr/request handler must return a PAGI application: a native coderef or app object/,
+            $label eq 'undef' ? qr/request handler returned nothing; a native \(\$scope, \$receive, \$send\) application given as a handler needs as_app_object\(\)/
+                : qr/request handler must return a PAGI application: a native coderef or app object/,
             "$label return is rejected",
         );
         is($events, [], "$label return emits no response events");

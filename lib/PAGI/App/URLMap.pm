@@ -5,7 +5,7 @@ use warnings;
 use Carp qw(croak);
 use Future;
 use Future::AsyncAwait;
-use PAGI::Pages;
+use PAGI::Response::Text ();
 use PAGI::Utils ();
 
 =head1 NAME
@@ -23,6 +23,8 @@ PAGI::App::URLMap - Mount apps at URL path prefixes
 
 =cut
 
+my $NOT_FOUND = PAGI::Response::Text->new('Not Found', status => 404)->to_app;
+
 sub new {
     my ($class, %args) = @_;
 
@@ -35,7 +37,10 @@ sub new {
 sub mount {
     my ($self, $path, $app) = @_;
 
-    $path =~ s{/+$}{};  # Remove trailing slashes
+    # No trailing slash, so '/' becomes '' and mounts every path; a
+    # leading slash, so 'api' mounts /api.
+    $path =~ s{/+$}{};
+    $path = "/$path" if length($path) && $path !~ m{^/};
     push @{$self->{mounts}}, [$path, PAGI::Utils::to_app($app)];
     # Keep sorted by length (longest first) for proper matching
     @{$self->{mounts}} = sort { length($b->[0]) <=> length($a->[0]) } @{$self->{mounts}};
@@ -75,24 +80,19 @@ sub to_app {
                     path      => $new_path,
                     root_path => ($scope->{root_path} // '') . $prefix,
                 };
-                my $returned = $app->($new_scope, $receive, $send);
-                await Future->wrap($returned);
+                await Future->wrap($app->($new_scope, $receive, $send));
                 return;
             }
         }
 
         # No match - use default or 404
         if ($default) {
-            my $returned = $default->($scope, $receive, $send);
-            await Future->wrap($returned);
+            await Future->wrap($default->($scope, $receive, $send));
         } else {
             my $type = $scope->{type} // '<missing>';
             croak "URLMap has no default for scope type '$type'"
                 unless $type eq 'http';
-            my $response = PAGI::Pages->not_found;
-            await PAGI::Utils::invoke_app(
-                $response, $scope, $receive, $send,
-            );
+            await $NOT_FOUND->($scope, $receive, $send);
         }
     };
 }
@@ -129,11 +129,11 @@ C<< mount('/prefix', app => $app) >> and whose immutable Router applications
 remain visible to reverse inspection.
 
 When no mount matches and no C<default> is configured, an HTTP request receives
-a 404 response negotiated by L<PAGI::Pages> from the original request scope.
+a plain-text 404, C<Not Found>. A C<default> answers instead -- a branded page is
+C<< default => PAGI::Pages->not_found >>.
 WebSocket, SSE, lifespan, and other non-HTTP exhaustion croak with the scope
 type instead of emitting incompatible HTTP events. Selected mounts and an
-explicit C<default> remain authoritative opaque boundaries as described above;
-URLMap has no Pages configuration surface.
+explicit C<default> remain authoritative opaque boundaries as described above.
 
 =head1 OPTIONS
 

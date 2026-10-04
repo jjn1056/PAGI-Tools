@@ -274,15 +274,9 @@ subtest 'apple manager, welcome, routing outcomes, and apples CRUD' => sub {
         headers => { Accept => 'application/problem+json' });
     is($invalid_id->status, 404,
         'failed Int constraint is a routing 404');
-    is($invalid_id->content_type, 'application/problem+json',
-        'selected child Router negotiates the routing miss');
-    is($invalid_id->json->{title}, 'Not Found',
-        'routing miss uses the stock Pages title');
-    is($invalid_id->json->{detail},
-        'The requested resource was not found.',
-        'selected child Router keeps its stock 404 detail');
-    ok(!exists $invalid_id->json->{error},
-        'routing miss never reaches the application error branch');
+    is([$invalid_id->content_type, $invalid_id->text], ['text/plain; charset=utf-8', 'Not Found'],
+        'selected child Router answers the routing miss with its plain stock 404, '
+        . 'never the application error branch');
 
     my $negative_id = $client->get('/apples/-1');
     is($negative_id->status, 404,
@@ -296,7 +290,7 @@ subtest 'apple manager, welcome, routing outcomes, and apples CRUD' => sub {
         'known collection with unsupported method is 405');
     is($wrong_method->header('Allow'), 'GET, HEAD, POST',
         'selected child Router owns its method union');
-    is($wrong_method->json->{title}, 'Method Not Allowed',
+    is($wrong_method->text, 'Method Not Allowed',
         'selected child Router renders the stock method response');
 
     my $created = $client->post('/apples', json => {
@@ -359,7 +353,7 @@ subtest 'apple manager, welcome, routing outcomes, and apples CRUD' => sub {
         'known welcome path preserves its method-owned 405');
     is($welcome_wrong_method->header('Allow'), 'GET, HEAD',
         'known welcome path publishes its exact method union');
-    is($welcome_wrong_method->json->{title}, 'Method Not Allowed',
+    is($welcome_wrong_method->text, 'Method Not Allowed',
         'root default does not swallow a known-path 405');
     });
 };

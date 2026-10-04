@@ -84,15 +84,33 @@ subtest 'middleware adds request ID to scope and response' => sub {
 
     $wrapped->($scope, $receive, $send)->get;
 
-    ok(defined $captured_scope->{request_id}, 'request_id added to scope');
-    like($captured_scope->{request_id},
+    ok(defined $captured_scope->{'pagi.request_id'}, 'request_id added to scope');
+    like($captured_scope->{'pagi.request_id'},
         qr/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
         'request_id has correct format');
 
     my @id_headers = grep { $_->[0] eq 'X-Request-ID' } @response_headers;
     is(scalar @id_headers, 1, 'X-Request-ID header added to response');
-    is($id_headers[0][1], $captured_scope->{request_id},
+    is($id_headers[0][1], $captured_scope->{'pagi.request_id'},
         'response header matches scope request_id');
+};
+
+subtest "RequestId never adds its header to the application's own header list" => sub {
+    my @shared = (['content-type', 'text/plain']);
+    my $wrapped = PAGI::Middleware::RequestId->new->wrap(async sub {
+        my ($scope, $receive, $send) = @_;
+        await $send->({ type => 'http.response.start', status => 200, headers => \@shared });
+        await $send->({ type => 'http.response.body', body => 'ok', more => 0 });
+    });
+    my @starts;
+    for (1 .. 2) {
+        $wrapped->({ type => 'http', method => 'GET', path => '/', headers => [] },
+            async sub { { type => 'http.disconnect' } },
+            async sub { push @starts, $_[0] if $_[0]{type} eq 'http.response.start' })->get;
+    }
+    is scalar(@shared), 1, "the application's header list is unchanged";
+    is scalar(grep { lc $_->[0] eq 'x-request-id' } @{$starts[1]{headers}}), 1,
+        'the second response carries exactly one request id';
 };
 
 done_testing;

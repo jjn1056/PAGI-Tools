@@ -7,6 +7,7 @@ use Future::AsyncAwait;
 use PAGI::Middleware::BufferedResponse qw(stream_transform_response);
 use Compress::Raw::Zlib qw(WANT_GZIP Z_OK Z_SYNC_FLUSH Z_FINISH);
 use PAGI::Headers;
+use PAGI::Utils ();
 
 =head1 NAME
 
@@ -29,6 +30,8 @@ PAGI::Middleware::GZip compresses response bodies using gzip when the
 client supports it (Accept-Encoding: gzip).
 
 =head1 CONFIGURATION
+
+An option not listed here dies at construction.
 
 =over 4
 
@@ -95,6 +98,8 @@ sub _init {
         'text/html', 'text/plain', 'text/css', 'text/javascript',
         'application/json', 'application/javascript', 'application/xml',
     ];
+    PAGI::Utils::_reject_unknown_options('GZip', $config,
+        qw(mime_types min_size));
 }
 
 sub wrap {

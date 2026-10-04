@@ -34,6 +34,19 @@ package TestEndpoint {
     }
 }
 
+package OverrideEndpoint {
+    use parent -norequire, 'TestEndpoint';
+    use PAGI::Response::JSON ();
+
+    sub method_not_allowed {
+        my ($self, $request, @allowed) = @_;
+        return PAGI::Response::JSON->new(
+            { detail => 'use ' . join('/', @allowed) },
+            status => 405, headers => ['Allow' => 'WRONG'],
+        );
+    }
+}
+
 package ExplicitHeadEndpoint {
     use parent 'PAGI::Endpoint::HTTP';
 
@@ -107,6 +120,18 @@ subtest 'returns 405 for unimplemented method' => sub {
     is($response->status, 405, '405 status for unimplemented');
     is $response->header_all('Allow'), ['GET, HEAD, OPTIONS, POST'],
         '405 retains one sorted complete Allow field';
+    is $response->header('Content-Type'), 'text/plain; charset=utf-8', 'plain text whatever the Accept';
+    is $response->text, 'Method Not Allowed', 'with the plain body';
+};
+
+subtest "method_not_allowed can be overridden; Allow is still the endpoint's" => sub {
+    my $endpoint = OverrideEndpoint->new;
+    my $response = PAGI::Test::Client->new(app => $endpoint->to_app)->put('/test');
+    is($response->status, 405, 'the override answers');
+    is $response->json, { detail => 'use GET/HEAD/OPTIONS/POST' },
+        'and receives the allowed methods';
+    is $response->header_all('Allow'), ['GET, HEAD, OPTIONS, POST'],
+        'the endpoint sets the one Allow field, replacing the override\'s';
 };
 
 subtest 'dispatches only advertised HTTP verb handlers' => sub {

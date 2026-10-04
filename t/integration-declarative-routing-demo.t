@@ -73,18 +73,10 @@ SKIP: {
     is($wrong_method->status, 405,
         'wrong method uses the child Router method-not-allowed');
     is($wrong_method->header('Allow'), 'GET, HEAD', '405 publishes first-seen Allow');
-    is($wrong_method->content_type, 'application/problem+json',
-        'stock 405 negotiates a problem document');
-    is(
-        $wrong_method->json,
-        {
-            type   => 'about:blank',
-            title  => 'Method Not Allowed',
-            status => 405,
-            detail => 'The request method is not allowed for this resource.',
-        },
-        'child Router renders its stock 405 from owned method evidence',
-    );
+    is($wrong_method->content_type, 'text/plain; charset=utf-8',
+        'stock 405 is plain text whatever the Accept');
+    is($wrong_method->text, 'Method Not Allowed',
+        'child Router renders its stock 405 from owned method evidence');
 
     my $head = $client->head('/');
     is($head->status, 200, 'automatic HEAD selects the GET route');

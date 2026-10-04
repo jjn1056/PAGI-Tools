@@ -16,12 +16,19 @@ PAGI::Response::Problem - buffered RFC 9457 problem response
 =head1 SYNOPSIS
 
     use PAGI::Response qw(response);
-    my $response = PAGI::Response::Problem->new({
+    my $response = response('Problem', {
         type   => '/problems/invalid-input',
         title  => 'Invalid input',
         status => 422,
     });
-    my $same = response('Problem', { title => 'Conflict', status => 409 });
+
+    # The same, by class -- what response() calls:
+    use PAGI::Response::Problem;
+    my $same = PAGI::Response::Problem->new({
+        type   => '/problems/invalid-input',
+        title  => 'Invalid input',
+        status => 422,
+    });
 
 =head1 DESCRIPTION
 

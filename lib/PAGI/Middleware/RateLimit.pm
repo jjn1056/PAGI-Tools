@@ -5,8 +5,12 @@ use warnings;
 use parent 'PAGI::Middleware';
 use Future;
 use Future::AsyncAwait;
-use PAGI::Pages;
+use PAGI::Response::Text ();
 use PAGI::Utils ();
+use PAGI::Utils::Middleware ();
+use POSIX ();
+use Scalar::Util qw(refaddr);
+use Time::HiRes ();
 
 =head1 NAME
 
@@ -28,17 +32,21 @@ PAGI::Middleware::RateLimit - Request rate limiting middleware
 =head1 DESCRIPTION
 
 PAGI::Middleware::RateLimit implements token bucket rate limiting per client.
-Clients exceeding the rate limit receive 429 Too Many Requests.
+A client over its limit is refused with C<429 text/plain>,
+C<Rate limit exceeded. Try again later.>, carrying C<Retry-After> and the
+C<X-RateLimit-Limit>, C<-Remaining> and C<-Reset> fields; allowed responses
+gain the C<X-RateLimit-*> fields. C<refuse> replaces the refusal's body.
 
-The built-in 429 response uses L<PAGI::Pages> to negotiate HTML, problem JSON,
-or plain text from the original HTTP request. It retains C<Retry-After> and
-all C<X-RateLimit-*> fields calculated by the middleware. Allowed requests
-and their child responses remain unchanged. This middleware has no custom
-limit-response callback and no Pages configuration surface; applications that
-need different response policy should place it at an application-owned
-boundary.
+B<Treat this as a proof of concept, or a template to build on, not as
+production rate limiting.> Its buckets live in the memory of one process (see
+L</LIMITATIONS>). It suits a single-process application, development, and
+reading how a limiter fits the middleware protocol; a deployment that needs
+limits enforced across workers or hosts needs a shared, atomic store, which
+this middleware does not have.
 
 =head1 CONFIGURATION
+
+An option not listed here dies at construction.
 
 =over 4
 
@@ -54,11 +62,6 @@ Maximum burst size (bucket capacity).
 
 Coderef to generate rate limit key from $scope.
 
-=item * backend (default: in-memory)
-
-Rate limit storage backend. Can be 'memory' or a custom object
-implementing get/set methods.
-
 =item * cleanup_interval (default: 60)
 
 Seconds between periodic cleanup of stale buckets.
@@ -68,17 +71,44 @@ Seconds between periodic cleanup of stale buckets.
 Maximum number of tracked client buckets. When exceeded, the oldest
 half are evicted as a safety valve.
 
+=item * refuse (default: a 429 text response)
+
+An application that answers an over-limit request instead of the plain-text
+default: a Request handler (a coderef called with one
+L<PAGI::Request>, returning a Response or an application) or an object
+with C<to_app>, which includes every L<PAGI::Response>:
+
+    middleware('RateLimit', requests_per_second => 5,
+        refuse => response('JSON', { detail => 'Slow down' }, status => 429));
+
+The middleware still sets C<Retry-After> and the C<X-RateLimit-*> fields on
+whatever it sends, replacing any of the same name. There is no C<0> form. Any
+plain value dies.
+
+C<backend> was removed: it was documented as a pluggable store but never used.
+Passing it dies.
+
+A native C<($scope, $receive, $send)> application is passed as
+C<as_app_object($app)>. Objects -- every Response and L<PAGI::Pages> value --
+mean the same in every slot, and are the portable form for anything also
+given to middleware outside PAGI-Tools.
+
 =back
 
 =cut
 
-my %buckets;  # In-memory storage
+# Each instance's buckets, kept in this process and keyed by the instance,
+# so two limiters never share a client's bucket. The class-level helpers
+# below reach every instance's buckets.
+my %buckets_for;
 my $_time_offset = 0;
 
-sub _clear_buckets { %buckets = (); $_time_offset = 0; }
-sub _bucket_count  { return scalar keys %buckets }
+sub _clear_buckets { %buckets_for = (); $_time_offset = 0; }
+sub _bucket_count  { my $count = 0; $count += keys %$_ for values %buckets_for; return $count }
 sub _advance_time_for_test { $_time_offset += $_[1] }
-sub _now { return time() + $_time_offset }
+sub _now { return Time::HiRes::time() + $_time_offset }
+
+sub DESTROY { delete $buckets_for{refaddr($_[0])} }
 
 sub _init {
     my ($self, $config) = @_;
@@ -89,9 +119,19 @@ sub _init {
         my ($scope) = @_;
         return exists $scope->{client} ? ($scope->{client}[0] // 'unknown') : 'unknown';
     };
-    $self->{backend} = $config->{backend} // 'memory';
     $self->{cleanup_interval} = $config->{cleanup_interval} // 60;
     $self->{max_buckets}      = $config->{max_buckets} // 10_000;
+
+    die "RateLimit 'backend' was removed: it was never used; buckets are kept in this process"
+        if exists $config->{backend};
+
+    # The caller's refusing application, or a plain-text default built once.
+    # Either way the middleware adds the rate-limit fields to its response.
+    $self->{refuse} = PAGI::Utils::_refuse_option('RateLimit', $config)
+        // PAGI::Response::Text->new('Rate limit exceeded. Try again later.', status => 429)->to_app;
+    PAGI::Utils::_reject_unknown_options('RateLimit', $config,
+        qw(burst cleanup_interval key_generator max_buckets refuse
+           requests_per_second));
 }
 
 sub wrap {
@@ -143,7 +183,8 @@ sub _check_rate_limit {
     my $burst = $self->{burst};
 
     # Get or initialize bucket
-    my $bucket = $buckets{$key} //= {
+    my $buckets = $buckets_for{refaddr($self)} //= {};
+    my $bucket = $buckets->{$key} //= {
         tokens    => $burst,
         last_time => $now,
     };
@@ -160,11 +201,10 @@ sub _check_rate_limit {
     if ($bucket->{tokens} >= 1) {
         $bucket->{tokens} -= 1;
         my $remaining = int($bucket->{tokens});
-        my $reset = $now + int(($burst - $bucket->{tokens}) / $rate);
+        my $reset = POSIX::ceil($now + ($burst - $bucket->{tokens}) / $rate);
         @result = (1, $remaining, $reset);  # Allowed
     } else {
-        my $wait_time = (1 - $bucket->{tokens}) / $rate;
-        my $reset = $now + int($wait_time) + 1;
+        my $reset = POSIX::ceil($now + (1 - $bucket->{tokens}) / $rate);
         @result = (0, 0, $reset);  # Not allowed
     }
 
@@ -172,16 +212,16 @@ sub _check_rate_limit {
     if (!$self->{_last_cleanup} || ($now - $self->{_last_cleanup}) >= $self->{cleanup_interval}) {
         $self->{_last_cleanup} = $now;
         my $stale_threshold = $now - (2 * $burst / $rate);
-        for my $k (keys %buckets) {
-            delete $buckets{$k} if $buckets{$k}{last_time} < $stale_threshold;
+        for my $k (keys %$buckets) {
+            delete $buckets->{$k} if $buckets->{$k}{last_time} < $stale_threshold;
         }
     }
 
     # Safety valve: evict oldest buckets when over max
-    if (keys %buckets > $self->{max_buckets}) {
-        my @sorted = sort { $buckets{$a}{last_time} <=> $buckets{$b}{last_time} } keys %buckets;
+    if (keys %$buckets > $self->{max_buckets}) {
+        my @sorted = sort { $buckets->{$a}{last_time} <=> $buckets->{$b}{last_time} } keys %$buckets;
         my $to_remove = @sorted - int($self->{max_buckets} / 2);
-        delete $buckets{$_} for @sorted[0 .. $to_remove - 1];
+        delete $buckets->{$_} for @sorted[0 .. $to_remove - 1];
     }
 
     return @result;
@@ -190,18 +230,21 @@ sub _check_rate_limit {
 async sub _send_rate_limited {
     my ($self, $scope, $receive, $send, $remaining, $reset) = @_;
 
-    my $retry_after = $reset - _now();
+    my $retry_after = POSIX::ceil($reset - _now());
     $retry_after = 1 if $retry_after < 1;
-
-    my $response = PAGI::Pages->too_many_requests(
-        retry_after => $retry_after,
-        headers     => [
-            'X-RateLimit-Limit'     => $self->{burst},
-            'X-RateLimit-Remaining' => 0,
-            'X-RateLimit-Reset'     => $reset,
-        ],
+    my @fields = (
+        ['Retry-After',           $retry_after],
+        ['X-RateLimit-Limit',     $self->{burst}],
+        ['X-RateLimit-Remaining', 0],
+        ['X-RateLimit-Reset',     $reset],
     );
-    await PAGI::Utils::invoke_app($response, $scope, $receive, $send);
+
+    # The rate-limit fields are this middleware's, whoever writes the body.
+    await $self->{refuse}->($scope, $receive,
+        PAGI::Utils::Middleware::wrap_response_headers($send, sub {
+            my ($headers) = @_;
+            $headers->set(@$_) for @fields;
+        }));
 }
 
 # Class method to reset rate limits (useful for testing)
@@ -233,12 +276,25 @@ This middleware uses the token bucket algorithm:
 
 This allows short bursts of traffic while maintaining an average rate.
 
-=head1 MULTI-WORKER NOTE
+=head1 LIMITATIONS
 
-The in-memory bucket storage is per-process. In a pre-fork multi-worker
-setup each worker maintains its own independent rate limit state, so the
-effective rate limit is multiplied by the number of workers. For accurate
-cross-worker rate limiting, use an external backend such as Redis.
+=over 4
+
+=item * B<Per process.> Each middleware instance keeps its buckets in the
+memory of the process it runs in. Under a pre-fork server each worker has its
+own, so the effective limit is the configured one times the number of
+workers. Nothing is shared across hosts.
+
+=item * B<Keyed by client address by default.> Behind a proxy every request
+comes from the proxy's address, so one bucket covers every client: place
+L<PAGI::Middleware::ReverseProxy> first, or pass a C<key_generator>. A request
+with no client address shares one C<unknown> bucket. IPv6 clients can change
+address freely.
+
+=item * B<A bounded table.> Above C<max_buckets> the oldest half of the
+buckets are dropped, so many distinct clients can reset others' limits.
+
+=back
 
 =head1 SEE ALSO
 

@@ -183,4 +183,23 @@ subtest 'builder coerces mounts and the final app' => sub {
     is $sent[1]{body}, 'fallback', 'final block value coerced to app';
 };
 
+subtest "builder's mount is URLMap's: '/' catches everything, like Plack's" => sub {
+    require PAGI::Test::Client;
+    require PAGI::Response::Text;
+    my $text = sub { PAGI::Response::Text->new($_[0]) };
+    my $app = builder {
+        mount '/api' => $text->('api');
+        mount '/'    => $text->('root');
+        $text->('builder app');
+    };
+    my $client = PAGI::Test::Client->new(app => $app);
+    is $client->get('/api/x')->text, 'api', 'the longest prefix wins';
+    is $client->get('/x')->text, 'root', "'/' answers every other path";
+
+    my $fallback = builder { mount 'api' => $text->('api'); $text->('builder app') };
+    $client = PAGI::Test::Client->new(app => $fallback);
+    is $client->get('/api/x')->text, 'api', 'a prefix without its leading slash still mounts';
+    is $client->get('/x')->text, 'builder app', "builder's own app answers what no mount does";
+};
+
 done_testing;

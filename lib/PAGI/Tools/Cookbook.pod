@@ -553,7 +553,7 @@ Use L<PAGI::Utils::Middleware> to keep channel ownership visible:
           my ($scope, $receive, $send) = @_;
 
           # Immediate request-local shallow state change; no I/O.
-          my $child = clone_scope($scope, { request_id => make_id() });
+          my $child = clone_scope($scope, { 'pagi.request_id' => make_id() });
 
           # Construction only: no event has been emitted or received yet.
           my $out = wrap_send($send, async sub {
@@ -562,7 +562,7 @@ Use L<PAGI::Utils::Middleware> to keep channel ownership visible:
                   $event = {
                       %$event,
                       headers => [@{$event->{headers} // []},
-                          ['x-request-id', $child->{request_id}]],
+                          ['x-request-id', $child->{'pagi.request_id'}]],
                   };
               }
               await $downstream->($event); # this actually emits and awaits
@@ -593,11 +593,11 @@ remain attached. Factory execution happens once during C<to_app>; returned
 wrappers run per request. Core Router, Route, Mount, and Compose lists contain
 only C<middleware(...)> descriptions.
 
-=head2 Negotiated 404 and 405 Responses
+=head2 Branded 404 Responses
 
-Router owns HTTP NONE and PARTIAL. Supply a Pages endpoint through
-C<http_default> for custom NONE presentation; PARTIAL remains the Router's
-negotiated 405 with authoritative C<Allow>:
+Router owns HTTP NONE and PARTIAL, answering both in plain text. Supply a Pages
+endpoint through C<http_default> for a branded, negotiated NONE; PARTIAL remains
+the Router's plain-text 405 with authoritative C<Allow>:
 
   use PAGI::Compose qw(compose);
   use PAGI::Pages;
@@ -637,8 +637,8 @@ constructs from C<routes>:
           Compose root Router
 
 Router 404/405 responses pass through this graph unchanged. Compose's stock
-error response is a negotiated, no-store Pages 500, with a final hardcoded
-UTF-8 text 500 only if Pages rendering itself fails. Put the application's
+error response is a plain-text, no-store 500, with a final hardcoded UTF-8
+text 500 only if an author handler itself fails. Put the application's
 official error policy inside request IDs, access logging, and security
 middleware so those layers observe it:
 
@@ -666,32 +666,29 @@ author ErrorHandler, reported through C<on_error>, rendered by
 C<server_error>, and then re-raised so the server logs it too (see
 L</Who reports an application error>). C<on_error> may return immediately or
 through a Future; its failure is contained. If the database fails after a streaming response has
-started, ErrorHandler awaits reporting, calls no renderer, emits no second
+started, ErrorHandler awaits reporting, calls no handler, emits no second
 start, and rethrows the original database exception so the server can abort.
 
 Ordinary ErrorHandler instances default to static production mode and never
 consult C<PAGI_ENV>. Compose's private outer instance resolves development per
 handled request and falls back to safe production output if resolution fails.
-The built-in renderer negotiates through Pages. To fix one representation, use
-the existing handler seam:
+The built-in answer is plain text. To answer another way, give ErrorHandler a
+C<handler>:
 
+  use PAGI::ErrorContext qw(error_context);
   use PAGI::Response qw(response);
 
   middleware('ErrorHandler',
       handler => sub {
-          my ($request, $error) = @_;
-          return response('Problem', {
-              title  => 'Internal Server Error',
-              status => 500,
-          });
+          my ($request) = @_;
+          my $error = error_context($request);
+          return $error->default if $error->is_server_error;   # the built-in answer
+          return response('JSON', { error => $error->message });
       })
 
-The callback receives C<($request, $error)> and may use either value to choose
-safe fields before returning a concrete Response. Source-free Pages values are
-applications; this custom ErrorHandler seam deliberately retains its concrete
-Response contract.
-
-A custom renderer remains authoritative for its own content and headers.
+C<error_context($request)> gives the error, its status and a client-safe
+message; returning C<< $error->default >> leaves an error to the built-in
+answer. A handler is authoritative for its own content and headers.
 
 =head3 Who reports an application error
 
@@ -724,7 +721,7 @@ the server's log, such as an error tracker or paging:
           my ($error, $scope) = @_;
           $tracker->capture($error,
               path       => $scope->{path},
-              request_id => $scope->{request_id});  # with RequestId installed
+              request_id => $scope->{'pagi.request_id'});  # with RequestId installed
           return;
       }),
 
@@ -1743,6 +1740,34 @@ The independent C<merge_vary(\@existing_values, @names)> function returns a
 single value when no Headers container is available. Both paths reject a
 malformed Vary field instead of silently dropping an existing dependency.
 
+=head2 Add a header from middleware
+
+A middleware adds response headers on a copy: the response's own header list
+belongs to whoever built it, and an application may send the same list for
+every response (see L<PAGI::Spec/Middleware>). C<wrap_response_headers> hands
+you a L<PAGI::Headers> copy and sends a new event with your changes:
+
+  use Future::AsyncAwait;
+  use PAGI::Utils::Middleware qw(wrap_response_headers);
+
+  sub with_build_header {
+      my ($app) = @_;
+      return async sub {
+          my ($scope, $receive, $send) = @_;
+          my $wrapped_send = wrap_response_headers($send, sub {
+              my ($headers) = @_;
+              $headers->set('X-Build', $ENV{BUILD_ID} // 'dev');   # replace
+              $headers->add_vary('Accept-Language');                 # merge Vary
+          });
+          await $app->($scope, $receive, $wrapped_send);
+      };
+  }
+
+Use C<add> for a header that repeats (C<Set-Cookie>) and C<set_default> to keep
+a value the response already has. To hear back from layers further in, seed a
+shared reference before calling inward -- L<PAGI::Stash>, or the spec
+Cookbook's "Reporting back to an outer layer" recipe.
+
 =head2 Compare conditional entity tags
 
 For an existing representation selected by a successful GET or HEAD, read all
@@ -1774,8 +1799,8 @@ tokens require TLS in real deployments.
 
 C<requires(SCOPES, HANDLER, %options)> is Starlette's C<@requires>: it returns
 a handler that runs HANDLER only for an authenticated user holding every scope,
-and otherwise refuses with a 403 (a negotiated Pages response), C<status>, or a
-C<redirect>. It works for C<route>, C<websocket> and C<sse> handlers (the last
+and otherwise refuses with a plain 403, a C<refuse> application of your own, or
+a C<redirect>. It works for C<route>, C<websocket> and C<sse> handlers (the last
 two are denied or declined before they start), and needs the Authentication
 middleware in front of the route.
 
@@ -1810,7 +1835,7 @@ middleware in front of the route.
           # Hide the route's existence from those without access.
           route('/audit' => requires(['admin'], sub ($request) {
               response('JSON', { audit => [] });
-          }, status => 404)),
+          }, refuse => response('Text', 'Not Found', status => 404))),
           # Browsers: go to the route named 'login', with ?next= set.
           route('/home' => requires([], sub ($request) {
               response('JSON', { home => 1 });
@@ -1943,7 +1968,7 @@ flow, including login and logout methods. It requires Perl 5.40 or newer.
 =head2 Deliberate 404 Concealment
 
 B<Request handler:> when disclosing resource existence is itself sensitive,
-make concealment explicit policy -- C<< requires([...], \&handler, status => 404) >>
+make concealment explicit policy -- C<< requires([...], \&handler, refuse => response('Text', 'Not Found', status => 404)) >>
 when the rule is "these scopes", or by hand when it is something else:
 
   use PAGI::Pages qw(not_found);
@@ -2682,8 +2707,8 @@ it; one that wants its own response catches the error:
   use PAGI::Response qw(response);
   use PAGI::Routing qw(middleware route);
 
-  # No code: a body that is not JSON becomes a negotiated 400
-  # (application/problem+json for API clients, an HTML page for browsers).
+  # No code: a body that is not JSON becomes a plain-text 400 carrying
+  # "The request body is not valid JSON."
   async sub create_note ($request) {
       my $data = await $request->json;
       return response('JSON', { created => $data }, status => 201);
@@ -2709,14 +2734,17 @@ it; one that wants its own response catches the error:
   ]);
 
 To give every route the same shape instead, give ErrorHandler a C<handler>.
-It receives the BodyError, whose C<status_code> and C<message> are safe to
-send; C<cause> holds the underlying error for logs:
+C<error_context($request)> carries the BodyError; its C<message> is the
+BodyError's client-safe sentence, and the BodyError's C<cause> holds the
+underlying error for logs:
+
+  use PAGI::ErrorContext qw(error_context);
 
   my $uniform = compose(
-      middleware => [middleware('ErrorHandler', handler => sub ($request, $error) {
-          return response('JSON', { error => $error->message }, status => $error->status_code)
-              if ref $error && $error->isa('PAGI::Request::BodyError');
-          return response('JSON', { error => 'Something went wrong.' }, status => 500);
+      middleware => [middleware('ErrorHandler', handler => sub ($request) {
+          my $error = error_context($request);
+          return $error->default if $error->is_server_error;
+          return response('JSON', { error => $error->message });
       })],
       routes => [route('/notes' => \&create_note, methods => ['POST'])],
   );

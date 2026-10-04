@@ -6,7 +6,7 @@ use Carp qw(croak);
 use Future;
 use Future::AsyncAwait;
 use Scalar::Util qw(blessed refaddr);
-use PAGI::Pages ();
+use PAGI::Response::Text ();
 use PAGI::Routing::HeadBoundary ();
 use PAGI::Routing::Middleware ();
 use PAGI::Routing::RequestResponse ();
@@ -123,7 +123,7 @@ sub _compile_router_body {
 
     my $http_default = defined $router->http_default
         ? $class->_compile_http_endpoint($router->http_default)
-        : PAGI::Utils::to_app(PAGI::Pages->not_found);
+        : PAGI::Response::Text->new('Not Found', status => 404)->to_app;
 
     my $dispatcher = $class->_compile_dispatcher(
         $router->routes,
@@ -159,10 +159,11 @@ sub _compile_dispatcher {
         my $state = $class->_allow_state($scope);
         croak 'Router authoritative Allow state is missing'
             unless $state;
+        # A plain 405 with the path's method union in Allow. To answer it
+        # differently, put a middleware around the Router that rewrites 405s.
         await PAGI::Utils::invoke_app(
-            PAGI::Pages->method_not_allowed(
-                allow => $state->{allowed_methods},
-            ),
+            PAGI::Response::Text->new('Method Not Allowed', status => 405,
+                headers => ['Allow' => join(', ', @{ $state->{allowed_methods} })]),
             $scope, $receive, $send,
         );
         return;
@@ -704,11 +705,9 @@ PAGI::Routing::Compiler - Internal declarative routing compiler
 
 Compiles declarative routing descriptions into fresh application graphs. A
 Router scans its declarations in order. A full Route or Mount invokes its
-compiled application and owns the request. HTTP PARTIAL produces a concrete
-Pages-backed 405 Response with the first-seen method union, while HTTP NONE
-invokes the Router's compiled C<http_default> or constructs the stock
-Pages-backed 404 Response. Both stock outcomes negotiate from the active
-request metadata and emit through the complete native triplet.
+compiled application and owns the request. HTTP PARTIAL produces a plain-text
+405 Response with the first-seen method union in C<Allow>, while HTTP NONE
+invokes the Router's compiled C<http_default> or the plain-text 404 Response.
 WebSocket and SSE misses retain their protocol-specific denial and close
 outcomes and never invoke C<http_default>.
 

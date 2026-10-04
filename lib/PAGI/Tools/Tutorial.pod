@@ -129,8 +129,8 @@ declaration order, constructs the selected protocol object, awaits the handler, 
 Response exactly once.
 
 The compiled coderef is a complete Router application for routing outcomes. If
-no route answers, NONE emits its stock Pages 404 or configured HTTP-only
-C<http_default>; PARTIAL emits its built-in Pages 405 with authoritative
+no route answers, NONE emits its plain-text 404 or configured HTTP-only
+C<http_default>; PARTIAL emits its plain-text 405 with authoritative
 C<Allow>. Compose does not own routing fallback. It owns deployed root safety,
 including ErrorHandler, response-completion guarding, the outer HEAD boundary,
 and lifespan.
@@ -341,8 +341,8 @@ C<routing()> method return an immutable Router:
 The Router is already both an application and an inspectable route tree, so
 the parent can generate C</people/show> URLs without a snapshot conversion.
 The selected Router owns NONE and PARTIAL. NONE invokes its HTTP-only
-C<http_default> or stock Pages 404; PARTIAL emits a compliant Pages 405 with
-the authoritative C<Allow> field. Compose remains the root owner for lifespan,
+C<http_default> or plain-text 404; PARTIAL emits a compliant plain-text 405
+with the authoritative C<Allow> field. Compose remains the root owner for lifespan,
 error handling, HEAD handling, and response-completion safety.
 
 =head1 PART 3: HANDLING REQUESTS
@@ -865,11 +865,16 @@ C<http.response.start> event by wrapping C<$send>:
       return async sub {
           my ($scope, $receive, $send) = @_;
 
-          # Wrap $send so we can edit the response-start event on its way out
+          # Wrap $send so we can change the response start on its way out.
+          # The event belongs to the app, which may send the same header
+          # list every time, so we send a new event rather than edit it.
           my $wrapped_send = async sub {
               my ($event) = @_;
               if ($event->{type} eq 'http.response.start') {
-                  push @{ $event->{headers} }, ['x-powered-by', 'PAGI'];
+                  $event = {
+                      %$event,
+                      headers => [ @{ $event->{headers} // [] }, ['x-powered-by', 'PAGI'] ],
+                  };
               }
               await $send->($event);
           };
@@ -886,24 +891,24 @@ the running order:
 
 =head3 The PAGI::Middleware version
 
-Here is the same middleware as a L<PAGI::Middleware> subclass. The base class
-supplies the wrapping helpers; C<intercept_send> hands your callback each
-outgoing C<$event> together with the original C<$send> to forward it to:
+Here is the same middleware as a L<PAGI::Middleware> subclass, with
+L<PAGI::Utils::Middleware>'s C<wrap_response_headers> doing the copying: it
+hands your callback a L<PAGI::Headers> copy of the response's headers and sends
+a new event with what you changed:
 
   package MyApp::Middleware::PoweredBy;
   use parent 'PAGI::Middleware';
   use Future::AsyncAwait;
+  use PAGI::Utils::Middleware qw(wrap_response_headers);
 
   sub wrap {
       my ($self, $app) = @_;
       return async sub {
           my ($scope, $receive, $send) = @_;
 
-          my $wrapped_send = $self->intercept_send($send, async sub {
-              my ($event, $orig_send) = @_;
-              push @{ $event->{headers} }, ['x-powered-by', 'PAGI']
-                  if $event->{type} eq 'http.response.start';
-              await $orig_send->($event);
+          my $wrapped_send = wrap_response_headers($send, sub {
+              my ($headers) = @_;
+              $headers->set('x-powered-by', 'PAGI');
           });
 
           await $app->($scope, $receive, $wrapped_send);
@@ -1027,7 +1032,7 @@ Add unique request ID to each request:
 
   enable 'RequestId';  # Adds X-Request-Id header
 
-Access via C<$scope-E<gt>{request_id}>.
+Access via C<$scope-E<gt>{'pagi.request_id'}>.
 
 =item * L<PAGI::Middleware::Runtime>
 
@@ -1127,7 +1132,8 @@ Returns 304 Not Modified for matching If-None-Match headers.
 
 =item * L<PAGI::Middleware::RateLimit>
 
-Rate limiting with configurable strategies:
+An in-process token-bucket limiter -- a proof of concept to build on (see its
+LIMITATIONS):
 
   enable 'RateLimit',
       requests_per_second => 100,         # token-bucket refill rate
@@ -1150,27 +1156,25 @@ Catch and format errors:
   enable 'ErrorHandler', development => 1;  # Safely stringified development detail
   enable 'ErrorHandler';                    # Production (default): generic errors, no detail leak
 
-C<ErrorHandler>'s built-in response negotiates through L<PAGI::Pages>. Supply
-a concrete Response through the existing handler seam to fix its representation:
+C<ErrorHandler>'s built-in answer is plain text. To answer another way, give
+it a C<handler> -- a Request handler that reads the error with
+C<error_context($request)>:
 
+  use PAGI::ErrorContext qw(error_context);
   use PAGI::Response qw(response);
 
   enable 'ErrorHandler',
       handler => sub {
-          my ($request, $error) = @_;
-          return response('Problem', {
-              title  => 'Internal Server Error',
-              status => 500,
-          });
+          my ($request) = @_;
+          my $error = error_context($request);
+          return $error->default if $error->is_server_error;
+          return response('JSON', { error => $error->message });
       };
 
-Use C<response('HTML', ...)> or C<response('Text', ...)> for other fixed forms. Ordinary
-construction has static C<development =E<gt> 0> behavior and
-does not consult C<PAGI_ENV>. Its optional C<handler> receives
-C<($request, $error)> and returns an immediate or Future-backed Response.
-The wrapper may inspect C<$error> to choose
-safe response fields; the Response factory does not consume the exception
-implicitly.
+Ordinary construction has static C<development =E<gt> 0> behavior and does
+not consult C<PAGI_ENV>. The handler returns a Response or an application,
+immediately or as a Future; a Response that sets no status is sent with the
+error's.
 C<on_error> is awaited reporting, not rendering; reporter failure is contained.
 It receives C<($error, $scope)>.
 Before response start, ErrorHandler reports and renders, then re-raises a
@@ -1281,19 +1285,20 @@ Add data for downstream handlers:
 
 =item * Intercept responses
 
-Modify outgoing events:
+Change outgoing events. Never edit the event you are given -- it belongs to
+the layer that built it -- but send a new one; for headers,
+C<wrap_response_headers> does that for you:
+
+  use PAGI::Utils::Middleware qw(wrap_response_headers);
 
   sub wrap {
       my ($self, $app) = @_;
       return async sub {
           my ($scope, $receive, $send) = @_;
 
-          my $wrapped_send = $self->intercept_send($send, async sub {
-              my ($event, $original_send) = @_;
-              if ($event->{type} eq 'http.response.start') {
-                  push @{$event->{headers}}, ['x-custom', 'value'];
-              }
-              await $original_send->($event);
+          my $wrapped_send = wrap_response_headers($send, sub {
+              my ($headers) = @_;
+              $headers->set('x-custom', 'value');
           });
 
           await $app->($scope, $receive, $wrapped_send);
@@ -1360,7 +1365,7 @@ Features:
 =back
 
 Use this component by default. It selects indexes and MIME types, streams with
-C<file> events, negotiates errors, and handles conditional and Range requests
+C<file> events, refuses in plain text (see its C<refuse>), and handles conditional and Range requests
 without loading file bodies into application memory.
 
 If custom authorization or response headers require a native handler, begin with
@@ -1473,19 +1478,7 @@ An arbitrary silent HTTP child is an application error. Routers emit ordinary
 404/405 responses, so those statuses advance only when listed in C<catch>; a
 final Router response passes through unchanged.
 
-=head2 7.5 PAGI::App::Proxy - Reverse Proxy
-
-L<PAGI::App::Proxy> forwards requests to backend servers:
-
-  use PAGI::App::Proxy;
-
-  my $proxy = PAGI::App::Proxy->new(
-      backend => 'http://localhost:8080',
-      timeout => 30,
-  );
-  mount('/api', app => $proxy);
-
-=head2 7.6 PAGI::App::WrapPSGI - Use Existing PSGI Apps
+=head2 7.5 PAGI::App::WrapPSGI - Use Existing PSGI Apps
 
 L<PAGI::App::WrapPSGI> lets you use existing PSGI applications:
 
@@ -1496,7 +1489,7 @@ L<PAGI::App::WrapPSGI> lets you use existing PSGI applications:
 
 Useful for incremental migration from PSGI to PAGI.
 
-=head2 7.7 Application Composition
+=head2 7.6 Application Composition
 
 Application positions accept two explicit native forms:
 
@@ -1560,7 +1553,7 @@ explicitly.
 A C<builder {}> block already returns a native coderef; whether it is complete
 depends on the applications it composes.
 
-=head2 7.8 Starlette Vocabulary, PAGI Boundaries
+=head2 7.7 Starlette Vocabulary, PAGI Boundaries
 
 PAGI follows Starlette's Route/Mount/Router/application topology, not every
 method on Starlette Request. L<PAGI::Request> owns HTTP input; imports identify

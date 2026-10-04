@@ -38,7 +38,7 @@ either operation.
 
 Both forms are protected by `PAGI::Middleware::CSRF`. They post plain HTML, so
 the token travels in a hidden `csrf_token` field, which the middleware does
-not read: the app runs it with `invalid => 0`, and each POST handler checks
+not read: the app runs it with `refuse => 0`, and each POST handler checks
 the parsed field with `csrf($request)->verify` and answers 403 when it does
 not match. The token cookie is `HttpOnly`, so the page -- not JavaScript --
 hands the token back. Set `CSRF_SECRET` outside a local demo.

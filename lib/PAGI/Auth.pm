@@ -8,6 +8,9 @@ use PAGI::Auth::Credentials ();
 use PAGI::Auth::Failure ();
 use PAGI::Auth::Result ();
 use PAGI::Auth::UnauthenticatedUser ();
+use PAGI::Response::Redirect ();
+use PAGI::Response::Text ();
+use PAGI::Utils ();
 use PAGI::Utils::Headers ();
 use PAGI::Utils::Scope ();
 
@@ -86,20 +89,22 @@ sub requires {
         unless ref($scopes) eq 'ARRAY' && !grep { !defined || ref } @$scopes;
     croak 'PAGI::Auth requires handler must be a coderef'
         unless ref($handler) eq 'CODE';
-    my $opts = _options('requires', { status => 1, redirect => 1 }, @rest);
-    croak 'PAGI::Auth requires takes status or redirect, not both: a redirect replaces the refusal'
-        if exists $opts->{status} && exists $opts->{redirect};
-    my $status = $opts->{status} // 403;
-    croak 'PAGI::Auth requires status must be a 4xx refusal status'
-        unless $status =~ /\A4\d\d\z/;
+    my $opts = _options('requires', { refuse => 1, redirect => 1 }, @rest);
+    croak 'PAGI::Auth requires takes refuse or redirect, not both: a redirect replaces the refusal'
+        if exists $opts->{refuse} && exists $opts->{redirect};
+    # An app object, not a bare coderef: the option yields a native coderef,
+    # and WebSocket deny and SSE decline read a bare coderef as a ($request)
+    # handler.
+    my $denied = PAGI::Utils::as_app_object(
+        PAGI::Utils::_refuse_option('PAGI::Auth requires', $opts)
+            // PAGI::Response::Text->new('Forbidden', status => 403)->to_app,
+    );
     my $redirect = $opts->{redirect};
     croak 'PAGI::Auth requires redirect must be a location string or an arrayref of path_for arguments'
         if defined($redirect)
             && (ref($redirect) ? ref($redirect) ne 'ARRAY' || !@$redirect || !defined($redirect->[0]) || ref($redirect->[0])
                                : !length($redirect));
 
-    require PAGI::Pages;
-    my $denied = PAGI::Pages->status($status);
     my @required = @$scopes;
 
     return sub {
@@ -110,7 +115,7 @@ sub requires {
                 && $context->credentials->has_all(@required);
 
         my $refusal = defined($redirect)
-            ? PAGI::Pages->redirect(_redirect_target($redirect, $connection), status => 303)
+            ? PAGI::Response::Redirect->new(_redirect_target($redirect, $connection), status => 303)
             : $denied;
         return $connection->deny($refusal)
             if blessed($connection) && $connection->isa('PAGI::WebSocket');
@@ -229,9 +234,11 @@ PAGI::Auth - authentication results, installed context, and challenge formatting
 
   # Declare who may call a route, like Starlette's @requires:
   use PAGI::Auth qw(requires);
+  use PAGI::Response qw(response);
 
   route('/notes'  => requires(['notes:read', 'notes:write'], \&publish_note), methods => ['POST']),
-  route('/admin'  => requires(['admin'], \&admin, status => 404)),
+  route('/admin'  => requires(['admin'], \&admin,
+      refuse => response('Text', 'Not Found', status => 404))),
   route('/home'   => requires([], \&home, redirect => ['login'])),
 
 =head1 DESCRIPTION
@@ -338,7 +345,7 @@ header value explicitly through an ordinary response or Headers API:
       . 'algorithm=SHA-256, stale=true';
   $response->headers->set('WWW-Authenticate', $digest);
 
-=head2 requires($scopes, $handler, status => $code, redirect => $target)
+=head2 requires($scopes, $handler, refuse => $application, redirect => $target)
 
     my $publish = requires(['notes:read', 'notes:write'], async sub ($request) {
         ...
@@ -355,19 +362,30 @@ C<sse> handler) and can be applied by a framework, for example from a sub
 attribute. It needs the L<PAGI::Middleware::Authentication> middleware in
 front of the route.
 
-Otherwise it refuses. Options:
+Otherwise it refuses, by default with a plain-text 403 C<Forbidden>. Options:
 
 =over 4
 
-=item * C<status> (default 403)
+=item * C<refuse>
 
-The 4xx status of the refusal, as a negotiated L<PAGI::Pages> response
-(C<application/problem+json> or HTML). C<< status => 404 >> hides the route
-from those without access.
+The refusal instead: an application -- a Request handler (a coderef called with one
+L<PAGI::Request>, returning a Response or an application) or an object
+with C<to_app>, which includes every L<PAGI::Response>. A
+404 hides the route from those without access; a L<PAGI::Pages> page brands
+it:
+
+    refuse => response('Text', 'Not Found', status => 404)
+    refuse => PAGI::Pages->forbidden
+
+A native C<($scope, $receive, $send)> application is passed as
+C<as_app_object($app)>. Objects -- every Response and L<PAGI::Pages> value --
+mean the same in every slot, and are the portable form for anything also
+given to middleware outside PAGI-Tools.
 
 =item * C<redirect>
 
-Instead of refusing, redirect (303); give this or C<status>, not both. The
+Instead of refusing, redirect with a L<PAGI::Response::Redirect> 303; give
+this or C<refuse>, not both. The
 value says which kind of target it is:
 
     redirect => '/login'                                # a location, as written
@@ -405,14 +423,15 @@ open redirect. See F<examples/auth-cookie-login>.
 
 HTTP routes return the refusal; WebSocket routes C<deny> and SSE routes
 C<decline> with it, before accepting or starting. Like Starlette's, the
-refusal is one status: it does not distinguish an unauthenticated user from a
+refusal is one answer: it does not distinguish an unauthenticated user from a
 missing scope or send a C<WWW-Authenticate> challenge. An API that wants
 RFC 6750 challenges builds those responses itself (see the auth-notes
 example).
 
 Invalid arguments die when the route is declared: a handler that is not a
-coderef, a status outside 400-499, a C<redirect> that is neither a string nor
-a non-empty arrayref, C<status> and C<redirect> together, an unknown option.
+coderef, a C<refuse> that is not an application, a C<redirect> that is neither
+a string nor a non-empty arrayref, C<refuse> and C<redirect> together, an
+unknown option.
 
 =head2 Protecting a group of endpoints
 

@@ -6,6 +6,8 @@ use parent 'PAGI::Middleware';
 use Future::AsyncAwait;
 use Time::HiRes qw(time);
 use JSON::MaybeXS ();
+use PAGI::Utils ();
+use PAGI::Headers ();
 
 =head1 NAME
 
@@ -46,6 +48,8 @@ manufacture a terminal event, so the response stays observably incomplete
 
 =head1 CONFIGURATION
 
+An option not listed here dies at construction.
+
 =over 4
 
 =item * enabled (default: 0)
@@ -75,6 +79,8 @@ sub _init {
     $self->{show_headers} = $config->{show_headers} // 1;
     $self->{show_scope} = $config->{show_scope} // 1;
     $self->{show_timing} = $config->{show_timing} // 1;
+    PAGI::Utils::_reject_unknown_options('Debug', $config,
+        qw(enabled show_headers show_scope show_timing));
 }
 
 sub wrap {
@@ -100,7 +106,9 @@ sub wrap {
         my ($event) = @_;
             if ($event->{type} eq 'http.response.start') {
                 $response_status = $event->{status};
-                @response_headers = @{$event->{headers} // []};
+                # Its own copy of the pairs: Content-Length is rewritten below,
+                # and the response's pairs belong to whoever built them.
+                @response_headers = @{ PAGI::Headers->new($event->{headers} // [])->to_pairs };
 
                 # Check if HTML response
                 for my $h (@response_headers) {

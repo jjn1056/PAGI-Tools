@@ -42,7 +42,7 @@ subtest 'scope and direct protocol sources expose the exact token' => sub {
         type       => 'http',
         method     => 'GET',
         headers    => [],
-        csrf_token => 'scope-token',
+        'pagi.csrf_token' => 'scope-token',
     };
     my $request = PAGI::Request->new($scope, sub { });
 
@@ -56,7 +56,7 @@ subtest 'scope and direct protocol sources expose the exact token' => sub {
         ['SSE', \&sse_scope, sub { PAGI::SSE->new($_[0], sub {}, sub {}) }],
     ) {
         my ($name, $scope_for, $build) = @{$case};
-        my $source = $build->($scope_for->(csrf_token => 'scope-token'));
+        my $source = $build->($scope_for->('pagi.csrf_token' => 'scope-token'));
         is(csrf($source)->token, 'scope-token', "$name source returns its scope token");
     }
 };
@@ -64,21 +64,21 @@ subtest 'scope and direct protocol sources expose the exact token' => sub {
 subtest 'provider validation rejects missing and malformed tokens' => sub {
     like(dies { csrf({ type => 'http' }) }, qr/PAGI::CSRF.*csrf_token/i,
         'missing provider is rejected');
-    like(dies { csrf({ type => 'http', csrf_token => undef }) },
+    like(dies { csrf({ type => 'http', 'pagi.csrf_token' => undef }) },
         qr/PAGI::CSRF.*csrf_token/i, 'undefined provider is rejected');
-    like(dies { csrf({ type => 'http', csrf_token => '' }) },
+    like(dies { csrf({ type => 'http', 'pagi.csrf_token' => '' }) },
         qr/PAGI::CSRF.*csrf_token/i, 'empty provider is rejected');
 
     my $marker = 'TOKEN-MUST-NOT-LEAK';
     my $error = dies {
-        csrf({ type => 'http', csrf_token => [$marker] });
+        csrf({ type => 'http', 'pagi.csrf_token' => [$marker] });
     };
     like($error, qr/PAGI::CSRF.*csrf_token/i, 'reference provider is rejected');
     unlike($error, qr/\Q$marker\E/, 'provider diagnostics do not expose token text');
 };
 
 subtest 'verification accepts only matching nonempty submitted values' => sub {
-    my $guard = csrf({ type => 'http', csrf_token => 'expected-token' });
+    my $guard = csrf({ type => 'http', 'pagi.csrf_token' => 'expected-token' });
 
     ok($guard->verify('expected-token'), 'matching submitted token verifies');
     ok(!$guard->verify('different-token'), 'mismatching submitted token fails');
@@ -87,20 +87,20 @@ subtest 'verification accepts only matching nonempty submitted values' => sub {
 };
 
 subtest 'facades are independent and read the backing token at operation time' => sub {
-    my $scope = { type => 'http', csrf_token => 'first-token' };
+    my $scope = { type => 'http', 'pagi.csrf_token' => 'first-token' };
     my @keys_before = sort keys %{$scope};
     my $first = csrf($scope);
     my $second = csrf($scope);
 
     isnt(refaddr($first), refaddr($second), 'each factory call returns a new facade');
-    $scope->{csrf_token} = 'second-token';
+    $scope->{'pagi.csrf_token'} = 'second-token';
     is($first->token, 'second-token', 'first facade reads the current backing token');
     ok($second->verify('second-token'), 'second facade verifies the current backing token');
     is([sort keys %{$scope}], \@keys_before, 'facade construction adds no scope cache key');
 };
 
 subtest 'constructor, factory, and methods enforce strict arity' => sub {
-    my $scope = { type => 'http', csrf_token => 'arity-token' };
+    my $scope = { type => 'http', 'pagi.csrf_token' => 'arity-token' };
     my $guard = csrf($scope);
 
     like(dies { PAGI::CSRF->new() }, qr/exactly one.*scope/i,
@@ -120,12 +120,12 @@ subtest 'constructor, factory, and methods enforce strict arity' => sub {
 };
 
 subtest 'valid and failure report the recorded header check' => sub {
-    my $passed = csrf({ type => 'http', csrf_token => 't' });
+    my $passed = csrf({ type => 'http', 'pagi.csrf_token' => 't' });
     is($passed->failure, undef, 'no recorded failure');
     is($passed->valid, 1, 'is valid');
 
     for my $reason (qw(missing_cookie missing_token mismatch)) {
-        my $failed = csrf({ type => 'http', csrf_token => 't', csrf_failure => $reason });
+        my $failed = csrf({ type => 'http', 'pagi.csrf_token' => 't', 'pagi.csrf_failure' => $reason });
         is($failed->failure, $reason, "failure is $reason");
         is($failed->valid, 0, "$reason is not valid");
     }

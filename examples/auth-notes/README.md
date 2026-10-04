@@ -15,7 +15,7 @@ notice; it does not enforce access or dispatch another application.
 The checks are written by hand rather than with `PAGI::Auth`'s `requires`
 because this API answers as RFC 6750 describes: 401 with a Bearer challenge
 when the token is missing or rejected, 403 `insufficient_scope` naming the
-scopes when it is not enough. `requires` refuses with one status and no
+scopes when it is not enough. `requires` refuses with one response and no
 challenge, like Starlette's `@requires`; it suits pages and APIs that need no
 challenge (see [auth-cookie-login](../auth-cookie-login/README.md)).
 
@@ -133,7 +133,8 @@ Changing that token to `alice-editor` returns 201 with a new note containing its
 ID, `author_id: "alice"`, and the supplied text. The request cannot choose another
 author. Publishing expects a JSON object with a nonempty `text` string; invalid
 note input returns 400 before the publishing service runs. A body that is not
-JSON at all is refused by `$request->json` itself, as a 400 problem document.
+JSON at all is refused by `$request->json` itself, as a plain-text 400
+saying "The request body is not valid JSON."
 
 Duplicate Authorization fields and malformed Bearer syntax produce the local
 failure code `malformed_authorization`. Protected handlers turn that into 400

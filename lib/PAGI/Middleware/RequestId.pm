@@ -5,6 +5,7 @@ use warnings;
 use parent 'PAGI::Middleware';
 use Future::AsyncAwait;
 use PAGI::Utils::Random qw(secure_random_bytes);
+use PAGI::Utils ();
 
 =head1 NAME
 
@@ -28,6 +29,8 @@ to both the scope and response headers. This is useful for request
 tracing and log correlation.
 
 =head1 CONFIGURATION
+
+An option not listed here dies at construction.
 
 =over 4
 
@@ -57,6 +60,8 @@ sub _init {
     $self->{header}         = $config->{header} // 'X-Request-ID';
     $self->{trust_incoming} = $config->{trust_incoming} // 0;
     $self->{generator}      = $config->{generator} // \&_generate_id;
+    PAGI::Utils::_reject_unknown_options('RequestId', $config,
+        qw(generator header trust_incoming));
 }
 
 sub _generate_id {
@@ -103,14 +108,19 @@ sub wrap {
 
         # Add request ID to scope
         my $modified_scope = $self->modify_scope($scope, {
-            request_id => $request_id,
+            'pagi.request_id' => $request_id,
         });
 
-        # Intercept send to add request ID to response
-        my $wrapped_send = async sub  {
-        my ($event) = @_;
+        # Add the request ID to the response, on a copy of the event: an
+        # application may reuse its headers arrayref, and an ID pushed onto
+        # it would accumulate across requests.
+        my $wrapped_send = async sub {
+            my ($event) = @_;
             if ($event->{type} eq 'http.response.start') {
-                push @{$event->{headers}}, [$self->{header}, $request_id];
+                $event = {
+                    %$event,
+                    headers => [@{$event->{headers} // []}, [$self->{header}, $request_id]],
+                };
             }
             await $send->($event);
         };

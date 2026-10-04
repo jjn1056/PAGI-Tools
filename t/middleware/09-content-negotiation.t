@@ -8,6 +8,7 @@ use IO::Async::Loop;
 use JSON::MaybeXS;
 
 use PAGI::Middleware::ContentNegotiation;
+use PAGI::Response::JSON ();
 
 my $loop = IO::Async::Loop->new;
 
@@ -209,112 +210,65 @@ subtest 'ContentNegotiation - handles type wildcard' => sub {
     is $captured_scope->{'pagi.preferred_content_type'}, 'text/html', 'text/* matches text/html';
 };
 
-subtest 'ContentNegotiation - uses default when no match' => sub {
-    my $content_neg = PAGI::Middleware::ContentNegotiation->new(
-        supported_types => ['application/json', 'text/html'],
-        default_type    => 'text/plain',
-    );
-
-    my $captured_scope;
-    my $app = async sub  {
+sub negotiate {
+    my ($mw, $accept) = @_;
+    my (@events, @seen);
+    my $wrapped = $mw->wrap(async sub {
         my ($scope, $receive, $send) = @_;
-        $captured_scope = $scope;
+        push @seen, $scope;
         await $send->({ type => 'http.response.start', status => 200, headers => [] });
         await $send->({ type => 'http.response.body', body => 'OK', more => 0 });
-    };
+    });
+    run_async { $wrapped->(make_scope(method => 'GET', headers => [['Accept', $accept]]),
+        async sub { {} }, async sub { push @events, $_[0] }) };
+    return (\@events, \@seen);
+}
 
-    my $wrapped = $content_neg->wrap($app);
-    my $scope = make_scope(
-        method  => 'GET',
-        headers => [['Accept', 'application/xml']]  # Not supported
-    );
-
-    my $receive = async sub { {} };
-    my $send = async sub { };
-
-    run_async { $wrapped->($scope, $receive, $send) };
-
-    is $captured_scope->{'pagi.preferred_content_type'}, 'text/plain', 'uses default type';
-};
-
-subtest 'ContentNegotiation - strict mode returns 406' => sub {
-    my $content_neg = PAGI::Middleware::ContentNegotiation->new(
-        supported_types => ['application/json', 'text/html'],
-        strict          => 1,
-    );
-
-    my $app = async sub  {
-        my ($scope, $receive, $send) = @_;
-        await $send->({ type => 'http.response.start', status => 200, headers => [] });
-        await $send->({ type => 'http.response.body', body => 'OK', more => 0 });
-    };
-
-    my $wrapped = $content_neg->wrap($app);
-    my $scope = make_scope(
-        method  => 'GET',
-        headers => [['Accept', 'application/xml']]  # Not supported
-    );
-
-    my @events;
-    my $receive = async sub { {} };
-    my $send = async sub  {
-        my ($event) = @_; push @events, $event };
-
-    run_async { $wrapped->($scope, $receive, $send) };
-
-    is $events[0]{status}, 406, 'returns 406 Not Acceptable in strict mode';
-};
-
-subtest 'ContentNegotiation - strict failures respond once through Pages' => sub {
-    my @cases = (
-        {
-            name         => 'JSON alias selects problem JSON',
-            accept       => 'application/json',
-            content_type => 'application/problem+json',
-        },
-        {
-            name         => 'unsupported image uses the configured default',
-            accept       => 'image/png',
-            content_type => 'text/html; charset=utf-8',
-        },
-        {
-            name         => 'excluded wildcard reaches one strict response',
-            accept       => '*/*;q=0',
-            content_type => 'text/html; charset=utf-8',
-        },
-    );
-
-    for my $case (@cases) {
-        subtest $case->{name} => sub {
-            my $content_neg = PAGI::Middleware::ContentNegotiation->new(
-                supported_types => ['application/xml'],
-                strict          => 1,
-            );
-            my $downstream_calls = 0;
-            my $wrapped = $content_neg->wrap(async sub { $downstream_calls++ });
-            my $scope = make_scope(
-                method  => 'GET',
-                headers => [['Accept', $case->{accept}]],
-            );
-            my @events;
-            my $send = async sub { push @events, $_[0] };
-
-            run_async { $wrapped->($scope, async sub { {} }, $send) };
-
-            my @starts = response_starts(\@events);
-            is scalar(@starts), 1, 'emits exactly one response start';
-            is $starts[0]{status}, 406, 'the single response is 406';
-            is response_header(\@events, 'Content-Type'), $case->{content_type},
-                'Pages selects the expected representation';
-            is $downstream_calls, 0, 'does not call downstream';
-            if ($case->{accept} eq 'application/json') {
-                my $problem = decode_json(response_body(\@events));
-                is $problem->{detail},
-                    'Not Acceptable. Supported types: application/xml',
-                    '406 retains the safe supported-type detail';
-            }
-        };
+subtest 'ContentNegotiation refuses an unmatched request with plain text by default' => sub {
+    for my $accept ('application/json', 'image/png', '*/*;q=0') {
+        my ($events, $seen) = negotiate(
+            PAGI::Middleware::ContentNegotiation->new(supported_types => ['application/xml']), $accept);
+        my @starts = response_starts($events);
+        is scalar(@starts), 1, "$accept: one response";
+        is $starts[0]{status}, 406, "$accept: 406";
+        is response_header($events, 'Content-Type'), 'text/plain; charset=utf-8',
+            "$accept: plain text whatever the Accept";
+        is response_body($events), 'Not Acceptable. Supported types: application/xml',
+            "$accept: lists the supported types";
+        is scalar(@$seen), 0, "$accept: the wrapped application does not run";
     }
+};
+
+subtest 'ContentNegotiation refuse replaces the refusal' => sub {
+    my ($events, $seen) = negotiate(PAGI::Middleware::ContentNegotiation->new(
+        supported_types => ['application/json'],
+        refuse => PAGI::Response::JSON->new({ detail => 'JSON only' }, status => 406)), 'text/csv');
+    is decode_json(response_body($events)), { detail => 'JSON only' }, 'the refusing Response answers';
+    is scalar(@$seen), 0, 'the wrapped application does not run';
+
+    for my $value (undef, '', 'yes') {
+        my $label = defined $value ? "'$value'" : 'undef';
+        like dies { PAGI::Middleware::ContentNegotiation->new(
+                supported_types => ['application/json'], refuse => $value) },
+            qr/\QContentNegotiation 'refuse' must be an application, or 0 to let the application decide\E/,
+            "$label is refused";
+    }
+};
+
+subtest 'ContentNegotiation refuse => 0 lets the application decide' => sub {
+    my ($events, $seen) = negotiate(PAGI::Middleware::ContentNegotiation->new(
+        supported_types => ['application/json', 'text/html'], refuse => 0), 'application/xml');
+    is scalar(@$seen), 1, 'the wrapped application runs';
+    is $seen->[0]{'pagi.preferred_content_type'}, undef, 'with no preferred type: nothing matched';
+    ok exists $seen->[0]{'pagi.accepted_types'}, 'and the parsed Accept list';
+    is((response_starts($events))[0]{status}, 200, "and the application's own response");
+};
+
+subtest 'ContentNegotiation strict and default_type were removed' => sub {
+    like dies { PAGI::Middleware::ContentNegotiation->new(supported_types => ['a/b'], strict => 1) },
+        qr/\QContentNegotiation 'strict' was removed\E/, 'strict dies with its replacement';
+    like dies { PAGI::Middleware::ContentNegotiation->new(supported_types => ['a/b'], default_type => 'a/b') },
+        qr/\QContentNegotiation 'default_type' was removed\E/, 'default_type dies with its replacement';
 };
 
 subtest 'body-policy rejections await concrete response emission' => sub {
@@ -323,7 +277,6 @@ subtest 'body-policy rejections await concrete response emission' => sub {
             name       => 'ContentNegotiation strict 406',
             middleware => PAGI::Middleware::ContentNegotiation->new(
                 supported_types => ['application/xml'],
-                strict          => 1,
             ),
             scope => make_scope(
                 method  => 'GET',

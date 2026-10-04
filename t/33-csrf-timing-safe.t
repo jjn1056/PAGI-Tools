@@ -133,7 +133,7 @@ subtest 'CSRF facade delegates verification to secure_compare' => sub {
 
     my $guard = PAGI::CSRF->new({
         type       => 'http',
-        csrf_token => 'provider-token',
+        'pagi.csrf_token' => 'provider-token',
     });
     ok($guard->verify('submitted-token'), 'utility result is returned');
     is(\@arguments, ['submitted-token', 'provider-token'],

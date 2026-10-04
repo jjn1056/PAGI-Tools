@@ -6,7 +6,7 @@ use parent 'PAGI::Middleware';
 use Future;
 use Future::AsyncAwait;
 use PAGI::Authority;
-use PAGI::Pages;
+use PAGI::Response::Text ();
 use PAGI::Utils ();
 
 =head1 NAME
@@ -29,12 +29,15 @@ PAGI::Middleware::ReverseProxy processes X-Forwarded-* headers only after the
 request passes its trusted-proxy check, and updates the scope with the original
 client information. When supplied, a trusted X-Forwarded-Host must occur exactly
 once and be a single valid authority; repeated fields, comma-containing values,
-and malformed authorities receive a generic HTTP 400 response negotiated
-through L<PAGI::Pages>. Authority trust and normalization decisions remain in
-this middleware. Non-HTTP and untrusted scopes continue to pass through
-unchanged outside Pages.
+and malformed authorities are refused with a plain-text 400,
+C<Invalid X-Forwarded-Host header>, which does not echo the rejected value;
+C<refuse> replaces the refusal. Authority trust and normalization decisions
+remain in this middleware. Non-HTTP and untrusted scopes continue to pass
+through unchanged.
 
 =head1 CONFIGURATION
+
+An option not listed here dies at construction.
 
 =over 4
 
@@ -45,6 +48,25 @@ Arrayref of trusted proxy IP addresses or CIDR ranges.
 =item * trust_all (default: 0)
 
 If true, trust X-Forwarded headers from any source. Use with caution!
+
+=item * refuse (default: a 400 text response)
+
+An application that answers a refused request instead of the plain-text
+default: a Request handler (a coderef called with one
+L<PAGI::Request>, returning a Response or an application) or an object
+with C<to_app>, which includes every L<PAGI::Response>:
+
+    middleware('ReverseProxy', trusted_proxies => ['10.0.0.0/8'],
+        refuse => response('JSON', { detail => 'Bad forwarded host' }, status => 400));
+
+A refusal almost always means a misconfigured proxy, so there is no C<0> form
+that would pass the request on with the proxy's own Host. Any plain value
+dies.
+
+A native C<($scope, $receive, $send)> application is passed as
+C<as_app_object($app)>. Objects -- every Response and L<PAGI::Pages> value --
+mean the same in every slot, and are the portable form for anything also
+given to middleware outside PAGI-Tools.
 
 =back
 
@@ -72,6 +94,12 @@ sub _init {
 
     $self->{trusted_proxies} = $config->{trusted_proxies} // ['127.0.0.1', '::1'];
     $self->{trust_all} = $config->{trust_all} // 0;
+
+    # The caller's refusing application, or a plain-text default built once.
+    $self->{refuse} = PAGI::Utils::_refuse_option('ReverseProxy', $config)
+        // PAGI::Response::Text->new('Invalid X-Forwarded-Host header', status => 400)->to_app;
+    PAGI::Utils::_reject_unknown_options('ReverseProxy', $config,
+        qw(refuse trust_all trusted_proxies));
 }
 
 sub wrap {
@@ -99,7 +127,7 @@ sub wrap {
             } @{ $scope->{headers} // [] };
 
         if (@forwarded_host > 1) {
-            await $self->_send_error($scope, $receive, $send, 400);
+            await $self->_refuse($scope, $receive, $send);
             return;
         }
 
@@ -114,7 +142,7 @@ sub wrap {
                 $validation_error = $@;
             }
             if ($validation_error) {
-                await $self->_send_error($scope, $receive, $send, 400);
+                await $self->_refuse($scope, $receive, $send);
                 return;
             }
         }
@@ -133,14 +161,14 @@ sub wrap {
             $original_ip =~ s/\s+$//;
             if (exists $scope->{client}) {
                 $new_scope{client} = [$original_ip, $scope->{client}[1]];
-                $new_scope{original_client} = $scope->{client};
+                $new_scope{'pagi.original_client'} = $scope->{client};
             } else {
                 $new_scope{client} = [$original_ip, undef];
             }
         } elsif ($real_ip) {
             if (exists $scope->{client}) {
                 $new_scope{client} = [$real_ip, $scope->{client}[1]];
-                $new_scope{original_client} = $scope->{client};
+                $new_scope{'pagi.original_client'} = $scope->{client};
             } else {
                 $new_scope{client} = [$real_ip, undef];
             }
@@ -235,12 +263,9 @@ sub _get_header {
     return;
 }
 
-async sub _send_error {
-    my ($self, $scope, $receive, $send, $status) = @_;
-    die "PAGI::Middleware::ReverseProxy does not own status $status"
-        unless $status == 400;
-    my $response = PAGI::Pages->bad_request;
-    await PAGI::Utils::invoke_app($response, $scope, $receive, $send);
+async sub _refuse {
+    my ($self, $scope, $receive, $send) = @_;
+    await $self->{refuse}->($self->_refusal_scope_for_authority_error($scope), $receive, $send);
 }
 
 1;
@@ -255,7 +280,7 @@ When headers are processed from a trusted proxy:
 
 =item * client - Updated to original client [IP, port]
 
-=item * original_client - The proxy's [IP, port]
+=item * pagi.original_client - The proxy's [IP, port]
 
 =item * scheme - Updated to 'https' if X-Forwarded-Proto indicates
 

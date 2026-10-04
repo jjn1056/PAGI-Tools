@@ -6,6 +6,7 @@ use parent 'PAGI::Middleware';
 use Future;
 use Future::AsyncAwait;
 use PAGI::App::File;
+use PAGI::Utils ();
 
 =head1 NAME
 
@@ -53,6 +54,8 @@ request scope is never rewritten.
 
 =head1 CONFIGURATION
 
+An option not listed here dies at construction.
+
 =over 4
 
 =item * root (required)
@@ -91,6 +94,12 @@ paths never pass through.
 =item * index (default: ['index.html', 'index.htm'])
 
 Array of index file names to try for directory requests.
+
+=item * refuse (default: File's plain-text refusals)
+
+Passed to the File engine: an application that answers File's refusals
+instead of its plain-text defaults, finding the reason in
+C<pagi.file_failure>. See L<PAGI::App::File/refuse>.
 
 =item * allow_hidden (default: 0)
 
@@ -136,7 +145,10 @@ sub _init {
         index         => $config->{index} // ['index.html', 'index.htm'],
         handle_ranges => $config->{handle_ranges} // 1,
         allow_hidden  => $config->{allow_hidden} // 0,
+        (exists $config->{refuse} ? (refuse => $config->{refuse}) : ()),
     );
+    PAGI::Utils::_reject_unknown_options('Static', $config,
+        qw(allow_hidden handle_ranges index pass_through path refuse root));
 }
 
 sub wrap {
@@ -198,8 +210,8 @@ __END__
 
 The shared File engine forbids unsafe request paths, traversal components,
 mixed-separator traversal, null bytes, hidden components by default, and
-unreadable files.  Forbidden Results always receive File's negotiated 403
-response, even when C<pass_through> is enabled.
+unreadable files.  Forbidden Results always receive File's 403 refusal, even
+when C<pass_through> is enabled.
 
 As with L<PAGI::App::File>, configured symbolic links are trusted and may point
 outside the lexical root.  Use a dedicated tree that untrusted principals
@@ -218,7 +230,7 @@ same scope reference and original C<path>.
 
 L<PAGI::App::File> owns MIME selection, the default
 C<application/octet-stream> type, file metadata, ETags, conditional 304
-responses, byte ranges, HEAD boundaries, negotiated errors, and raw C<file>
+responses, byte ranges, HEAD boundaries, its refusals, and raw C<file>
 events.  Static does not open a filehandle, buffer a successful file into
 memory, or implement a second response sender.
 

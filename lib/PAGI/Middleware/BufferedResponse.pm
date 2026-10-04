@@ -7,6 +7,7 @@ use Carp qw(croak);
 use Future;
 use Future::AsyncAwait;
 use PAGI::Middleware ();
+use PAGI::Headers ();
 
 our @EXPORT_OK = qw(buffer_whole_response stream_transform_response);
 
@@ -54,9 +55,9 @@ sub buffer_whole_response {
             if ($type eq 'http.response.start') {
                 $status      = $event->{status};
                 $start_event = $event;
-                # Our own copy: the arrayref belongs to the application, which
-                # may build it once and reuse it across requests.
-                $headers = [ @{ $event->{headers} // [] } ];
+                # Our own copy, pairs included: the list and its pairs belong to
+                # the application, which may build them once and reuse them.
+                $headers = PAGI::Headers->new($event->{headers} // [])->to_pairs;
                 unless ($engage->($status, $headers, $start_event)) {
                     $passing = 1;
                     await $send->($event);
@@ -161,8 +162,8 @@ sub stream_transform_response {
             if ($type eq 'http.response.start') {
                 $status      = $event->{status};
                 $start_event = $event;
-                # Our own copy: the arrayref belongs to the application.
-                $headers = [ @{ $event->{headers} // [] } ];
+                # Our own copy, pairs included: they belong to the application.
+                $headers = PAGI::Headers->new($event->{headers} // [])->to_pairs;
                 # Held until the first body event, so begin() can see it. That
                 # one event is what tells a transformer whether the response
                 # streams, and how large it is when it does not -- neither is
@@ -283,8 +284,8 @@ incomplete, and outer observers still see that a response was started.
 
 Called once with C<< ($status, $headers, $start_event) >> when
 C<http.response.start> arrives. Return false to pass this response through
-untouched. C<$headers> is the helper's own copy, so C<engage> may modify it
-freely. C<$start_event> is the application's own event, which carries
+untouched. C<$headers> is the helper's own copy -- a new list of new pairs --
+so C<engage> may modify it freely, values included. C<$start_event> is the application's own event, which carries
 commitments that are not headers -- C<< trailers => 1 >> in particular. The
 spec requires an intermediary to examine the head before transforming a body
 (L<PAGI::Spec::Www/"Application Left a Response Incomplete">), and this is
@@ -294,8 +295,9 @@ what it examines.
 
 Called with C<< ($status, $headers, $body) >> and must return the same triple.
 Runs only for a response that reached its terminal body event. C<$headers> is
-a copy; the application's own arrayref is never modified, so an application
-that builds its headers once and reuses them across requests is safe.
+a copy of the list and of every pair in it; the application's own arrayref
+and pairs are never modified, so an application that builds its headers once
+and reuses them across requests is safe.
 
 =back
 
@@ -329,8 +331,8 @@ arrive, rather than buffered.
 Called B<once per response>, with C<< ($status, $headers, $first_body,
 $start_event) >>. Return C<undef> to pass this response through untransformed,
 or a hashref of C<< { chunk => sub {...}, finish => sub {...} } >> holding this
-response's transformer. C<$headers> is the helper's own copy and may be
-modified in place; the modified head is emitted immediately after C<begin>
+response's transformer. C<$headers> is the helper's own copy -- a new list of new pairs --
+and may be modified in place; the modified head is emitted immediately after C<begin>
 returns.
 
 C<begin> is a B<factory>, not a pair of shared callbacks, because a

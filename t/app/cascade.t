@@ -154,4 +154,25 @@ subtest 'silence still throws when the client is connected' => sub {
     }
 };
 
+subtest 'a failing child fails the cascade with its own error' => sub {
+    my $scope = { type => 'http', method => 'GET', path => '/x', headers => [] };
+    my $send = sub { return Future->done };
+    my %failing = (
+        'a plain sub that dies'  => sub { die "plain boom\n" },
+        'an async sub that dies' => async sub { die "async boom\n" },
+        'a failed Future'        => sub { return Future->fail("future boom\n") },
+    );
+
+    for my $label (sort keys %failing) {
+        my $later_ran = 0;
+        my $later = sub { $later_ran = 1; return Future->done };
+        my $app = PAGI::App::Cascade->new(apps => [$failing{$label}, $later])->to_app;
+
+        my $result = $app->($scope, sub { Future->done }, $send);
+        ok($result->is_failed, "$label: the cascade fails");
+        like(($result->failure)[0], qr/boom/, "$label: with the child's error");
+        is($later_ran, 0, "$label: no later child is tried");
+    }
+};
+
 done_testing;

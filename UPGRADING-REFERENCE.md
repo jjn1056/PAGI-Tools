@@ -37,16 +37,17 @@ time (see [pagi.connection](#breaking-pagisse-and-pagiwebsocket-require-pagiconn
 
 **Changed behaviour:**
 
-- ErrorHandler re-raises server errors, renders through Pages, and loses
+- ErrorHandler re-raises server errors, answers in plain text unless its
+  `handler` (reading `error_context($request)`) answers, and loses
   `content_type` ([ErrorHandler](#breaking-errorhandler-re-raises-server-errors)).
-- Stock error and redirect responses negotiate HTML, problem JSON or text
-  ([changed defaults](#audit-changed-first-party-defaults)).
+- Stock refusals and error responses are plain text, each replaceable by one
+  option ([changed defaults](#audit-changed-first-party-defaults)).
 - WebSocket and SSE `state` is a `PAGI::State` object, and the helpers need
   `pagi.connection` ([state](#breaking-direct-websocket-and-sse-state-matches-request)).
 - Bad request bodies are 400/413; a body cut short by a disconnect croaks
   ([bodies](#bad-request-bodies-answer-400-or-413-not-500)).
-- `raw_path` is the full requested path; AccessLog, HTTPSRedirect, WrapPSGI
-  and App::Proxy change with it ([raw_path](#raw_path-request_uri-raw_path_info-and-serving-under-a-prefix)).
+- `raw_path` is the full requested path; AccessLog, HTTPSRedirect and
+  WrapPSGI change with it ([raw_path](#raw_path-request_uri-raw_path_info-and-serving-under-a-prefix)).
 - File serving shares one strict request-path contract
   ([file serving](#rooted-file-serving-security-contract)).
 - Middleware Builder's exact-package prefix is `+`, not `^`
@@ -525,15 +526,20 @@ handler => sub {
 }
 ```
 
-**After:** it receives `($request, $error)` and returns a complete Response;
-an explicit status wins over ErrorHandler's fallback.
+**After:** it is a Request handler: it receives a Request, reads the error
+with `error_context($request)`, and returns a Response (or any application).
+A Response that sets no status is sent with the error's; an explicit status
+wins.
 
 ```perl
+use PAGI::ErrorContext qw(error_context);
 use PAGI::Response qw(response);
 
 handler => sub {
-    my ($request, $error) = @_;
-    return response('JSON', { error => 'request failed' }, status => 503);
+    my ($request) = @_;
+    my $error = error_context($request);
+    return $error->default if $error->is_server_error;   # the built-in answer
+    return response('JSON', { error => $error->message });
 }
 ```
 
@@ -730,21 +736,149 @@ my $db = $state->get('db');
 A temporary `%{}` overload still allows `->state->{db}` (with a warning), but
 `ref($protocol->state) eq 'HASH'` is false: use `->data` for an exact hashref.
 
-## Breaking: CSRF `enforce` is replaced by `invalid`
+## Breaking: ContentNegotiation refuses by default; `strict` and `default_type` are removed
+
+ContentNegotiation's distinct job is refusing, at a boundary, what that part
+of the application cannot produce; negotiating inside one handler is
+`$request->preferred_type`. So an unmatched request is refused by default,
+with 0.002002's `406 text/plain` listing the supported types.
+
+| 0.002002 | Now |
+|---|---|
+| `strict => 1` | the default; remove it |
+| `strict => 0` (the default) | `refuse => 0`; with no match `pagi.preferred_content_type` is undef |
+| `default_type => $type` | removed: a request without `Accept` gets the first supported type; with `refuse => 0` choose your own fallback (`// $type`) |
+
+Passing `strict` or `default_type` dies.
+
+## Breaking: Maintenance `body` and `content_type` are replaced by `response`
+
+Maintenance's default 503 is now the plain text `Service Unavailable` rather
+than 0.002002's built-in HTML page. One option, `response`, replaces it with any
+application; `retry_after` still sets Retry-After on whatever answers.
+
+```perl
+# 0.002002
+enable 'Maintenance', enabled => 1, body => $page, content_type => 'text/html';
+
+# Now
+enable 'Maintenance', enabled => 1,
+    response => response('HTML', $page, status => 503);
+```
+
+Passing `body` or `content_type` dies.
+
+## Breaking: middleware scope keys move under `pagi.*`
+
+PAGI::Spec::Www reserves keys without a dot for the core spec and `pagi.*`
+for PAGI extensions. Five middleware wrote bare keys; they now write the
+same name under `pagi.`, like `pagi.session` and `pagi.cookies` already did:
+
+| Middleware | 0.002002 | Now |
+|---|---|---|
+| CSRF | `csrf_token` | `pagi.csrf_token` |
+| ReverseProxy | `original_client` | `pagi.original_client` |
+| MethodOverride | `original_method` | `pagi.original_method` |
+| Rewrite | `original_path` | `pagi.original_path` |
+| RequestId | `request_id` | `pagi.request_id` |
+
+```perl
+# Before
+my $id = $request->scope->{request_id};
+
+# After
+my $id = $request->scope->{'pagi.request_id'};
+```
+
+Code that reads the CSRF token through `csrf($request)->token` is
+unaffected. The CSRF cookie and form field are still named `csrf_token`.
+
+## Changed: `PAGI::App::WrapCGI` is rewritten
+
+0.002002's WrapCGI blocked the event loop while a script ran, never passed a
+POST body to the script (it inherited the server's own standard input), never
+applied its documented `timeout`, and let a client's `Proxy:` header become
+`HTTP_PROXY` (httpoxy, CVE-2016-5385). It now runs the script without blocking
+and streams its output, feeds it the request body, kills it on timeout or when
+the client goes away, and builds the environment per RFC 3875.
+
+What an application sees differently:
+
+| 0.002002 | Now |
+|---|---|
+| the whole output buffered, then sent | streamed with backpressure |
+| a POST body never reached the script | it does |
+| `timeout` ignored | enforced: 504 before the headers, the stream cut off after |
+| the script's whole environment replaced, `PATH` dropped | the CGI variables plus the server's `PATH` |
+| `PATH_INFO` the decoded path as characters; no `REQUEST_URI` | bytes; `REQUEST_URI` set; `HTTPS=on` for https |
+| repeated request headers: the last one wins | joined with `, ` |
+| a `Location` without `Status` answered 200 | 302 |
+| a script that could not start: 500 `Internal Server Error` | 500 `CGI script could not be started`; `refuse` replaces it |
+
+Unix only, and Future::IO must be bound, as `pagi-server` does.
+
+## Breaking: `PAGI::App::Proxy` is removed
+
+It read the backend with blocking socket I/O, which froze the whole event
+loop for every proxied request: one slow backend stalled every other
+connection on that worker. Its own POD already said it was not for
+production use. Use a reverse proxy in front of the application -- nginx,
+HAProxy, Caddy -- or a dedicated proxy distribution.
+
+## Breaking: `PAGI::App::Throttle` is removed
+
+`PAGI::Middleware::RateLimit` is the one rate limiter. Throttle duplicated
+it, shared its buckets between instances, and never cleaned them up.
+
+```perl
+# Before
+my $app = PAGI::App::Throttle->new(
+    app => $inner, rate => 5, burst => 10,
+    key_for  => sub { $_[0]{client}[0] },
+    on_limit => $handler,
+)->to_app;
+
+# After
+compose(
+    routes     => [...],
+    middleware => [
+        middleware('RateLimit', requests_per_second => 5, burst => 10,
+            key_generator => sub { $_[0]{client}[0] },   # the default; 'global' for one bucket
+            refuse        => $refusing_application),
+    ],
+);
+```
+
+RateLimit limits HTTP requests only; Throttle could also throttle WebSocket
+and SSE connection attempts through `on_limit`.
+
+## Breaking: RateLimit `backend` is removed; limiters no longer share buckets
+
+`backend` was documented as `'memory'` or "a custom object implementing
+get/set" but was never read: every limiter kept its buckets in one table per
+process. Passing `backend` now dies. Remove it; a store shared across
+workers or hosts is not something this middleware provides (its POD now
+calls it a proof of concept).
+
+That one table was also shared by every RateLimit instance, so two limiters
+with different limits drew on the same client bucket. Each instance now has
+its own buckets.
+
+## Breaking: CSRF `enforce` is replaced by `refuse`
 
 | 0.002002 | Now |
 |---|---|
 | `enforce => 'header'` (the default) | the default; remove the option |
-| `enforce => 'app'` | `invalid => 0`; the handler still calls `csrf($request)->verify($token)` |
+| `enforce => 'app'` | `refuse => 0`; the handler still calls `csrf($request)->verify($token)` |
 
 Passing `enforce` dies, so a form application that relied on
 `enforce => 'app'` cannot silently start refusing its posts. The default
-refusal is a plain `403 text/plain` (0.002002's wording); `invalid` replaces
+refusal is a plain `403 text/plain` (0.002002's wording); `refuse` replaces
 it with any application:
 
 ```perl
 middleware('CSRF', secret => $secret,
-    invalid => response('JSON', { detail => 'CSRF token validation failed' }, status => 403));
+    refuse => response('JSON', { detail => 'CSRF token validation failed' }, status => 403));
 ```
 
 ## Breaking: `on_close` callbacks receive a third argument
@@ -842,27 +976,31 @@ like $warnings[0], qr/^exception after response completed: database unreachable/
 
 ### Replace ErrorHandler content_type
 
-`content_type` is removed; the built-in page negotiates HTML, problem JSON or
-text. To fix one representation, use `handler`:
+`content_type` is removed; the built-in answer is plain text. To answer
+another way, use `handler`:
 
 ```perl
 # Before
 enable 'ErrorHandler', content_type => 'application/json';
 
 # After
+use PAGI::ErrorContext qw(error_context);
 use PAGI::Response qw(response);
 
 enable 'ErrorHandler',
     handler => sub {
-        my ($request, $error) = @_;
-        return response('Problem', { title => 'Internal Server Error', status => 500 });
+        my ($request) = @_;
+        my $error = error_context($request);
+        return $error->default if $error->is_server_error;
+        return response('JSON', { error => $error->message });
     };
 ```
 
 Use `response('HTML', ...)` or `response('Text', ...)` the same way for the other two.
-Without a handler, an exception's `status_code` is kept only for a
-registered error status that needs no extra protocol facts; bare 401, 405,
-407 and 426, and anything malformed, fall back to 500.
+An exception's `status_code` is kept when it is 400-599; without a handler,
+401, 405, 407 and 426 (which need a field the built-in answer lacks) fall
+back to 500, as does anything malformed. The error is re-raised to the server
+when the status sent is 500 or above.
 
 ## Pages replaces the stock response applications
 
@@ -901,33 +1039,23 @@ literal empty redirect use `response('Redirect', ...)`.
 
 ### Audit changed first-party defaults
 
-These components keep deciding *when* to answer with an error or redirect;
-only the stock body moved to Pages, so its body, `Content-Type`,
-`Content-Length`, `Vary` and cache fields may change. Tests that asserted a
-built-in English body should assert the status and media type instead.
+First-party components answer their refusals and errors in plain text, and
+each answer is replaced by one option; a `PAGI::Pages` page is the
+application's choice (`refuse => PAGI::Pages->forbidden`). A slot that
+answers a request reads a bare coderef as a `($request)` handler; pass a
+native application as `as_app_object($app)`. The 405s now carry `Allow`, and
+App::File's 416 `Content-Range`.
 
-| Component | Stock default now from Pages | Preserved locally |
-|---|---|---|
-| `PAGI::App::File` | 403, 404, 405, 416 | 405 `Allow: GET, HEAD`; 416 file length |
-| `PAGI::App::Directory` | listing 403 plus File's 403, 404, 405, 416 | listing rendering and I/O |
-| `PAGI::App::URLMap` | no-default 404 | mount selection |
-| `PAGI::App::Proxy` | backend-connect 502 | connection decision |
-| `PAGI::App::WrapCGI` | process-start 500 | CGI execution and responses |
-| `PAGI::App::Throttle` | default 429 | `retry_after`, rate-limit fields, `on_limit` |
-| `PAGI::Middleware::Static` | 403, 404, 416 | pass-through; 416 file length |
-| `PAGI::Middleware::ContentNegotiation` | strict-mode 406 | supported-type detail |
-| `PAGI::Middleware::Maintenance` | built-in 503 | `retry_after`; explicit `body`/`content_type` stay literal |
-| `PAGI::Middleware::RateLimit` | default 429 | `retry_after`, `X-RateLimit-*` |
-| `PAGI::Middleware::ReverseProxy` | forwarded-authority 400 | trust decisions |
-| `PAGI::Middleware::TrustedHosts` | bad Host 400 | host policy |
-| `PAGI::Middleware::HTTPSRedirect` | invalid-authority 400 and redirect | authority/HSTS policy |
-| `PAGI::Middleware::Rewrite` | redirect-mode response | rule selection, code, target |
-| `PAGI::Endpoint::HTTP` | automatic 405 | computed `allowed_methods` |
-
-Custom handlers, `on_limit`, application bodies and explicit Responses stay
-literal. Two non-HTTP fallbacks that used to send `http.response.*` on
-another protocol now croak instead: URLMap with no default, and Throttle
-without `on_limit`, on a WebSocket or SSE scope.
+| Component | Option that replaces its answer |
+|---|---|
+| CSRF, TrustedHosts, HTTPSRedirect, ReverseProxy, RateLimit, ContentNegotiation, App::WrapCGI, App::File (Static, Directory), Auth `requires` | `refuse` |
+| Maintenance | `response` |
+| Router and Compose (404) | `http_default` |
+| URLMap | `default` |
+| ErrorHandler | `handler` |
+| Router 405 | a middleware around the Router; Endpoint::HTTP overrides `method_not_allowed` |
+URLMap with no default, on a WebSocket or SSE scope, now croaks instead of
+sending `http.response.*` on another protocol.
 
 ContentNegotiation now uses `PAGI::Request::Negotiate`: an exact `q=0`
 exclusion beats a less specific wildcard. Unknown, missing or malformed scope
@@ -1111,8 +1239,6 @@ mount level (`PAGI::Spec::Www`, "Paths, Mounts and Root Paths").
 - **WrapPSGI** sets `REQUEST_URI` and passes `SCRIPT_NAME`/`PATH_INFO` as
   bytes, as PSGI requires; `Plack::Request->uri` now works on non-Latin-1
   paths.
-- **App::Proxy** forwards the encoded path below its mount; a client's
-  `%0D%0A` can no longer inject a header into the backend request.
 
 ## Rooted file-serving security contract
 

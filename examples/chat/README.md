@@ -58,7 +58,7 @@ compose(
   client missed (`$sse->last_event_id`), receives new ones live from
   `ChatApp::State`, and sends statistics with `$sse->every(10, ...)`.
 - **Static files** use `PAGI::App::File`, which owns index selection, MIME
-  types, ranges, conditional requests and negotiated errors. It sits on an
+  types, ranges, conditional requests and its plain-text refusals. It sits on an
   HTTP `route` rather than a `mount('/')`, because a Route is HTTP-only: a
   WebSocket or SSE request to an unknown path still gets the Router's refusal
   instead of reaching the file application.

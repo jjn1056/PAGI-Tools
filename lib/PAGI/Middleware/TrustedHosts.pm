@@ -6,7 +6,7 @@ use parent 'PAGI::Middleware';
 use Future;
 use Future::AsyncAwait;
 use PAGI::Authority;
-use PAGI::Pages;
+use PAGI::Response::Text ();
 use PAGI::Utils ();
 
 =head1 NAME
@@ -26,16 +26,18 @@ PAGI::Middleware::TrustedHosts - Host header validation middleware
 =head1 DESCRIPTION
 
 PAGI::Middleware::TrustedHosts structurally validates the Host header before
-matching its raw, validated value against a list of allowed hosts. Duplicate or
-malformed Host headers, missing required hosts, and allowlist rejections receive
-a generic HTTP 400 response negotiated through L<PAGI::Pages>. Structural
+matching its raw, validated value against a list of allowed hosts. A missing
+Host is refused with a plain-text 400, C<Missing Host header>; a duplicate or
+malformed Host, or one no pattern allows, with C<Invalid Host header>. Neither
+echoes the rejected value. C<refuse> replaces the refusal. Structural
 validation and allowlist decisions remain authoritative in this middleware.
 This helps prevent host header injection attacks.
 
-Non-HTTP scopes continue to pass through unchanged without Host validation or
-Pages rendering.
+Non-HTTP scopes continue to pass through unchanged without Host validation.
 
 =head1 CONFIGURATION
+
+An option not listed here dies at construction.
 
 =over 4
 
@@ -50,6 +52,26 @@ Array of allowed host patterns. Patterns can include:
 
 If true, allow requests without a Host header.
 
+=item * refuse (default: a 400 text response)
+
+An application that answers a refused request instead of the plain-text
+default: a Request handler (a coderef called with one
+L<PAGI::Request>, returning a Response or an application) or an object
+with C<to_app>, which includes every L<PAGI::Response>:
+
+    middleware('TrustedHosts', hosts => ['example.com'],
+        refuse => response('JSON', { detail => 'Unknown host' }, status => 400));
+
+For a malformed Host it receives a scope holding only the request's
+well-formed C<Accept> headers, so it can read the request without tripping
+over the header that caused the refusal. A bad Host is never passed on to the
+wrapped application, so there is no C<0> form. Any plain value dies.
+
+A native C<($scope, $receive, $send)> application is passed as
+C<as_app_object($app)>. Objects -- every Response and L<PAGI::Pages> value --
+mean the same in every slot, and are the portable form for anything also
+given to middleware outside PAGI-Tools.
+
 =back
 
 =cut
@@ -62,6 +84,15 @@ sub _init {
 
     # Compile host patterns to regexes
     $self->{_patterns} = [map { $self->_compile_pattern($_) } @{$self->{hosts}}];
+
+    # The caller's refusing application, or plain-text defaults built once.
+    $self->{refuse} = PAGI::Utils::_refuse_option('TrustedHosts', $config);
+    $self->{_default_refusal} = {
+        missing => PAGI::Response::Text->new('Missing Host header', status => 400)->to_app,
+        invalid => PAGI::Response::Text->new('Invalid Host header', status => 400)->to_app,
+    };
+    PAGI::Utils::_reject_unknown_options('TrustedHosts', $config,
+        qw(allow_empty hosts refuse));
 }
 
 sub _compile_pattern {
@@ -92,8 +123,8 @@ sub wrap {
             $authority_error = $@;
         }
         if ($authority_error) {
-            my $pages_scope = $self->_pages_scope_for_authority_error($scope);
-            await $self->_send_error($pages_scope, $receive, $send, 400);
+            my $refusal_scope = $self->_refusal_scope_for_authority_error($scope);
+            await $self->_refuse($refusal_scope, $receive, $send, 'invalid');
             return;
         }
 
@@ -103,7 +134,7 @@ sub wrap {
                 await $app->($scope, $receive, $send);
                 return;
             }
-            await $self->_send_error($scope, $receive, $send, 400);
+            await $self->_refuse($scope, $receive, $send, 'missing');
             return;
         }
 
@@ -122,54 +153,15 @@ sub wrap {
         if ($allowed) {
             await $app->($scope, $receive, $send);
         } else {
-            await $self->_send_error($scope, $receive, $send, 400);
+            await $self->_refuse($scope, $receive, $send, 'invalid');
         }
     };
 }
 
-sub _pages_scope_for_authority_error {
-    my ($self, $scope) = @_;
-    my $pairs = exists $scope->{headers} ? $scope->{headers} : [];
-    my $structurally_valid = ref($pairs) eq 'ARRAY';
-
-    if ($structurally_valid) {
-        for my $pair (@$pairs) {
-            unless (ref($pair) eq 'ARRAY' && @$pair == 2
-                    && defined($pair->[0]) && !ref($pair->[0])
-                    && defined($pair->[1]) && !ref($pair->[1])) {
-                $structurally_valid = 0;
-                last;
-            }
-        }
-    }
-    return $scope if $structurally_valid;
-
-    my @accept;
-    if (ref($pairs) eq 'ARRAY') {
-        for my $pair (@$pairs) {
-            next unless ref($pair) eq 'ARRAY' && @$pair == 2
-                && defined($pair->[0]) && !ref($pair->[0])
-                && defined($pair->[1]) && !ref($pair->[1]);
-            my $name = $pair->[0];
-            $name =~ tr/A-Z/a-z/;
-            push @accept, [$pair->[0], $pair->[1]] if $name eq 'accept';
-        }
-    }
-
-    my $safe_scope = {
-        %$scope,
-        headers => \@accept,
-    };
-    delete $safe_scope->{'pagi.request.headers'};
-    return $safe_scope;
-}
-
-async sub _send_error {
-    my ($self, $scope, $receive, $send, $status) = @_;
-    die "PAGI::Middleware::TrustedHosts does not own status $status"
-        unless $status == 400;
-    my $response = PAGI::Pages->bad_request;
-    await PAGI::Utils::invoke_app($response, $scope, $receive, $send);
+async sub _refuse {
+    my ($self, $scope, $receive, $send, $reason) = @_;
+    my $refusal = $self->{refuse} // $self->{_default_refusal}{$reason};
+    await $refusal->($scope, $receive, $send);
 }
 
 1;
@@ -195,12 +187,12 @@ Host header injection attacks can lead to:
 This middleware prevents these attacks by validating the Host header
 against a whitelist of allowed hosts.
 
-If the raw header container itself is malformed, the built-in Pages response
-uses a request-local shallow scope containing only structurally valid Accept
-pairs. Any inherited request-header cache is discarded from that copy. The
-original scope and malformed header data are not mutated. Structurally valid
-missing, duplicate, malformed-authority, and allowlist-rejected Host branches
-continue to pass their original scope to Pages.
+If the raw header container itself is malformed, a C<refuse> application
+receives a request-local shallow scope containing only structurally valid
+Accept pairs. Any inherited request-header cache is discarded from that copy.
+The original scope and malformed header data are not mutated. Structurally
+valid missing, duplicate, malformed-authority, and allowlist-rejected Host
+branches pass their original scope.
 
 =head1 SEE ALSO
 

@@ -228,8 +228,10 @@ subtest 'CORS adds headers to actual requests' => sub {
         'CORS merges Origin with existing Vary fields';
     is [response_header_values($sent[0], 'Set-Cookie')], ['a=1', 'b=2'],
         'CORS preserves repeated Set-Cookie fields';
-    is refaddr($sent[0]), refaddr($start),
-        'credentialed CORS mutates literal response metadata in place';
+    isnt refaddr($sent[0]), refaddr($start),
+        'credentialed CORS sends a new response start';
+    ok !(grep { lc($_->[0]) =~ /^access-control-/ } @{ $start->{headers} }),
+        "the application's own start event is untouched";
     is refaddr($sent[1]), refaddr($body),
         'credentialed CORS forwards the downstream body event by identity';
     is $sent[0]{extension_sentinel}, 'kept',
@@ -491,81 +493,64 @@ subtest 'TrustedHosts rejects invalid hosts' => sub {
     is $sent[0]{status}, 400, 'status is 400 Bad Request';
 };
 
-subtest 'TrustedHosts generic failures negotiate through Pages' => sub {
+sub trusted_hosts_request {
+    my ($mw, $headers) = @_;
+    my (@sent, @seen);
+    my $wrapped = $mw->wrap(async sub { push @seen, $_[0] });
+    run_async(async sub {
+        await $wrapped->(
+            { type => 'http', path => '/', method => 'GET', headers => $headers },
+            async sub { { type => 'http.disconnect' } },
+            async sub { my ($event) = @_; push @sent, $event },
+        );
+    });
+    return (\@sent, \@seen);
+}
+
+subtest 'TrustedHosts refuses with plain text by default' => sub {
     my @cases = (
-        {
-            name    => 'missing Host',
-            headers => [],
-        },
-        {
-            name    => 'duplicate Host',
-            headers => [['Host', 'example.com'], ['host', 'example.com']],
-        },
-        {
-            name    => 'structurally malformed Host',
-            headers => [['Host', 'example.com/path']],
-        },
-        {
-            name    => 'allowlist-rejected valid Host',
-            headers => [['Host', 'other.example']],
-        },
+        ['missing Host',                  [],                                                'Missing Host header'],
+        ['duplicate Host',                [['Host', 'example.com'], ['host', 'example.com']], 'Invalid Host header'],
+        ['structurally malformed Host',   [['Host', 'example.com/path']],                    'Invalid Host header'],
+        ['allowlist-rejected valid Host', [['Host', 'other.example']],                       'Invalid Host header'],
     );
-    my @representations = (
-        ['application/problem+json', 'application/problem+json'],
-        ['text/plain', 'text/plain; charset=utf-8'],
-    );
-
     for my $case (@cases) {
-        for my $representation (@representations) {
-            my ($accept, $content_type) = @$representation;
-            my $mw = PAGI::Middleware::TrustedHosts->new(
-                hosts => ['example.com'],
-            );
-            my $app_calls = 0;
-            my $wrapped = $mw->wrap(async sub { $app_calls++ });
-            my @sent;
-            my @headers = (@{$case->{headers}}, ['Accept', $accept]);
+        my ($label, $headers, $body) = @$case;
+        my ($sent, $seen) = trusted_hosts_request(
+            PAGI::Middleware::TrustedHosts->new(hosts => ['example.com']),
+            [@$headers, ['Accept', 'application/problem+json']],
+        );
+        is scalar(@$seen), 0, "$label does not call downstream";
+        is $sent->[0]{status}, 400, "$label is refused with 400";
+        is [response_header_values($sent->[0], 'Content-Type')],
+            ['text/plain; charset=utf-8'], "$label is plain text whatever the Accept";
+        is $sent->[1]{body}, $body, "$label says what was wrong";
+    }
+};
 
-            run_async(async sub {
-                await $wrapped->(
-                    {
-                        type    => 'http',
-                        path    => '/',
-                        method  => 'GET',
-                        headers => \@headers,
-                    },
-                    async sub { { type => 'http.disconnect' } },
-                    async sub { my ($event) = @_; push @sent, $event },
-                );
-            });
+subtest 'TrustedHosts refuse replaces the refusal' => sub {
+    my $mw = PAGI::Middleware::TrustedHosts->new(hosts => ['example.com'],
+        refuse => response('JSON', { detail => 'Unknown host' }, status => 421));
+    my ($sent) = trusted_hosts_request($mw, [['Host', 'other.example']]);
+    is $sent->[0]{status}, 421, 'the refusing Response answers';
+    is decode_json($sent->[1]{body}), { detail => 'Unknown host' }, 'with its body';
 
-            my $label = "$case->{name} with $accept";
-            is $app_calls, 0, "$label does not call downstream";
-            is scalar(@sent), 2, "$label sends a complete response";
-            is $sent[0]{status}, 400, "$label retains status 400";
-            is [response_header_values($sent[0], 'Content-Type')],
-                [$content_type], "$label negotiates the requested representation";
-            is [response_header_values($sent[0], 'Cache-Control')],
-                ['no-store'], "$label uses the Pages error cache policy";
-            is [response_header_values($sent[0], 'Vary')],
-                ['Accept'], "$label varies negotiated responses on Accept";
+    # A refusing application that reads the request must not trip over the
+    # malformed header that caused the refusal.
+    my $seen_headers;
+    $mw = PAGI::Middleware::TrustedHosts->new(hosts => ['example.com'], refuse => sub {
+        my ($request) = @_;
+        $seen_headers = $request->scope->{headers};
+        return PAGI::Response::Text->new('', status => 400);
+    });
+    trusted_hosts_request($mw, [['Host', ['a.example']], ['Accept', 'text/html']]);
+    is $seen_headers, [['Accept', 'text/html']],
+        'a malformed request reaches the refusing application with only its Accept headers';
 
-            if ($accept eq 'application/problem+json') {
-                my $problem = eval { decode_json($sent[1]{body}) };
-                ok $problem, "$label renders a JSON problem document";
-                if ($problem) {
-                    is $problem->{status}, 400, "$label renders problem status";
-                    is $problem->{detail},
-                        'The server could not understand the request.',
-                        "$label does not expose the rejected authority";
-                }
-            }
-            else {
-                is $sent[1]{body},
-                    "400 Bad Request\n\nThe server could not understand the request.\n",
-                    "$label renders the generic Pages text body";
-            }
-        }
+    for my $value (undef, '', 0, 'yes') {
+        my $label = defined $value ? "'$value'" : 'undef';
+        like dies { PAGI::Middleware::TrustedHosts->new(hosts => ['example.com'], refuse => $value) },
+            qr/\QTrustedHosts 'refuse' must be an application\E/, "$label is refused";
     }
 };
 
@@ -653,9 +638,9 @@ subtest 'TrustedHosts rejects invalid Host authority before downstream' => sub {
         is $sent[0]{status}, 400, "$case->[1] returns 400";
         is $sent[1], {
             type => 'http.response.body',
-            body => "400 Bad Request\n\nThe server could not understand the request.\n",
+            body => 'Invalid Host header',
             more => 0,
-        }, "$case->[1] returns the generic Pages terminal body";
+        }, "$case->[1] says the Host header is invalid";
     }
 };
 
@@ -739,11 +724,11 @@ subtest 'TrustedHosts rejects undefined headers even when empty Host is allowed'
     is scalar(@sent), 2, 'undefined headers container sends start and terminal body';
     is $sent[0]{type}, 'http.response.start', 'undefined headers container sends response start';
     is $sent[0]{status}, 400, 'undefined headers container returns 400';
-    like $sent[1]{body}, qr{<title>400 Bad Request</title>},
-        'undefined headers container returns the default Pages HTML body';
+    is $sent[1]{body}, 'Invalid Host header',
+        'undefined headers container says the Host header is invalid';
 };
 
-subtest 'TrustedHosts structurally malformed headers retain safe Accept negotiation' => sub {
+subtest 'TrustedHosts refuses structurally malformed headers safely' => sub {
     my @cases = (
         {
             name    => 'scalar header entry',
@@ -815,30 +800,16 @@ subtest 'TrustedHosts structurally malformed headers retain safe Accept negotiat
                     "$label sends response start first";
                 is $sent[0]{status}, 400, "$label retains status 400";
                 is [response_header_values($sent[0], 'Content-Type')],
-                    [$content_type],
-                    "$label negotiates using the surviving Accept pair";
+                    ['text/plain; charset=utf-8'],
+                    "$label is refused with plain text";
                 is $sent[1]{type}, 'http.response.body',
                     "$label sends a terminal response body";
                 is $sent[1]{more}, 0, "$label terminates the response";
                 unlike $sent[1]{body}, qr/rejected\.example/,
                     "$label does not expose rejected header input";
 
-                if ($accept eq 'application/problem+json') {
-                    my $problem = eval { decode_json($sent[1]{body}) };
-                    ok $problem, "$label renders a JSON problem document";
-                    if ($problem) {
-                        is $problem->{status}, 400,
-                            "$label renders problem status";
-                        is $problem->{detail},
-                            'The server could not understand the request.',
-                            "$label renders only the safe generic detail";
-                    }
-                }
-                else {
-                    is $sent[1]{body},
-                        "400 Bad Request\n\nThe server could not understand the request.\n",
-                        "$label renders the safe generic text body";
-                }
+                is $sent[1]{body}, 'Invalid Host header',
+                    "$label says the Host header is invalid";
             }
 
             is refaddr($scope->{headers}), refaddr($original_headers),
@@ -1006,32 +977,29 @@ subtest 'CSRF records why the check failed, in order' => sub {
     for my $case (@cases) {
         my ($reason, $headers) = @$case;
         my (undef, $seen) = csrf_request(
-            PAGI::Middleware::CSRF->new(secret => 's', invalid => 0), headers => $headers);
-        is $seen->[0]{csrf_failure}, $reason, "records $reason";
+            PAGI::Middleware::CSRF->new(secret => 's', refuse => 0), headers => $headers);
+        is $seen->[0]{'pagi.csrf_failure'}, $reason, "records $reason";
         is csrf($seen->[0])->failure, $reason, "csrf()->failure reads $reason";
     }
-    my (undef, $seen) = csrf_request(PAGI::Middleware::CSRF->new(secret => 's', invalid => 0),
+    my (undef, $seen) = csrf_request(PAGI::Middleware::CSRF->new(secret => 's', refuse => 0),
         headers => [['cookie', 'a=1; csrf_token=abc; b=2'], ['x-csrf-token', 'abc']]);
-    ok !exists $seen->[0]{csrf_failure}, 'a passing check records no failure';
+    ok !exists $seen->[0]{'pagi.csrf_failure'}, 'a passing check records no failure';
     is csrf($seen->[0])->valid, 1, 'and is valid';
 };
 
-subtest 'CSRF invalid => 0 lets the application decide' => sub {
-    my ($sent, $seen) = csrf_request(PAGI::Middleware::CSRF->new(secret => 's', invalid => 0));
+subtest 'CSRF refuse => 0 lets the application decide' => sub {
+    my ($sent, $seen) = csrf_request(PAGI::Middleware::CSRF->new(secret => 's', refuse => 0));
     is scalar(@$seen), 1, 'the application is called';
     is $sent->[0]{status}, 200, 'and its response is sent';
-    ok length($seen->[0]{csrf_token}), 'a token is in the scope';
+    ok length($seen->[0]{'pagi.csrf_token'}), 'a token is in the scope';
 };
 
-subtest 'CSRF invalid accepts any application' => sub {
+subtest 'CSRF refuse accepts any application' => sub {
     my %apps = (
         'a Response' => response('JSON', { detail => 'nope' }, status => 403),
-        'a coderef'  => async sub {
-            my ($scope, $receive, $send) = @_;
-            await $send->({ type => 'http.response.start', status => 403,
-                headers => [['content-type', 'application/json']] });
-            await $send->({ type => 'http.response.body',
-                body => '{"detail":"nope"}', more => 0 });
+        'a coderef'  => sub {
+            my ($request) = @_;
+            return response('JSON', { detail => 'nope' }, status => 403);
         },
         'an object with to_app' => PAGI::Utils::as_app_object(async sub {
             my ($scope, $receive, $send) = @_;
@@ -1043,7 +1011,7 @@ subtest 'CSRF invalid accepts any application' => sub {
     );
     for my $label (sort keys %apps) {
         my ($sent, $seen) = csrf_request(
-            PAGI::Middleware::CSRF->new(secret => 's', invalid => $apps{$label}));
+            PAGI::Middleware::CSRF->new(secret => 's', refuse => $apps{$label}));
         is scalar(@$seen), 0, "$label: the application is not called";
         is $sent->[0]{status}, 403, "$label: its status";
         is [response_header_values($sent->[0], 'Content-Type')], ['application/json'],
@@ -1051,9 +1019,9 @@ subtest 'CSRF invalid accepts any application' => sub {
     }
 };
 
-subtest 'CSRF reuses one configured invalid Response' => sub {
+subtest 'CSRF reuses one configured refuse Response' => sub {
     my $mw = PAGI::Middleware::CSRF->new(secret => 's',
-        invalid => response('Text', 'Bad CSRF', status => 400));
+        refuse => response('Text', 'Bad CSRF', status => 400));
     for my $n (1, 2) {
         my ($sent) = csrf_request($mw);
         is $sent->[0]{status}, 400, "refusal $n status";
@@ -1065,12 +1033,12 @@ subtest "CSRF never adds its cookie to an application's own header list" => sub 
     # An application may send the same headers arrayref every time; a
     # cookie added to it would reach every later client.
     my @shared = (['content-type', 'text/plain']);
-    my $refuse = async sub {
+    my $refuse = PAGI::Utils::as_app_object(async sub {
         my ($scope, $receive, $send) = @_;
         await $send->({ type => 'http.response.start', status => 403, headers => \@shared });
         await $send->({ type => 'http.response.body', body => 'no', more => 0 });
-    };
-    my $mw = PAGI::Middleware::CSRF->new(secret => 's', invalid => $refuse);
+    });
+    my $mw = PAGI::Middleware::CSRF->new(secret => 's', refuse => $refuse);
     csrf_request($mw) for 1 .. 3;
     is scalar(@shared), 1, "the application's header list is unchanged";
 
@@ -1079,16 +1047,15 @@ subtest "CSRF never adds its cookie to an application's own header list" => sub 
         'a client that already has a token gets no one else\'s';
 };
 
-subtest 'CSRF invalid: the refusing application can read the reason' => sub {
+subtest 'CSRF refuse: the refusing application can read the reason' => sub {
     my $reason;
-    my $mw = PAGI::Middleware::CSRF->new(secret => 's', invalid => async sub {
-        my ($scope, $receive, $send) = @_;
-        $reason = csrf($scope)->failure;
-        await $send->({ type => 'http.response.start', status => 403, headers => [] });
-        await $send->({ type => 'http.response.body', body => '', more => 0 });
+    my $mw = PAGI::Middleware::CSRF->new(secret => 's', refuse => sub {
+        my ($request) = @_;
+        $reason = csrf($request)->failure;
+        return response('Text', '', status => 403);
     });
     csrf_request($mw);
-    is $reason, 'missing_cookie', 'csrf($scope) works inside the invalid application';
+    is $reason, 'missing_cookie', 'csrf($request) works inside the refusing handler';
 };
 
 subtest 'CSRF refusal of a first POST still issues the cookie' => sub {
@@ -1098,17 +1065,17 @@ subtest 'CSRF refusal of a first POST still issues the cookie' => sub {
         'the refusal sets the minted token';
 };
 
-subtest 'CSRF invalid rejects every plain value but 0' => sub {
+subtest 'CSRF refuse rejects every plain value but 0' => sub {
     for my $value (undef, '', '0E0', '0.0') {
         my $label = defined $value ? "'$value'" : 'undef';
-        like dies { PAGI::Middleware::CSRF->new(secret => 's', invalid => $value) },
-            qr/\QCSRF 'invalid' must be an application, or 0 to let the application decide\E/,
+        like dies { PAGI::Middleware::CSRF->new(secret => 's', refuse => $value) },
+            qr/\QCSRF 'refuse' must be an application, or 0 to let the application decide\E/,
             "$label is refused";
     }
-    ok lives { PAGI::Middleware::CSRF->new(secret => 's', invalid => 0) }, '0 is accepted';
-    ok lives { PAGI::Middleware::CSRF->new(secret => 's', invalid => '0') }, "'0' is accepted";
-    like dies { PAGI::Middleware::CSRF->new(secret => 's', invalid => 'yes') },
-        qr/\QCSRF 'invalid' must be an application, or 0 to let the application decide\E/,
+    ok lives { PAGI::Middleware::CSRF->new(secret => 's', refuse => 0) }, '0 is accepted';
+    ok lives { PAGI::Middleware::CSRF->new(secret => 's', refuse => '0') }, "'0' is accepted";
+    like dies { PAGI::Middleware::CSRF->new(secret => 's', refuse => 'yes') },
+        qr/\QCSRF 'refuse' must be an application, or 0 to let the application decide\E/,
         'a non-application string is refused';
 };
 
@@ -1127,7 +1094,7 @@ subtest 'CSRF allows POST with valid token' => sub {
     my $token;
     my $app = async sub  {
         my ($scope, $receive, $send) = @_;
-        $token = $scope->{csrf_token};
+        $token = $scope->{'pagi.csrf_token'};
         await $send->({
             type    => 'http.response.start',
             status  => 200,
@@ -1252,28 +1219,28 @@ subtest 'CSRF allows GET without token' => sub {
 };
 
 # =============================================================================
-# Test: CSRF invalid => 0 (the application decides); enforce was removed
+# Test: CSRF refuse => 0 (the application decides); enforce was removed
 # =============================================================================
 
 subtest 'CSRF enforce was removed' => sub {
     for my $enforce (qw(app header bogus)) {
         like(
             dies { PAGI::Middleware::CSRF->new(secret => 'test-secret', enforce => $enforce) },
-            qr/\QCSRF 'enforce' was removed: use invalid => 0 for the application to decide; the default refuses\E/,
+            qr/\QCSRF 'enforce' was removed: use refuse => 0 for the application to decide; the default refuses\E/,
             "enforce => '$enforce' dies with the replacement",
         );
     }
 };
 
-subtest "CSRF invalid => 0 passes an unsafe request through with no token" => sub {
-    my $mw = PAGI::Middleware::CSRF->new(secret => 'test-secret', invalid => 0);
+subtest "CSRF refuse => 0 passes an unsafe request through with no token" => sub {
+    my $mw = PAGI::Middleware::CSRF->new(secret => 'test-secret', refuse => 0);
 
     my $seen_token;
     my $app_called = 0;
     my $app = async sub  {
         my ($scope, $receive, $send) = @_;
         $app_called   = 1;
-        $seen_token   = $scope->{csrf_token};
+        $seen_token   = $scope->{'pagi.csrf_token'};
         await $send->({ type => 'http.response.start', status => 200, headers => [] });
         await $send->({ type => 'http.response.body', body => 'OK', more => 0 });
     };
@@ -1304,9 +1271,9 @@ subtest "CSRF invalid => 0 passes an unsafe request through with no token" => su
     like $set_cookie->[1], qr/\Q$seen_token\E/, 'Set-Cookie carries the same token stashed in scope';
 };
 
-subtest "CSRF invalid => 0 preserves an application-owned Response" => sub {
+subtest "CSRF refuse => 0 preserves an application-owned Response" => sub {
     my $mw = PAGI::Middleware::CSRF->new(
-        secret => 'test-secret', invalid => 0,
+        secret => 'test-secret', refuse => 0,
     );
     my @sent;
     my $send = async sub { my ($event) = @_; push @sent, $event };
@@ -1342,8 +1309,8 @@ subtest "CSRF invalid => 0 preserves an application-owned Response" => sub {
         'application Response body remains byte-for-byte literal';
 };
 
-subtest "CSRF invalid => 0 stashes the existing COOKIE token, not a new one" => sub {
-    my $mw = PAGI::Middleware::CSRF->new(secret => 'test-secret', invalid => 0);
+subtest "CSRF refuse => 0 stashes the existing COOKIE token, not a new one" => sub {
+    my $mw = PAGI::Middleware::CSRF->new(secret => 'test-secret', refuse => 0);
 
     # First, a GET establishes a cookie token.
     my $cookie_token;
@@ -1373,7 +1340,7 @@ subtest "CSRF invalid => 0 stashes the existing COOKIE token, not a new one" => 
     my $seen_token;
     my $post_app = async sub  {
         my ($scope, $receive, $send) = @_;
-        $seen_token = $scope->{csrf_token};
+        $seen_token = $scope->{'pagi.csrf_token'};
         await $send->({ type => 'http.response.start', status => 200, headers => [] });
         await $send->({ type => 'http.response.body', body => 'Created', more => 0 });
     };

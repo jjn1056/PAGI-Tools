@@ -15,8 +15,11 @@ PAGI::Response::JSON - buffered UTF-8 JSON response
 =head1 SYNOPSIS
 
     use PAGI::Response qw(response);
-    my $response = PAGI::Response::JSON->new({ ok => \1 });
-    my $same = response('JSON', { ok => \1 });
+    my $response = response('JSON', { ok => \1 });
+
+    # The same, by class -- what response() calls:
+    use PAGI::Response::JSON;
+    my $same = PAGI::Response::JSON->new({ ok => \1 });
 
 =head1 DESCRIPTION
 

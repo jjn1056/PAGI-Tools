@@ -64,42 +64,6 @@ sub assert_rendered {
     is(body_text($events), $body, "$label body is exact");
 }
 
-sub assert_pages_error {
-    my ($label, $events, $status, $title, $content_type) = @_;
-    my $response_starts = starts($events);
-    is(scalar @$response_starts, 1, "$label emits exactly one response start");
-    is($response_starts->[0]{status}, $status, "$label status is $status");
-    is(header_values($response_starts->[0], 'Content-Type'), [$content_type],
-        "$label uses its negotiated Pages representation");
-    my $body = body_text($events);
-    if ($content_type eq 'application/problem+json') {
-        my $problem = decode_json($body);
-        is($problem->{status}, $status, "$label problem status matches the wire");
-        is($problem->{title}, $title, "$label problem title is semantic");
-    }
-    else {
-        like($body, qr/\Q$status\E\s+\Q$title\E/,
-            "$label body contains semantic status and title");
-    }
-}
-
-sub assert_client_pages_error {
-    my ($label, $response, $status, $title, $content_type) = @_;
-    is($response->status, $status, "$label status is $status");
-    is($response->content_type, $content_type,
-        "$label uses its negotiated Pages representation");
-    if ($content_type eq 'application/problem+json') {
-        is($response->json->{status}, $status,
-            "$label problem status matches the wire");
-        is($response->json->{title}, $title,
-            "$label problem title is semantic");
-    }
-    else {
-        like($response->text, qr/\Q$status\E\s+\Q$title\E/,
-            "$label body contains semantic status and title");
-    }
-}
-
 sub route_set {
     return [
         route('/items' => sub { return PAGI::Response::Text->new('get') }, methods => 'GET'),
@@ -140,10 +104,9 @@ subtest 'Compose routes receive ordinary Router HTTP outcomes' => sub {
     my $empty = PAGI::Test::Client->new(
         app => compose(routes => [])->to_app,
     )->get('/missing', headers => { Accept => 'application/problem+json' });
-    assert_client_pages_error(
-        'empty routes Router default', $empty, 404, 'Not Found',
-        'application/problem+json',
-    );
+    is([$empty->status, $empty->content_type, $empty->text],
+        [404, 'text/plain; charset=utf-8', 'Not Found'],
+        'empty routes Router default is a plain 404 whatever the Accept');
 
     my $client = PAGI::Test::Client->new(
         app => compose(routes => route_set())->to_app,
@@ -153,11 +116,11 @@ subtest 'Compose routes receive ordinary Router HTTP outcomes' => sub {
     is($full->text, 'get', 'selected route body is retained');
 
     my $partial = $client->delete('/items',
-        headers => { Accept => 'text/plain' });
-    assert_client_pages_error(
-        'Router method mismatch', $partial, 405, 'Method Not Allowed',
-        'text/plain; charset=utf-8',
-    );
+        headers => { Accept => 'application/problem+json' });
+    is($partial->status, 405, 'Router method mismatch status is 405');
+    is($partial->content_type, 'text/plain; charset=utf-8',
+        'Router method mismatch is plain text whatever the Accept');
+    is($partial->text, 'Method Not Allowed', 'Router method mismatch body is plain');
     is($partial->header('Allow'), 'GET, HEAD, POST',
         'Router 405 carries the deterministic union Allow');
     is(\@warnings, [], 'ordinary Router outcomes do not warn');
@@ -210,10 +173,9 @@ subtest 'selected silent targets become production-safe 500 through Test Client'
                 $request_scope->{path} // '/',
             );
         }
-        assert_client_pages_error(
-            $label, $response, 500, 'Internal Server Error',
-            'text/html; charset=utf-8',
-        );
+        is([$response->status, $response->content_type, $response->text],
+            [500, 'text/plain; charset=utf-8', 'Internal Server Error'],
+            "$label is the plain built-in 500");
         # Compose re-raises the guard failure; Test::Client, standing in for
         # the server, reports it.
         is(scalar @warnings, 1, "$label is reported once");
@@ -245,10 +207,9 @@ subtest 'thrown and failed-Future targets become one Test Client 500' => sub {
                 $request_scope->{path},
             );
         }
-        assert_client_pages_error(
-            $label, $response, 500, 'Internal Server Error',
-            'text/html; charset=utf-8',
-        );
+        is([$response->status, $response->content_type, $response->text],
+            [500, 'text/plain; charset=utf-8', 'Internal Server Error'],
+            "$label is the plain built-in 500");
         unlike($response->text, $warning_pattern,
             "$label production response does not expose the original failure");
         is(scalar @warnings, 1, "$label is reported once");
@@ -291,9 +252,8 @@ subtest 'invalid PAGI_ENV is contained only when an error path consults it' => s
         $routing, scope(path => '/missing'),
     );
     is($route_error, undef, 'Router default does not consult the environment');
-    assert_pages_error(
-        'invalid environment Router default', $route_events, 404,
-        'Not Found', 'text/html; charset=utf-8',
+    assert_rendered(
+        'invalid environment Router default', $route_events, 404, 'Not Found',
     );
     is($route_warnings, [], 'ordinary Router 404 does not warn');
 
@@ -304,9 +264,9 @@ subtest 'invalid PAGI_ENV is contained only when an error path consults it' => s
         = run_request($throwing, scope(path => '/explode'));
     is($throw_error, "native application failed\n",
         'throwing selected app is rendered, then re-raised to the server');
-    assert_pages_error(
+    assert_rendered(
         'invalid environment throwing native app', $throw_events, 500,
-        'Internal Server Error', 'text/html; charset=utf-8',
+        'Internal Server Error',
     );
     is(scalar @$throw_warnings, 1,
         'only the configuration problem is warned by Compose');
@@ -379,9 +339,9 @@ subtest 'body before start becomes one clean automatic 500 response' => sub {
     is([map { $_->{type} } @$events], [
         'http.response.start', 'http.response.body',
     ], 'wire receives only the replacement response pair');
-    assert_pages_error(
+    assert_rendered(
         'body-before-start guard failure', $events, 500,
-        'Internal Server Error', 'text/html; charset=utf-8',
+        'Internal Server Error',
     );
     is($warnings, [], 'Compose itself reports nothing');
 };

@@ -32,15 +32,15 @@ PAGI::CSRF - Strict access to an issued CSRF token
         await response('JSON', { saved => \1 })->to_app->($scope, $receive, $send);
     });
 
-    # To answer a failed check your own way, pass any application as invalid:
+    # To answer a failed check your own way, pass any application as refuse:
     #   PAGI::Middleware::CSRF->new(secret => $secret,
-    #       invalid => response('JSON', { detail => 'CSRF token validation failed' }, status => 403));
+    #       refuse => response('JSON', { detail => 'CSRF token validation failed' }, status => 403));
 
     # 2. The application handles it. A plain HTML form sends its token in the
-    #    body, which the middleware does not read: with invalid => 0 every
+    #    body, which the middleware does not read: with refuse => 0 every
     #    request reaches the application, which verifies the parsed field.
     #    (csrf($scope)->valid and ->failure report the header check, if any.)
-    my $form = PAGI::Middleware::CSRF->new(secret => $secret, invalid => 0)->wrap(async sub {
+    my $form = PAGI::Middleware::CSRF->new(secret => $secret, refuse => 0)->wrap(async sub {
         my ($scope, $receive, $send) = @_;
         my $guard = csrf($scope);
         my $response;
@@ -62,7 +62,7 @@ PAGI::CSRF - Strict access to an issued CSRF token
 
 =head1 DESCRIPTION
 
-C<PAGI::CSRF> wraps the C<csrf_token> provider installed in a PAGI scope by
+C<PAGI::CSRF> wraps the C<pagi.csrf_token> provider installed in a PAGI scope by
 L<PAGI::Middleware::CSRF>. The provider must be a defined, nonempty scalar.
 Verification uses L<PAGI::Utils::SecureCompare/secure_compare>.
 
@@ -91,7 +91,7 @@ sub csrf { return __PACKAGE__->new(@_) }
 
     my $guard = PAGI::CSRF->new($source);
 
-Requires a valid C<csrf_token> provider in the resolved scope.
+Requires a valid C<pagi.csrf_token> provider in the resolved scope.
 
 =cut
 
@@ -104,8 +104,8 @@ sub new {
 
 sub _provider_token {
     my ($scope) = @_;
-    my $token = $scope->{csrf_token};
-    croak 'PAGI::CSRF requires a defined, nonempty, non-reference csrf_token provider'
+    my $token = $scope->{'pagi.csrf_token'};
+    croak 'PAGI::CSRF requires a defined, nonempty, non-reference pagi.csrf_token provider'
         unless defined($token) && !ref($token) && length($token);
     return $token;
 }
@@ -176,7 +176,7 @@ C<missing_token>, or C<mismatch> -- or undef when it passed or did not run.
 sub failure {
     my ($self, @arguments) = @_;
     croak 'failure() accepts no arguments' if @arguments;
-    return $self->{scope}{csrf_failure};
+    return $self->{scope}{'pagi.csrf_failure'};
 }
 
 1;

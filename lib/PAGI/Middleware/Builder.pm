@@ -4,6 +4,7 @@ use strict;
 use warnings;
 use Future::AsyncAwait;
 use Carp 'croak';
+use PAGI::App::URLMap ();
 use PAGI::Utils ();
 use Scalar::Util qw(blessed);
 use PAGI::Utils ();
@@ -139,8 +140,10 @@ sub enable_if (&$;@) {
     mount '/static' => PAGI::App::File->new(root => $dir);
     mount '/api'    => MyApp::API->new;
 
-Mount an application at a path prefix. Requests matching the
-prefix are routed to the mounted app with adjusted paths. The app
+Mount an application at a path prefix, as L<PAGI::App::URLMap> does: the
+longest matching prefix wins, the mounted app sees C<path> without the prefix
+and C<root_path> with it, C<mount '/'> takes every path, and a request no mount
+takes goes to the builder's own application. The app
 argument accepts the two native application forms supported by
 L<PAGI::Utils/to_app>: a coderef or an app object with
 C<to_app>. Package-name strings are rejected; load and construct mounted
@@ -250,10 +253,6 @@ Package-name strings are rejected synchronously.
 
 sub add_mount {
     my ($self, $path, $app) = @_;
-    # Normalize path (remove trailing slash, ensure leading slash)
-    $path =~ s{/$}{};
-    $path = "/$path" unless $path =~ m{^/};
-
     push @{$self->{mounts}}, {
         path => $path,
         app  => PAGI::Utils::to_app($app),
@@ -362,41 +361,13 @@ sub _wrap_middleware {
     }
 }
 
-# Private: build mount routing app
+# Private: build mount routing app; anything no mount takes goes to the
+# builder's own app.
 sub _build_mount_app {
     my ($self, $fallback_app) = @_;
-    my @mounts = sort { length($b->{path}) <=> length($a->{path}) } @{$self->{mounts}};
-
-    return async sub {
-        my ($scope, $receive, $send) = @_;
-        my $path = $scope->{path};
-
-        for my $mount (@mounts) {
-            my $prefix = $mount->{path};
-
-            # Check if path matches mount point
-            if ($path eq $prefix || $path =~ m{^\Q$prefix\E/}) {
-                # Adjust path and root_path for mounted app
-                my $new_path = $path;
-                $new_path =~ s{^\Q$prefix\E}{};
-                $new_path = '/' if $new_path eq '';
-
-                my $new_root = ($scope->{root_path} // '') . $prefix;
-
-                my $mounted_scope = {
-                    %$scope,
-                    path      => $new_path,
-                    root_path => $new_root,
-                };
-
-                await $mount->{app}->($mounted_scope, $receive, $send);
-                return;
-            }
-        }
-
-        # No mount matched, use fallback
-        await $fallback_app->($scope, $receive, $send);
-    };
+    my $map = PAGI::App::URLMap->new(default => $fallback_app);
+    $map->mount($_->{path}, $_->{app}) for @{$self->{mounts}};
+    return $map->to_app;
 }
 
 1;

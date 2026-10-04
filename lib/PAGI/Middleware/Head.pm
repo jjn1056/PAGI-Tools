@@ -5,6 +5,7 @@ use warnings;
 use parent 'PAGI::Middleware';
 use Future::AsyncAwait;
 use PAGI::Routing::HeadBoundary;
+use PAGI::Utils ();
 
 =head1 NAME
 
@@ -31,9 +32,14 @@ inner app, then suppresses the body in the response.
 
 =head1 CONFIGURATION
 
-No configuration options.
+No configuration options; any option dies at construction.
 
 =cut
+
+sub _init {
+    my ($self, $config) = @_;
+    PAGI::Utils::_reject_unknown_options('Head', $config);
+}
 
 sub wrap {
     my ($self, $app) = @_;

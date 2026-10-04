@@ -14,6 +14,8 @@
     Stream and NDJSON, built by name with response('Name', ...) -- resolved
     like middleware(), '+' for a Response class from another distribution.
   - PAGI::Pages: negotiated welcome, error and redirect responses.
+  - PAGI::ErrorContext (error_context): the error an ErrorHandler handler
+    answers. PAGI::Request::BodyError gains client_message.
   - PAGI::Auth (auth, auth_result, unauth_result, www_authenticate,
     requires) and PAGI::Middleware::Authentication.
   - PAGI::State, PAGI::CSRF, PAGI::Transport and PAGI::Routing::URL
@@ -28,11 +30,60 @@
   [Changed]
   - raw_path is the full requested path at every mount level; AccessLog
     logs, and HTTPSRedirect redirects to, the encoded request URI.
-  - Stock error and redirect responses from first-party components
-    negotiate HTML, problem JSON or text through Pages.
-  - CSRF's default refusal is a plain 403 text response; invalid replaces
-    it with any application, and csrf($request)->valid and ->failure
-    report the check.
+  - Stock error responses from first-party components are plain text, each
+    replaceable by one option (refuse, response, http_default, default or
+    ErrorHandler's handler); a PAGI::Pages page is the application's choice.
+  - One coderef convention: a slot that answers a request (every refuse,
+    Maintenance response, ErrorHandler handler, routes, http_default,
+    deny/decline) reads a bare coderef as a Request handler; a slot that
+    hosts an application (mount, URLMap, Cascade, Builder) reads it as a
+    native app.
+  - ErrorHandler answers in plain text (reason phrase, or a client error's
+    client_message) with Cache-Control: no-store; its handler is a Request
+    handler that reads the error through PAGI::ErrorContext
+    (error_context($request)), may return any application, and declines by
+    returning $error->default. The error is re-raised when the status sent
+    is 5xx; a failing handler gets a last-resort 500 and the original error
+    is re-raised. Status claims outside 400-599 answer 500.
+  - References in events are shared, not copied (PAGI 0.002013): Runtime,
+    SecurityHeaders and CORS no longer write into a response's own header
+    list, nor Debug into its header pairs, which leaked one request's headers -- an origin, a timing
+    -- into later requests when an application reused that list. New
+    PAGI::Utils::Middleware::wrap_response_headers hands middleware a
+    PAGI::Headers copy to edit. When the response already carries the
+    header: Runtime leaves it and warns, SecurityHeaders leaves it, CORS
+    replaces it (each sent a second value before). CORS and
+    SecurityHeaders now also add their headers when the application sent
+    none.
+  - PAGI-Tools middleware reject unknown options: a misspelt or renamed
+    option (CORS `origin`, CSRF `invalid`) dies at construction.
+  - The Router's stock HTTP default is 0.002002's plain-text 404 "Not
+    Found"; http_default stays the override.
+  - URLMap answers an unmatched request with 0.002002's plain-text 404
+    again. Builder's mount now is URLMap, so mount '/' takes every path,
+    as in Plack, rather than only /; URLMap's mount('api') now mounts
+    /api, as Builder's did.
+  - Maintenance answers with a plain-text 503 by default; its response
+    option (any application) replaces the body and content_type options,
+    which now die.
+  - PAGI::Auth's requires refuses with a plain 403 and takes refuse (any
+    application) in place of status; its redirect is a
+    PAGI::Response::Redirect 303.
+  - App::File (and Directory and Static through it) refuses with 0.002002's
+    plain text, keeping the 405's Allow and the 416's Content-Range; its
+    refuse option replaces all four refusals, with the reason in
+    pagi.file_failure -- a branded PAGI::Pages page is one choice.
+  - The Router's and Endpoint::HTTP's 405 is plain text with Allow, as in
+    0.002002; an endpoint class answers it differently by overriding
+    method_not_allowed, and the endpoint still sets Allow.
+  - CSRF, TrustedHosts, HTTPSRedirect, ReverseProxy, RateLimit and
+    ContentNegotiation refuse with plain text (CSRF a 403, RateLimit a 429,
+    ContentNegotiation a 406 listing the supported types, the others a
+    400); their refuse option replaces the refusal with any application. RateLimit
+    still sets Retry-After and X-RateLimit-* on whatever refuses, keeps
+    each instance's buckets apart, counts time below a second, and calls
+    itself a proof of concept in its POD. CSRF's refuse => 0 lets the application decide, and
+    csrf($request)->valid and ->failure report its check.
   - GZip compresses streaming responses.
   - Cascade advances only on a status in catch; a child that sends
     nothing is an error, not a miss.
@@ -62,8 +113,8 @@
   - Session takes no secret, cookie_name or cookie_options: the cookie is
     configured on State::Cookie, which sets no Max-Age by default and
     merges its cookie_options into the defaults.
-  - ErrorHandler re-raises server errors (5xx) to the server after the
-    error page, and rethrows an exception raised after the response
+  - ErrorHandler re-raises server errors to the server after the error
+    response (when the status sent is 5xx), and rethrows an exception raised after the response
     started instead of swallowing it.
   - PAGI::WebSocket and PAGI::SSE require pagi.connection (PAGI::Server
     0.002014); their state is a PAGI::State object; deny takes a response.
@@ -81,8 +132,25 @@
   - PAGI::WebSocket and PAGI::SSE on_close callbacks receive a third
     argument, $detail; a callback with a strict two-argument signature
     dies, and its cleanup is skipped (the error is logged).
-  - PAGI::Middleware::CSRF's enforce is removed: invalid => 0 replaces
+  - PAGI::Middleware::CSRF's enforce is removed: refuse => 0 replaces
     enforce => 'app', and passing enforce dies.
+  - PAGI::Middleware::RateLimit's backend is removed (it was never used);
+    passing it dies.
+  - PAGI::App::Throttle is removed; PAGI::Middleware::RateLimit is the one
+    rate limiter.
+  - PAGI::App::Proxy is removed: its blocking socket I/O froze the event
+    loop for every proxied request.
+  - PAGI::App::WrapCGI is rewritten on Future::IO. It no longer blocks the
+    event loop, streams the script's output, passes it the request body
+    (it never did), enforces its timeout (it never did), stops the script
+    when the client goes away, and builds the environment per RFC 3875 --
+    never HTTP_PROXY (httpoxy, CVE-2016-5385). Unix only.
+  - ContentNegotiation refuses an unmatched request by default; strict and
+    default_type are removed (refuse => 0 replaces strict => 0); passing
+    either dies.
+  - Middleware scope keys move under pagi.*, which PAGI::Spec::Www reserves
+    for extensions: pagi.csrf_token, pagi.original_client,
+    pagi.original_method, pagi.original_path, pagi.request_id.
 
   [Fixed]
   - GZip sent every compressed response as 200, whatever its status.
@@ -96,8 +164,9 @@
   - Endpoint::SSE keepalive failed against validating servers, and a
     declined Endpoint::SSE still sent sse.start.
   - The Response Writer and Stream skipped on_close cleanup on failure.
-  - App::Proxy could hang on a keep-alive backend and let %0D%0A in the
-    path inject backend headers; AccessLog let it forge log lines.
+  - RequestId added its header to the application's own header list, so a
+    reused list accumulated one ID per request.
+  - AccessLog let a %0D%0A in the path forge log lines.
   - WrapPSGI set no REQUEST_URI and passed characters, not bytes.
   - PAGI::Lifespan re-ran startup on an out-of-phase message.
   - try_send_* with a dropped Future warned and needed ->retain; SSE

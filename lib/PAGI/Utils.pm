@@ -345,9 +345,7 @@ sub as_app_object {
 
 async sub invoke_app {
     my ($value, $scope, $receive, $send) = @_;
-    my $app = to_app($value);
-    my $returned = $app->($scope, $receive, $send);
-    return await Future->wrap($returned);
+    return await Future->wrap(to_app($value)->($scope, $receive, $send));
 }
 
 # Resolve a short class name the way middleware() does: a leading '+' names
@@ -361,6 +359,49 @@ sub _resolve_class {
     return substr($name, 1) if substr($name, 0, 1) eq '+';
     return $name if index($name, "${namespace}::") == 0;
     return "${namespace}::$name";
+}
+
+# A first-party component's `refuse` option: undef when the caller gave
+# none (the component uses its own default), the string '0' when the caller
+# asked the application to decide (only if $may_decide), else the caller's
+# application as a native coderef (a bare coderef given is run as a Request
+# handler). Any other plain value dies: an undefined or
+# mistyped setting must never switch a check off.
+sub _refuse_option {
+    my ($component, $config, $may_decide) = @_;
+    return _application_option($component, $config, 'refuse', $may_decide);
+}
+
+# A PAGI-Tools middleware's last step in _init: an option it does not know is
+# a misspelling or a renamed option, and is never silently ignored. Run after
+# the middleware's own checks, so an option it removed keeps its own message.
+sub _reject_unknown_options {
+    my ($name, $config, @known) = @_;
+    my %known = map { $_ => 1 } @known;
+    for my $key (sort keys %$config) {
+        croak "$name has unknown option '$key'" unless $known{$key};
+    }
+    return;
+}
+
+# The same for any option whose value replaces a component's own response,
+# such as Maintenance's `response`.
+sub _application_option {
+    my ($component, $config, $key, $may_decide) = @_;
+    return undef unless exists $config->{$key};
+    my $value = $config->{$key};
+    return '0' if $may_decide && defined($value) && !ref($value) && $value eq '0';
+    die $may_decide
+        ? "$component '$key' must be an application, or 0 to let the application decide"
+        : "$component '$key' must be an application"
+        unless ref($value);
+    # The option answers a request, so a bare coderef is a Request handler, as
+    # at a Route; as_app_object() passes a native application.
+    if (ref($value) eq 'CODE') {
+        require PAGI::Routing::RequestResponse;
+        return PAGI::Routing::RequestResponse->new(handler => $value)->to_app;
+    }
+    return to_app($value);
 }
 
 # On a case-insensitive filesystem, require 'Foo/json.pm' opens Foo/JSON.pm

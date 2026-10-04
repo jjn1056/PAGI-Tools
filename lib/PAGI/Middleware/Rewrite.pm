@@ -37,6 +37,8 @@ representation configuration option.
 
 =head1 CONFIGURATION
 
+An option not listed here dies at construction.
+
 =over 4
 
 =item * rules (required)
@@ -79,6 +81,8 @@ sub _init {
             && $supported_redirect_code{$normalized_redirect_code}
             && "$normalized_redirect_code" eq $canonical_redirect_code;
     $self->{redirect_code} = $normalized_redirect_code;
+    PAGI::Utils::_reject_unknown_options('Rewrite', $config,
+        qw(redirect redirect_code rules));
 }
 
 sub wrap {
@@ -109,7 +113,7 @@ sub wrap {
         # Internal rewrite
         my $new_scope = $self->modify_scope($scope, {
             path          => $new_path,
-            original_path => $scope->{original_path} // $path,
+            'pagi.original_path' => $scope->{'pagi.original_path'} // $path,
         });
 
         await $app->($new_scope, $receive, $send);

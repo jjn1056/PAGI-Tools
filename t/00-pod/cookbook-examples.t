@@ -271,7 +271,7 @@ subtest 'Bad request bodies recipe executes as published' => sub {
             . "my \%bad = (body => '{not json', headers => { 'Content-Type' => 'application/json', Accept => 'application/json' });\n"
             . "my \$client = PAGI::Test::Client->new(app => \$app);\n"
             . "my \$res = \$client->post('/notes', \%bad);\n"
-            . "die 'default: expected a 400 problem document' unless \$res->status == 400 && \$res->header('content-type') eq 'application/problem+json';\n"
+            . "die 'default: expected a plain 400' unless \$res->status == 400 && \$res->content_type eq 'text/plain; charset=utf-8' && \$res->text eq 'The request body is not valid JSON.';\n"
             . "\$res = \$client->post('/notes/kindly', \%bad);\n"
             . "die 'kindly: expected its own 400' unless \$res->status == 400 && \$res->json->{error} =~ /Send a JSON object/;\n"
             . "\$res = \$client->post('/notes/kindly', body => '{\"text\":\"hi\"}', headers => { 'Content-Type' => 'application/json' });\n"

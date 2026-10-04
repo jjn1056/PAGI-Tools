@@ -34,6 +34,8 @@ change the health representation.
 
 =head1 CONFIGURATION
 
+An option not listed here dies at construction.
+
 =over 4
 
 =item * path (default: '/health')
@@ -69,6 +71,8 @@ sub _init {
     $self->{ready_path} = $config->{ready_path};
     $self->{checks} = $config->{checks} // {};
     $self->{include_details} = $config->{include_details} // 1;
+    PAGI::Utils::_reject_unknown_options('Healthcheck', $config,
+        qw(checks include_details live_path path ready_path));
 }
 
 sub wrap {

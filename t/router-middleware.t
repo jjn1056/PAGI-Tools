@@ -231,7 +231,7 @@ subtest 'class-name middleware is accepted and resolved at compilation' => sub {
         route('/' => sub {
             my ($request) = @_;
             return PAGI::Response::Text->new(
-                defined $request->scope->{request_id} ? 'has id' : 'missing id',
+                defined $request->scope->{'pagi.request_id'} ? 'has id' : 'missing id',
             );
         }, middleware => [middleware('RequestId')]),
     ]);

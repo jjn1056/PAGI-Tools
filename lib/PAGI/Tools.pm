@@ -189,9 +189,17 @@ on the slot it is given to:
     Mount app                           an application       an application
                                         ($scope, $receive,   (via to_app)
                                         $send)
+    refuse (CSRF, TrustedHosts,         a handler taking     an application
+    HTTPSRedirect, ReverseProxy,        one Request          (via to_app)
+    RateLimit, ContentNegotiation,
+    WrapCGI, File, requires),
+    Maintenance response,
+    ErrorHandler handler
+    URLMap mounts and default,          an application       an application
+    Cascade, Builder's app
 
-So Mount always takes an application, and a Route takes a handler or an
-application object. Two small adapters cross between the slots:
+A slot that answers a request takes a handler; a slot that hosts an
+application takes an application. Objects mean the same everywhere. Two small adapters cross between the slots:
 
 =over 4
 

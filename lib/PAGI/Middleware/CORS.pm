@@ -7,6 +7,7 @@ use Future::AsyncAwait;
 use PAGI::Response::Empty ();
 use PAGI::Utils ();
 use PAGI::Headers;
+use PAGI::Utils::Middleware ();
 
 =head1 NAME
 
@@ -30,9 +31,11 @@ PAGI::Middleware::CORS - Cross-Origin Resource Sharing middleware
 
 PAGI::Middleware::CORS implements Cross-Origin Resource Sharing (CORS)
 for PAGI applications. It handles preflight OPTIONS requests and adds
-the appropriate CORS headers to responses. Actual responses remain literal
-downstream events whose start metadata is amended in place. Preflight policy
-is computed here and emitted as a bodyless L<PAGI::Response::Empty>.
+the appropriate CORS headers to responses. For an actual response, its
+C<Access-Control-*> fields are set on a copy of the response's headers -- one
+value each, replacing any the application set -- and a new response start is
+sent; the application's own header list is never changed. Preflight policy is
+computed here and emitted as a bodyless L<PAGI::Response::Empty>.
 
 CORS is request policy, not representation metadata, so it is deliberately not
 a Response method. Replace response-level C<cors(...)> calls with this
@@ -44,6 +47,8 @@ field, retaining first spelling and order. A wildcard normalizes to C<*>.
 Malformed existing members raise rather than losing a cache dependency.
 
 =head1 CONFIGURATION
+
+An option not listed here dies at construction.
 
 =over 4
 
@@ -91,6 +96,8 @@ sub _init {
            . "This allows any website to make credentialed cross-origin requests. "
            . "Consider specifying explicit origins.\n";
     }
+    PAGI::Utils::_reject_unknown_options('CORS', $config,
+        qw(credentials expose_headers headers max_age methods origins));
 }
 
 sub wrap {
@@ -117,13 +124,11 @@ sub wrap {
 
         # For actual requests, add CORS headers to response
         if ($origin && $self->_is_origin_allowed($origin)) {
-            my $wrapped_send = async sub  {
-        my ($event) = @_;
-                if ($event->{type} eq 'http.response.start') {
-                    $self->_add_cors_headers($event->{headers}, $origin);
-                }
-                await $send->($event);
-            };
+            # The headers go on a copy: the response's own header list
+            # belongs to whoever built it, who may send it again.
+            my $wrapped_send = PAGI::Utils::Middleware::wrap_response_headers($send, sub {
+                $self->_add_cors_headers($_[0], $origin);
+            });
             await $app->($scope, $receive, $wrapped_send);
         } else {
             await $app->($scope, $receive, $send);
@@ -134,27 +139,28 @@ sub wrap {
 async sub _handle_preflight {
     my ($self, $scope, $receive, $send, $origin) = @_;
 
-    my @headers;
+    my $fields = PAGI::Headers->new;
 
     if ($self->_is_origin_allowed($origin)) {
-        $self->_add_cors_headers(\@headers, $origin);
+        $self->_add_cors_headers($fields, $origin);
 
         # Add preflight-specific headers
-        push @headers, ['Access-Control-Allow-Methods', join(', ', @{$self->{methods}})];
-        push @headers, ['Access-Control-Allow-Headers', join(', ', @{$self->{headers}})];
-        push @headers, ['Access-Control-Max-Age', $self->{max_age}];
+        $fields->set('Access-Control-Allow-Methods', join(', ', @{$self->{methods}}));
+        $fields->set('Access-Control-Allow-Headers', join(', ', @{$self->{headers}}));
+        $fields->set('Access-Control-Max-Age', $self->{max_age});
     }
 
     my $response = PAGI::Response::Empty->new(
         status  => 204,
-        headers => [map { @$_ } @headers],
+        headers => [$fields->flatten],
     );
     await PAGI::Utils::invoke_app($response, $scope, $receive, $send);
 }
 
+# Sets this middleware's fields on $fields, a PAGI::Headers the caller owns;
+# each replaces any value of the same name, so the response carries one.
 sub _add_cors_headers {
-    my ($self, $headers, $origin) = @_;
-    my $fields = PAGI::Headers->new($headers);
+    my ($self, $fields, $origin) = @_;
 
     # Determine origin to return
     my $allowed_origin;
@@ -164,19 +170,18 @@ sub _add_cors_headers {
         $allowed_origin = $origin;
     }
 
-    $fields->add('Access-Control-Allow-Origin', $allowed_origin);
+    $fields->set('Access-Control-Allow-Origin', $allowed_origin);
 
     if ($self->{credentials}) {
-        $fields->add('Access-Control-Allow-Credentials', 'true');
+        $fields->set('Access-Control-Allow-Credentials', 'true');
     }
 
     if (@{$self->{expose_headers}}) {
-        $fields->add('Access-Control-Expose-Headers', join(', ', @{$self->{expose_headers}}));
+        $fields->set('Access-Control-Expose-Headers', join(', ', @{$self->{expose_headers}}));
     }
 
     $fields->add_vary('Origin');
-    # Replace the pair list only after the Vary composition succeeds.
-    @$headers = @{$fields->to_pairs};
+    return $fields;
 }
 
 sub _is_origin_allowed {

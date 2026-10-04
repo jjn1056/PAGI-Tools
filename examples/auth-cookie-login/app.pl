@@ -34,7 +34,7 @@ sub csrf_field ($request) {
         html_escape(csrf($request)->token));
 }
 
-# The middleware runs with invalid => 0 because a form's token is in the
+# The middleware runs with refuse => 0 because a form's token is in the
 # body, which it does not read: each POST handler checks the parsed field.
 sub csrf_refused ($request, $form) {
     return undef if csrf($request)->verify($form->get('csrf_token') // '');
@@ -141,7 +141,7 @@ compose(
             expire => 3600,
         ),
         middleware('CSRF', secret => $ENV{CSRF_SECRET} // 'demo-only-csrf-secret',
-            invalid => 0),
+            refuse => 0),
         middleware('Authentication', backend => \&session_user),
     ],
 );

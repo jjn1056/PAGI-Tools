@@ -10,6 +10,9 @@ use JSON::MaybeXS ();
 use PAGI::Middleware::Debug;
 use PAGI::Middleware::Lint;
 use PAGI::Middleware::Maintenance;
+use PAGI::Response::HTML ();
+use PAGI::Utils ();
+use PAGI::Response::Text ();
 use PAGI::Middleware::Healthcheck;
 use PAGI::Middleware::MethodOverride;
 
@@ -280,126 +283,69 @@ subtest 'Lint middleware - accepts valid response' => sub {
 # Maintenance Middleware Tests
 # ===================
 
-subtest 'Maintenance middleware - serves 503 when enabled' => sub {
-    my $maintenance = PAGI::Middleware::Maintenance->new(
-        enabled     => 1,
-        retry_after => 120,
-    );
+sub maintenance_events {
+    my ($maintenance) = @_;
+    my $wrapped = $maintenance->wrap(async sub { die 'downstream must not run' });
+    my @events;
+    run_async { $wrapped->(make_scope(headers => [['Accept', 'application/json']]),
+        async sub { {} }, async sub { my ($event) = @_; push @events, $event }) };
+    my @retry_after = map { $_->[1] } grep { lc($_->[0]) eq 'retry-after' } @{ $events[0]{headers} };
+    my ($content_type) = map { $_->[1] } grep { lc($_->[0]) eq 'content-type' } @{ $events[0]{headers} };
+    return ($events[0]{status}, $content_type, \@retry_after, $events[1]{body});
+}
 
-    my $app = async sub  {
+subtest 'Maintenance middleware - serves a plain 503 when enabled' => sub {
+    my ($status, $type, $retry, $body) = maintenance_events(
+        PAGI::Middleware::Maintenance->new(enabled => 1, retry_after => 120));
+    is [$status, $type, $retry, $body],
+        [503, 'text/plain; charset=utf-8', [120], 'Service Unavailable'],
+        'plain text whatever the Accept, with one Retry-After';
+};
+
+subtest 'Maintenance middleware - response replaces the default' => sub {
+    my $page = PAGI::Response::HTML->new('<h1>Back soon</h1>', status => 503,
+        headers => ['Retry-After' => 5]);
+    my ($status, $type, $retry, $body) = maintenance_events(
+        PAGI::Middleware::Maintenance->new(enabled => 1, retry_after => 60, response => $page));
+    is [$status, $type, $body], [503, 'text/html; charset=utf-8', '<h1>Back soon</h1>'],
+        'the given response answers';
+    is $retry, [60], 'retry_after replaces any Retry-After the response carries';
+
+    my $app = async sub {
         my ($scope, $receive, $send) = @_;
-        await $send->({ type => 'http.response.start', status => 200, headers => [] });
-        await $send->({ type => 'http.response.body', body => 'OK', more => 0 });
+        await $send->({ type => 'http.response.start', status => 503, headers => [] });
+        await $send->({ type => 'http.response.body', body => 'from an app', more => 0 });
     };
-
-    my $wrapped = $maintenance->wrap($app);
-    my $scope = make_scope(headers => [['Accept', 'application/json']]);
-
-    my @events;
-    run_async { $wrapped->($scope, async sub { {} }, async sub  {
-        my ($e) = @_; push @events, $e }) };
-
-    is $events[0]{status}, 503, 'returns 503';
-    my @retry_after = map { $_->[1] }
-        grep { lc($_->[0]) eq 'retry-after' } @{$events[0]{headers}};
-    is \@retry_after, [120], 'built-in response has one Retry-After field';
-    my %headers = map { lc($_->[0]) => $_->[1] } @{$events[0]{headers}};
-    is $headers{'content-type'}, 'application/problem+json',
-        'untouched built-in response negotiates problem JSON';
-    is $headers{'retry-after'}, 120, 'built-in response retains Retry-After';
-    my $problem = JSON::MaybeXS::decode_json($events[1]{body});
-    is $problem->{status}, 503, 'problem status matches the wire status';
-    is $problem->{title}, 'Service Unavailable', 'problem uses the stock title';
+    ($status, undef, $retry, $body) = maintenance_events(
+        PAGI::Middleware::Maintenance->new(enabled => 1,
+            response => PAGI::Utils::as_app_object($app)));
+    is [$status, $retry, $body], [503, [], 'from an app'],
+        'an application answers too; no retry_after, no Retry-After';
 };
 
-subtest 'Maintenance middleware - explicit body remains literal' => sub {
-    my $maintenance = PAGI::Middleware::Maintenance->new(
-        enabled     => 1,
-        retry_after => 60,
-        body        => 'Author maintenance body',
-    );
-
-    my $wrapped = $maintenance->wrap(async sub { die 'downstream must not run' });
-    my $scope = make_scope(headers => [['Accept', 'application/json']]);
-    my @events;
-    run_async { $wrapped->($scope, async sub { {} }, async sub {
-        my ($event) = @_; push @events, $event }) };
-
-    my %headers = map { lc($_->[0]) => $_->[1] } @{$events[0]{headers}};
-    my @retry_after = map { $_->[1] }
-        grep { lc($_->[0]) eq 'retry-after' } @{$events[0]{headers}};
-    is \@retry_after, [60], 'custom body branch has one Retry-After field';
-    is $events[0]{status}, 503, 'custom body branch remains 503';
-    is $headers{'content-type'}, 'text/html',
-        'custom body branch retains the literal default content type';
-    is $headers{'retry-after'}, 60, 'custom body branch retains Retry-After';
-    ok !exists $headers{vary}, 'custom body branch does not negotiate';
-    is $events[1]{body}, 'Author maintenance body',
-        'author-supplied body remains byte-for-byte literal';
-};
-
-subtest 'Maintenance middleware - explicit content_type remains literal' => sub {
-    my $maintenance = PAGI::Middleware::Maintenance->new(
-        enabled      => 1,
-        retry_after  => 30,
-        content_type => 'application/x-maintenance',
-    );
-
-    my $wrapped = $maintenance->wrap(async sub { die 'downstream must not run' });
-    my $scope = make_scope(headers => [['Accept', 'application/json']]);
-    my @events;
-    run_async { $wrapped->($scope, async sub { {} }, async sub {
-        my ($event) = @_; push @events, $event }) };
-
-    my %headers = map { lc($_->[0]) => $_->[1] } @{$events[0]{headers}};
-    my @retry_after = map { $_->[1] }
-        grep { lc($_->[0]) eq 'retry-after' } @{$events[0]{headers}};
-    is \@retry_after, [30], 'custom content-type branch has one Retry-After field';
-    is $events[0]{status}, 503, 'custom content-type branch remains 503';
-    is $headers{'content-type'}, 'application/x-maintenance',
-        'author-supplied content type remains literal';
-    is $headers{'retry-after'}, 30, 'custom content-type branch retains Retry-After';
-    ok !exists $headers{vary}, 'custom content-type branch does not negotiate';
-    like $events[1]{body}, qr/Under Maintenance/,
-        'content-type-only branch retains the existing built-in literal body';
-};
-
-subtest 'Maintenance middleware - option presence selects the literal branch' => sub {
+subtest 'Maintenance middleware - body, content_type and bad responses die' => sub {
     for my $option (qw(body content_type)) {
-        my $maintenance = PAGI::Middleware::Maintenance->new(
-            enabled     => 1,
-            retry_after => 15,
-            $option     => undef,
-        );
-        my $wrapped = $maintenance->wrap(async sub { die 'downstream must not run' });
-        my $scope = make_scope(headers => [['Accept', 'application/json']]);
-        my @events;
-        run_async { $wrapped->($scope, async sub { {} }, async sub {
-            my ($event) = @_; push @events, $event }) };
-
-        my %headers = map { lc($_->[0]) => $_->[1] } @{$events[0]{headers}};
-        is $headers{'content-type'}, 'text/html',
-            "the presence of $option selects literal response defaults";
-        is $headers{'retry-after'}, 15,
-            "the presence of $option retains Retry-After";
-        ok !exists $headers{vary},
-            "the presence of $option bypasses negotiation";
-        like $events[1]{body}, qr/Under Maintenance/,
-            "the presence of $option retains the literal default body";
+        like dies { PAGI::Middleware::Maintenance->new(enabled => 1, $option => 'x') },
+            qr/\QMaintenance '$option' is replaced by 'response'\E/, "$option names its replacement";
+    }
+    for my $value (undef, '', 0, 'yes') {
+        my $label = defined $value ? "'$value'" : 'undef';
+        like dies { PAGI::Middleware::Maintenance->new(enabled => 1, response => $value) },
+            qr/\QMaintenance 'response' must be an application\E/, "response $label";
     }
 };
 
 subtest 'maintenance-owned rejections await concrete response emission' => sub {
     assert_maintenance_settlement(
         PAGI::Middleware::Maintenance->new(enabled => 1),
-        'default Pages 503',
+        'default plain 503',
     );
     assert_maintenance_settlement(
         PAGI::Middleware::Maintenance->new(
-            enabled => 1,
-            body    => 'literal maintenance',
+            enabled  => 1,
+            response => PAGI::Response::Text->new('literal maintenance', status => 503),
         ),
-        'literal concrete 503',
+        'a given 503',
     );
 };
 
@@ -515,7 +461,7 @@ subtest 'MethodOverride - overrides from header' => sub {
     run_async { $wrapped->($scope, async sub { {} }, async sub { }) };
 
     is $captured_scope->{method}, 'DELETE', 'method overridden';
-    is $captured_scope->{original_method}, 'POST', 'original method preserved';
+    is $captured_scope->{'pagi.original_method'}, 'POST', 'original method preserved';
 };
 
 subtest 'MethodOverride - overrides from query param' => sub {
