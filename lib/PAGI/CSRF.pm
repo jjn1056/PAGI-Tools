@@ -132,6 +132,8 @@ sub token {
 
 Returns true when the submitted nonempty scalar matches the current provider,
 and false for a missing, empty, reference, or mismatching submitted value.
+It also returns false when the middleware found the request to be
+cross-origin, so a form handler's one call covers both checks.
 
 =cut
 
@@ -141,6 +143,7 @@ sub verify {
         unless @arguments == 1;
     my $submitted = $arguments[0];
     return 0 unless defined($submitted) && !ref($submitted) && length($submitted);
+    return 0 if ($self->failure // '') eq 'cross_origin';
     return PAGI::Utils::SecureCompare::secure_compare(
         $submitted,
         $self->token,
@@ -168,8 +171,9 @@ sub valid {
 
     my $reason = csrf($request)->failure;
 
-Returns why the middleware's header check failed -- C<missing_cookie>,
-C<missing_token>, or C<mismatch> -- or undef when it passed or did not run.
+Returns why the middleware's check failed -- C<cross_origin>,
+C<missing_cookie>, C<missing_token>, or C<mismatch> -- or undef when it
+passed or did not run.
 
 =cut
 

@@ -69,4 +69,78 @@ subtest 'httponly => 1 flags it' => sub {
         qr/\QCSRF httponly must be 0 or 1\E/, 'any other value dies');
 };
 
+# A POST whose cookie and header carry the same token, plus extra headers.
+sub post_with_token {
+    my ($mw, @extra) = @_;
+    return run_csrf($mw, headers => [
+        ['host', 'example.com'], ['cookie', 'csrf_token=abc'], ['x-csrf-token', 'abc'], @extra,
+    ]);
+}
+
+subtest 'the origin check' => sub {
+    my $mw = PAGI::Middleware::CSRF->new;
+    my @cases = (
+        ['Sec-Fetch-Site same-origin',            200, ['sec-fetch-site', 'same-origin']],
+        ['Sec-Fetch-Site none',                   200, ['sec-fetch-site', 'none']],
+        ['Sec-Fetch-Site same-site',              403, ['sec-fetch-site', 'same-site']],
+        ['Sec-Fetch-Site cross-site',             403, ['sec-fetch-site', 'cross-site']],
+        ['Sec-Fetch-Site in mixed case',          200, ['sec-fetch-site', 'Same-Origin']],
+        ['same-origin wins over a foreign Origin', 200, ['sec-fetch-site', 'same-origin'], ['origin', 'https://evil.example']],
+        # https Origin against a scope left http (no scheme): the scheme is not compared
+        ['Origin equal to Host',                  200, ['origin', 'https://example.com']],
+        ['Origin equal to Host, other case',      200, ['origin', 'https://Example.COM']],
+        ['Origin on another host',                403, ['origin', 'https://evil.example']],
+        ['Origin on another port',                403, ['origin', 'https://example.com:8443']],
+        ['Origin null',                           403, ['origin', 'null']],
+        ['neither header',                        200],
+    );
+    for my $case (@cases) {
+        my ($label, $status, @extra) = @$case;
+        my ($sent) = post_with_token($mw, @extra);
+        is($sent->[0]{status}, $status, "$label: $status");
+    }
+};
+
+subtest 'the origin check compares the host header it is handed' => sub {
+    my ($sent) = run_csrf(PAGI::Middleware::CSRF->new, headers => [
+        ['host', 'public.example'], ['cookie', 'csrf_token=abc'], ['x-csrf-token', 'abc'],
+        ['origin', 'https://public.example'],
+    ]);
+    is($sent->[0]{status}, 200, 'an outer layer that rewrote host is honoured');
+};
+
+subtest 'safe methods are not origin-checked' => sub {
+    my ($sent) = run_csrf(PAGI::Middleware::CSRF->new, method => 'GET',
+        headers => [['host', 'example.com'], ['sec-fetch-site', 'cross-site']]);
+    is($sent->[0]{status}, 200, 'a cross-site GET passes');
+};
+
+subtest 'trusted_origins' => sub {
+    my $mw = PAGI::Middleware::CSRF->new(trusted_origins => ['https://app.example.com']);
+    my ($sent) = post_with_token($mw, ['sec-fetch-site', 'cross-site'], ['origin', 'https://app.example.com']);
+    is($sent->[0]{status}, 200, 'a trusted origin passes even cross-site');
+    ($sent) = post_with_token($mw, ['sec-fetch-site', 'cross-site'], ['origin', 'https://APP.example.com']);
+    is($sent->[0]{status}, 200, 'matched without regard to case');
+    ($sent) = run_csrf($mw, headers => [['host', 'example.com'], ['origin', 'https://app.example.com']]);
+    is($sent->[0]{status}, 403, 'the token check still runs');
+    like(dies { PAGI::Middleware::CSRF->new(trusted_origins => 'https://app.example.com') },
+        qr/\QCSRF trusted_origins must be an arrayref of origins\E/, 'a plain string dies');
+    for my $bad ('https://app.example.com/', 'app.example.com', 'https://app.example.com/path', '') {
+        like(dies { PAGI::Middleware::CSRF->new(trusted_origins => [$bad]) },
+            qr/\QCSRF trusted_origins entries must be a scheme and host, like https:\/\/app.example.com\E/,
+            "'$bad' dies");
+    }
+    ok(lives { PAGI::Middleware::CSRF->new(trusted_origins => ['http://localhost:3000']) }, 'a port is fine');
+};
+
+subtest 'a cross-origin request is recorded under refuse => 0' => sub {
+    require PAGI::CSRF;
+    my (undef, $seen) = post_with_token(PAGI::Middleware::CSRF->new(refuse => 0),
+        ['sec-fetch-site', 'cross-site']);
+    my $guard = PAGI::CSRF->new($seen->[0]);
+    is($guard->failure, 'cross_origin', 'failure is cross_origin');
+    is($guard->valid, 0, 'not valid');
+    is($guard->verify('abc'), 0, 'verify refuses even the right token');
+};
+
 done_testing;

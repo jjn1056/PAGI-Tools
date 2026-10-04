@@ -41,6 +41,13 @@ refusal is a plain 403 text response; C<refuse> replaces it, or lets the
 application decide. L<PAGI::CSRF/SYNOPSIS> shows both, as complete
 applications.
 
+Every unsafe request first passes an origin check, modelled on Go's
+C<CrossOriginProtection>: a C<Sec-Fetch-Site> header must be C<same-origin>
+or C<none>; without one, an C<Origin> header's host and port must equal the
+C<Host> header. An origin in C<trusted_origins> always passes, and a request
+with neither header (a non-browser client, or an older browser) is left to
+the token check. A failure is recorded as C<cross_origin>.
+
 =head1 CONFIGURATION
 
 An option not listed here dies at construction.
@@ -73,6 +80,14 @@ token back, and front-end libraries (Angular, Axios) read it from the
 cookie. C<HttpOnly> adds no protection against cross-site requests; turn it
 on if an audit requires it, and render C<< csrf($request)->token >> into
 the page instead (see L</USAGE>).
+
+=item * trusted_origins (default: [])
+
+Origins, besides the request's own, whose unsafe requests may pass the
+origin check -- for example an application on C<https://app.example.com>
+posting to an API on C<https://api.example.com>. Each is a scheme and host
+with an optional port (C<http://localhost:3000>), nothing else. The token
+check still applies.
 
 =item * refuse (default: a 403 text response)
 
@@ -108,6 +123,7 @@ sub _init {
     $self->{safe_methods} = { map { $_ => 1 } @{$config->{safe_methods} // [qw(GET HEAD OPTIONS TRACE)]} };
     $self->{secure}       = $config->{secure} // 0;
     $self->{httponly}     = _flag($config, 'httponly');
+    $self->{trusted_origins} = _trusted_origins($config->{trusted_origins} // []);
 
     # Absent: the default refusal. Exactly 0: the application decides.
     my $refuse = PAGI::Utils::_refuse_option('CSRF', $config, 1);
@@ -117,7 +133,7 @@ sub _init {
         : ref($refuse) ? $refuse
         : undef;
     PAGI::Utils::_reject_unknown_options('CSRF', $config,
-        qw(cookie_name httponly refuse safe_methods secure token_header));
+        qw(cookie_name httponly refuse safe_methods secure token_header trusted_origins));
 }
 
 # A 0-or-1 option; absent is 0.
@@ -127,6 +143,20 @@ sub _flag {
     die "CSRF $name must be 0 or 1"
         unless !ref($value) && ($value eq '0' || $value eq '1');
     return $value + 0;
+}
+
+# trusted_origins as a lookup of lowercased origins: each a scheme and a
+# host with an optional port, and nothing else.
+sub _trusted_origins {
+    my ($origins) = @_;
+    die 'CSRF trusted_origins must be an arrayref of origins' unless ref($origins) eq 'ARRAY';
+    my %trusted;
+    for my $origin (@$origins) {
+        die 'CSRF trusted_origins entries must be a scheme and host, like https://app.example.com'
+            unless defined($origin) && !ref($origin) && $origin =~ m{\Ahttps?://[^/?#\s]+\z}i;
+        $trusted{lc $origin} = 1;
+    }
+    return \%trusted;
 }
 
 sub wrap {
@@ -145,8 +175,8 @@ sub wrap {
         my $token = $cookie_token // $self->_generate_token();
         my %recorded = ('pagi.csrf_token' => $token);
         unless ($self->{safe_methods}{$scope->{method}}) {
-            my $failure = $self->_failure_for(
-                $cookie_token, $self->_get_submitted_token($scope));
+            my $failure = $self->_origin_failure($scope)
+                // $self->_failure_for($cookie_token, $self->_get_submitted_token($scope));
             $recorded{'pagi.csrf_failure'} = $failure if defined $failure;
         }
 
@@ -186,6 +216,29 @@ sub _failure_for {
 }
 
 # 32 bytes from the system's secure random source, as 64 hex characters.
+# Why an unsafe request fails the origin check, or undef when it passes.
+# Modelled on Go's net/http CrossOriginProtection: Sec-Fetch-Site decides
+# when present; otherwise Origin's host and port must equal Host (the
+# scheme is not compared: a TLS-terminating proxy leaves the scope http).
+# A request with neither header is left to the token check.
+sub _origin_failure {
+    my ($self, $scope) = @_;
+    my $origin = $self->_get_header($scope, 'origin');
+    return undef if defined($origin) && $self->{trusted_origins}{lc $origin};
+
+    my $site = $self->_get_header($scope, 'sec-fetch-site');
+    if (defined $site) {
+        $site = lc $site;
+        return $site eq 'same-origin' || $site eq 'none' ? undef : 'cross_origin';
+    }
+    return undef unless defined $origin;
+
+    my ($authority) = $origin =~ m{\A[a-z][a-z0-9+.-]*://([^/?#]+)\z}i;
+    my $host = $self->_get_header($scope, 'host');
+    return undef if defined($authority) && defined($host) && lc($authority) eq lc($host);
+    return 'cross_origin';
+}
+
 sub _generate_token {
     return unpack('H*', secure_random_bytes(32));
 }
