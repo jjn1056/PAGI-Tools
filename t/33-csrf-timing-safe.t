@@ -32,7 +32,7 @@ sub run_async {
 # =============================================================================
 
 subtest 'CSRF middleware token validation' => sub {
-    my $csrf = PAGI::Middleware::CSRF->new(secret => 'test-secret');
+    my $csrf = PAGI::Middleware::CSRF->new;
 
     # Generate a token
     my $token = $csrf->_generate_token();

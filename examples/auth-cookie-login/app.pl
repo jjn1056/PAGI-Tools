@@ -140,8 +140,7 @@ compose(
             state  => session_state('Cookie', cookie_name => 'hello_session', expire => 3600),
             expire => 3600,
         ),
-        middleware('CSRF', secret => $ENV{CSRF_SECRET} // 'demo-only-csrf-secret',
-            refuse => 0),
+        middleware('CSRF', refuse => 0),
         middleware('Authentication', backend => \&session_user),
     ],
 );

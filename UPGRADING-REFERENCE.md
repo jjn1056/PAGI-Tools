@@ -877,7 +877,7 @@ refusal is a plain `403 text/plain` (0.002002's wording); `refuse` replaces
 it with any application:
 
 ```perl
-middleware('CSRF', secret => $secret,
+middleware('CSRF',
     refuse => response('JSON', { detail => 'CSRF token validation failed' }, status => 403));
 ```
 

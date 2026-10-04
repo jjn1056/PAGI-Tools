@@ -9,7 +9,6 @@ my ($synopsis) = $pod =~ /^=head1 SYNOPSIS\n(.*?)^=head1 /ms;
 ok(defined $synopsis, 'PAGI::CSRF has a SYNOPSIS');
 my $code = join "\n", map { s/^    //r } grep { /^    / || /^\s*$/ } split /\n/, $synopsis;
 
-my $secret = 'synopsis-secret';
 my ($api, $form) = eval "$code;\n(\$api, \$form)";
 ok($api && $form, 'the SYNOPSIS builds both applications') or diag($@);
 

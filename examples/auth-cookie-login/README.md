@@ -41,7 +41,7 @@ the token travels in a hidden `csrf_token` field, which the middleware does
 not read: the app runs it with `refuse => 0`, and each POST handler checks
 the parsed field with `csrf($request)->verify` and answers 403 when it does
 not match. The token cookie is `HttpOnly`, so the page -- not JavaScript --
-hands the token back. Set `CSRF_SECRET` outside a local demo.
+hands the token back.
 
 ## Serving it under a prefix
 
@@ -61,7 +61,7 @@ ways. See "Serving behind a proxy prefix" in `PAGI::Tools::Cookbook`.
 > session store is process-local memory. Production deployment also requires
 > TLS, `cookie_options =>
 > { secure => 1 }` on the `PAGI::Middleware::Session::State::Cookie` the app
-> passes as `state`, a real `CSRF_SECRET`, login
+> passes as `state`, login
 > throttling, and a store every worker shares -- for example
 > `PAGI::Middleware::Session::Store::Cookie` (distribution
 > PAGI-Middleware-Session-Store-Cookie), or a server-side store if sessions

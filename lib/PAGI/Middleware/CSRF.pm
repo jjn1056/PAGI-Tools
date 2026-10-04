@@ -5,7 +5,6 @@ use warnings;
 use parent 'PAGI::Middleware';
 use Future;
 use Future::AsyncAwait;
-use Digest::SHA qw(sha256_hex);
 use PAGI::Utils::Random qw(secure_random_bytes);
 use PAGI::Utils::SecureCompare qw(secure_compare);
 use PAGI::Response::Text ();
@@ -22,15 +21,15 @@ PAGI::Middleware::CSRF - Cross-Site Request Forgery protection middleware
     use PAGI::Routing qw(middleware);
 
     # Refuse a failed check with a 403 text response (the default)
-    middleware('CSRF', secret => $secret);
+    middleware('CSRF');
 
     # Refuse it with your own application or Response
-    middleware('CSRF', secret => $secret,
+    middleware('CSRF',
         refuse => response('JSON', { detail => 'CSRF token validation failed' }, status => 403));
 
     # Let the application decide: every request reaches it, with the outcome
     # recorded for csrf($request)->valid and ->failure
-    middleware('CSRF', secret => $secret, refuse => 0);
+    middleware('CSRF', refuse => 0);
 
 L<PAGI::CSRF/SYNOPSIS> shows both modes in full, as complete applications.
 
@@ -47,10 +46,6 @@ applications.
 An option not listed here dies at construction.
 
 =over 4
-
-=item * secret (required)
-
-Secret key used for token generation.
 
 =item * token_header (default: 'X-CSRF-Token')
 
@@ -96,8 +91,9 @@ sub _init {
 
     die "CSRF 'enforce' was removed: use refuse => 0 for the application to decide; the default refuses"
         if exists $config->{enforce};
+    die 'CSRF no longer takes a secret: its tokens are random; for tokens bound to the session use session => 1'
+        if exists $config->{secret};
 
-    $self->{secret}       = $config->{secret} // die "CSRF middleware requires 'secret' option";
     $self->{token_header} = $config->{token_header} // 'X-CSRF-Token';
     $self->{cookie_name}  = $config->{cookie_name} // 'csrf_token';
     $self->{safe_methods} = { map { $_ => 1 } @{$config->{safe_methods} // [qw(GET HEAD OPTIONS TRACE)]} };
@@ -111,7 +107,7 @@ sub _init {
         : ref($refuse) ? $refuse
         : undef;
     PAGI::Utils::_reject_unknown_options('CSRF', $config,
-        qw(cookie_name refuse safe_methods secret secure token_header));
+        qw(cookie_name refuse safe_methods secure token_header));
 }
 
 sub wrap {
@@ -168,12 +164,9 @@ sub _failure_for {
     return undef;
 }
 
+# 32 bytes from the system's secure random source, as 64 hex characters.
 sub _generate_token {
-    my ($self) = @_;
-
-    # Use cryptographically secure random bytes
-    my $random = secure_random_bytes(32);
-    return sha256_hex($self->{secret} . time() . $random . $$);
+    return unpack('H*', secure_random_bytes(32));
 }
 
 sub _get_cookie_token {

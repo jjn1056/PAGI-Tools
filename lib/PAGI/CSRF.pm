@@ -26,21 +26,21 @@ PAGI::CSRF - Strict access to an issued CSRF token
     # 1. The middleware handles it. For clients that can set a header (fetch,
     #    XHR): an unsafe request without an X-CSRF-Token header matching the
     #    csrf_token cookie gets a 403 and never reaches the application.
-    my $api = PAGI::Middleware::CSRF->new(secret => $secret)->wrap(async sub {
+    my $api = PAGI::Middleware::CSRF->new->wrap(async sub {
         my ($scope, $receive, $send) = @_;
         # Only requests that passed the check get here.
         await response('JSON', { saved => \1 })->to_app->($scope, $receive, $send);
     });
 
     # To answer a failed check your own way, pass any application as refuse:
-    #   PAGI::Middleware::CSRF->new(secret => $secret,
+    #   PAGI::Middleware::CSRF->new(
     #       refuse => response('JSON', { detail => 'CSRF token validation failed' }, status => 403));
 
     # 2. The application handles it. A plain HTML form sends its token in the
     #    body, which the middleware does not read: with refuse => 0 every
     #    request reaches the application, which verifies the parsed field.
     #    (csrf($scope)->valid and ->failure report the header check, if any.)
-    my $form = PAGI::Middleware::CSRF->new(secret => $secret, refuse => 0)->wrap(async sub {
+    my $form = PAGI::Middleware::CSRF->new(refuse => 0)->wrap(async sub {
         my ($scope, $receive, $send) = @_;
         my $guard = csrf($scope);
         my $response;
