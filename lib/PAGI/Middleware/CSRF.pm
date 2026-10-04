@@ -338,6 +338,9 @@ configured header:
         headers: { 'X-CSRF-Token': token },
     });
 
+Angular and Axios read an C<XSRF-TOKEN> cookie and send C<X-XSRF-TOKEN>
+on their own: C<< cookie_name => 'XSRF-TOKEN', token_header => 'X-XSRF-TOKEN' >>.
+
 =head2 Form flow (refuse => 0)
 
 Use this for server-rendered HTML forms. A plain C<< <form> >> POST has no

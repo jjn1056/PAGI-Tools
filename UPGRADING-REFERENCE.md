@@ -881,6 +881,26 @@ middleware('CSRF',
     refuse => response('JSON', { detail => 'CSRF token validation failed' }, status => 403));
 ```
 
+## Breaking: CSRF secret removed, cookie readable, origin checked
+
+| 0.002002 | Now |
+|---|---|
+| `secret => $secret` (required) | remove it: tokens are random, and passing it dies |
+| the token cookie is `HttpOnly` | readable by scripts; `httponly => 1` restores the flag |
+| any unsafe request with a matching token passes | a cross-origin one is refused first (`Sec-Fetch-Site`, then `Origin` vs `Host`); `trusted_origins` lists exceptions |
+
+`secret` never signed anything: a request passed when its header matched
+its own cookie, whatever the cookie held. For a token an attacker cannot
+plant, keep it in the session:
+
+```perl
+middleware('Session', ...),
+middleware('CSRF', session => 1),
+```
+
+The application reads the token with `csrf($request)->token` as before;
+under `session => 1` there is no CSRF cookie, so the page must carry it.
+
 ## Breaking: `on_close` callbacks receive a third argument
 
 `on_close` now also passes the connection's disconnect detail:

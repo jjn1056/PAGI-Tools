@@ -23,6 +23,8 @@ in [UPGRADING-REFERENCE.md](UPGRADING-REFERENCE.md).
 | an unknown middleware option | now dies; check spelling and renamed options (`invalid` → `refuse`) |
 | Session `secret`, `cookie_name`, `cookie_options`; `State::Bearer` | `state => session_state('Cookie', ...)`; no secret ([details](UPGRADING-REFERENCE.md#breaking-the-session-cookie-is-configured-on-statecookie-not-on-the-middleware)) |
 | CSRF `enforce => 'header'` / `enforce => 'app'` | the default / `refuse => 0`; `enforce` now dies ([details](UPGRADING-REFERENCE.md#breaking-csrf-enforce-is-replaced-by-refuse)) |
+| CSRF `secret`; its `HttpOnly` cookie | remove `secret` (tokens are random; passing it dies); `httponly => 1` keeps the flag; `session => 1` binds the token to the session ([details](UPGRADING-REFERENCE.md#breaking-csrf-secret-removed-cookie-readable-origin-checked)) |
+| cross-origin unsafe requests through CSRF | refused; list legitimate callers in `trusted_origins` ([details](UPGRADING-REFERENCE.md#breaking-csrf-secret-removed-cookie-readable-origin-checked)) |
 | RateLimit `backend` | removed (it was never used); passing it dies ([details](UPGRADING-REFERENCE.md#breaking-ratelimit-backend-is-removed-limiters-no-longer-share-buckets)) |
 | `PAGI::App::Throttle` | `middleware('RateLimit', ...)`; `key_generator => sub { 'global' }` for one bucket ([details](UPGRADING-REFERENCE.md#breaking-pagiappthrottle-is-removed)) |
 | `PAGI::App::Proxy` | removed: it blocked the event loop; proxy in front with nginx, HAProxy or Caddy ([details](UPGRADING-REFERENCE.md#breaking-pagiappproxy-is-removed)) |
