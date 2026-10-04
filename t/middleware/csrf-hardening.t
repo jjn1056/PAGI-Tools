@@ -143,4 +143,67 @@ subtest 'a cross-origin request is recorded under refuse => 0' => sub {
     is($guard->verify('abc'), 0, 'verify refuses even the right token');
 };
 
+subtest 'session => 1 keeps the token in the session' => sub {
+    my $mw = PAGI::Middleware::CSRF->new(session => 1);
+    my $session = {};
+    my ($sent, $seen) = run_csrf($mw, method => 'GET', scope => { 'pagi.session' => $session });
+    like($session->{csrf_token}, qr/\A[0-9a-f]{64}\z/, 'a token is stored in the session');
+    is($seen->[0]{'pagi.csrf_token'}, $session->{csrf_token}, 'and offered to the application');
+    is(set_cookie_of($sent), undef, 'no CSRF cookie is set');
+
+    my $token = $session->{csrf_token};
+    ($sent) = run_csrf($mw, scope => { 'pagi.session' => $session },
+        headers => [['x-csrf-token', $token]]);
+    is($sent->[0]{status}, 200, 'the session token in the header passes');
+    is($session->{csrf_token}, $token, 'and the token is kept');
+
+    ($sent) = run_csrf($mw, scope => { 'pagi.session' => $session },
+        headers => [['x-csrf-token', 'abc'], ['cookie', 'csrf_token=abc']]);
+    is($sent->[0]{status}, 403, 'a planted cookie with a matching header fails');
+
+    my (undef, $seen2) = run_csrf(PAGI::Middleware::CSRF->new(session => 1, refuse => 0),
+        scope => { 'pagi.session' => { csrf_token => $token } }, headers => [['x-csrf-token', 'nope']]);
+    is($seen2->[0]{'pagi.csrf_failure'}, 'mismatch', 'a wrong token is a mismatch');
+    my (undef, $seen3) = run_csrf(PAGI::Middleware::CSRF->new(session => 1, refuse => 0),
+        scope => { 'pagi.session' => {} });
+    is($seen3->[0]{'pagi.csrf_failure'}, 'missing_token', 'no header is missing_token');
+};
+
+subtest 'session => 1 needs Session middleware' => sub {
+    my $mw = PAGI::Middleware::CSRF->new(session => 1);
+    like(dies { run_csrf($mw, method => 'GET') },
+        qr/\QCSRF session => 1 needs Session middleware outside it (missing pagi.session)\E/,
+        'an http request with no session dies');
+    for my $type (qw(websocket sse)) {
+        ok(lives { run_csrf($mw, type => $type, method => 'GET') }, "a $type scope passes through");
+    }
+};
+
+subtest 'session and httponly do not combine' => sub {
+    like(dies { PAGI::Middleware::CSRF->new(session => 1, httponly => 1) },
+        qr/\QCSRF httponly has no cookie to flag under session => 1: the token lives in the session\E/,
+        'dies at construction');
+    like(dies { PAGI::Middleware::CSRF->new(session => 2) }, qr/\QCSRF session must be 0 or 1\E/,
+        'session takes 0 or 1');
+};
+
+subtest 'session => 1 with the real Session middleware' => sub {
+    require PAGI::Middleware::Session;
+    require PAGI::Test::Client;
+    my $app = PAGI::Middleware::Session->new->wrap(
+        PAGI::Middleware::CSRF->new(session => 1)->wrap(async sub {
+            my ($scope, $receive, $send) = @_;
+            await $send->({ type => 'http.response.start', status => 200,
+                headers => [['content-type', 'text/plain']] });
+            await $send->({ type => 'http.response.body', body => $scope->{'pagi.csrf_token'}, more => 0 });
+        }));
+    my $client = PAGI::Test::Client->new(app => $app);
+    my $token = $client->get('/')->text;
+    like($token, qr/\A[0-9a-f]{64}\z/, 'the page gets a token');
+    ok(!defined $client->cookie('csrf_token'), 'no CSRF cookie reaches the client');
+    is($client->get('/')->text, $token, 'the session keeps the same token');
+    is($client->post('/', headers => { 'X-CSRF-Token' => $token })->status, 200, 'it verifies');
+    is($client->post('/', headers => { 'X-CSRF-Token' => 'abc' })->status, 403, 'another does not');
+};
+
 done_testing;

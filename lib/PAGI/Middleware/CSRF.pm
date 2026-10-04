@@ -31,6 +31,9 @@ PAGI::Middleware::CSRF - Cross-Site Request Forgery protection middleware
     # recorded for csrf($request)->valid and ->failure
     middleware('CSRF', refuse => 0);
 
+    # Keep the token in the session (Session middleware must wrap this one)
+    middleware('CSRF', session => 1);
+
 L<PAGI::CSRF/SYNOPSIS> shows both modes in full, as complete applications.
 
 =head1 DESCRIPTION
@@ -81,6 +84,15 @@ cookie. C<HttpOnly> adds no protection against cross-site requests; turn it
 on if an audit requires it, and render C<< csrf($request)->token >> into
 the page instead (see L</USAGE>).
 
+=item * session (default: 0)
+
+Keep the token in the session (C<csrf_token> in C<pagi.session>) instead of
+its own cookie. A cookie planted by another site or a sibling subdomain then
+means nothing; see L</SECURITY>. Needs L<PAGI::Middleware::Session> outside
+this middleware; an C<http> request without it dies. No CSRF cookie is set,
+so the page carries the token (C<< csrf($request)->token >>). Cannot be
+combined with C<httponly>.
+
 =item * trusted_origins (default: [])
 
 Origins, besides the request's own, whose unsafe requests may pass the
@@ -123,6 +135,9 @@ sub _init {
     $self->{safe_methods} = { map { $_ => 1 } @{$config->{safe_methods} // [qw(GET HEAD OPTIONS TRACE)]} };
     $self->{secure}       = $config->{secure} // 0;
     $self->{httponly}     = _flag($config, 'httponly');
+    $self->{session}      = _flag($config, 'session');
+    die 'CSRF httponly has no cookie to flag under session => 1: the token lives in the session'
+        if $self->{httponly} && $self->{session};
     $self->{trusted_origins} = _trusted_origins($config->{trusted_origins} // []);
 
     # Absent: the default refusal. Exactly 0: the application decides.
@@ -133,7 +148,7 @@ sub _init {
         : ref($refuse) ? $refuse
         : undef;
     PAGI::Utils::_reject_unknown_options('CSRF', $config,
-        qw(cookie_name httponly refuse safe_methods secure token_header trusted_origins));
+        qw(cookie_name httponly refuse safe_methods secure session token_header trusted_origins));
 }
 
 # A 0-or-1 option; absent is 0.
@@ -169,14 +184,13 @@ sub wrap {
             return;
         }
 
-        # The existing cookie token, never a regenerated one, so a token the
-        # client already holds still has something to match.
-        my $cookie_token = $self->_get_cookie_token($scope);
-        my $token = $cookie_token // $self->_generate_token();
+        # $stored is the token this request must match: the session's, or the
+        # cookie's (undef when the client has none yet).
+        my ($token, $stored) = $self->_token_for($scope);
         my %recorded = ('pagi.csrf_token' => $token);
         unless ($self->{safe_methods}{$scope->{method}}) {
             my $failure = $self->_origin_failure($scope)
-                // $self->_failure_for($cookie_token, $self->_get_submitted_token($scope));
+                // $self->_failure_for($stored, $self->_get_submitted_token($scope));
             $recorded{'pagi.csrf_failure'} = $failure if defined $failure;
         }
 
@@ -184,7 +198,7 @@ sub wrap {
         # included, so the client's next attempt can carry it. The event is
         # copied: an application may reuse its headers arrayref, and a
         # cookie added to it would reach every later client.
-        my $wrapped_send = defined $cookie_token ? $send : async sub {
+        my $wrapped_send = $self->{session} || defined $stored ? $send : async sub {
             my ($event) = @_;
             if ($event->{type} eq 'http.response.start') {
                 my $cookie = "$self->{cookie_name}=$token; Path=/"
@@ -216,6 +230,23 @@ sub _failure_for {
 }
 
 # 32 bytes from the system's secure random source, as 64 hex characters.
+# The token for this request and the one it must match. Under session => 1
+# both are the session's, created there on first use; otherwise the client's
+# existing cookie -- never a regenerated one, so a token the client already
+# holds still has something to match -- or a fresh token when it has none.
+sub _token_for {
+    my ($self, $scope) = @_;
+    if ($self->{session}) {
+        my $session = $scope->{'pagi.session'};
+        die 'CSRF session => 1 needs Session middleware outside it (missing pagi.session)'
+            unless ref($session) eq 'HASH';
+        my $token = $session->{csrf_token} //= $self->_generate_token();
+        return ($token, $token);
+    }
+    my $cookie = $self->_get_cookie_token($scope);
+    return ($cookie // $self->_generate_token(), $cookie);
+}
+
 # Why an unsafe request fails the origin check, or undef when it passes.
 # Modelled on Go's net/http CrossOriginProtection: Sec-Fetch-Site decides
 # when present; otherwise Origin's host and port must equal Host (the
@@ -335,6 +366,34 @@ The same helper works in a raw-scope application:
     my $guard = csrf($scope);
     my $token = $guard->token;
     my $valid = $guard->verify($params->{_csrf_token});
+
+=head1 SECURITY
+
+Without C<session =E<gt> 1> the token is a double-submit cookie: the
+middleware checks that the request's header (or the application's form
+field) equals the request's own C<csrf_token> cookie. Anyone who can write
+cookies for your domain can plant a token they know -- OWASP: the pattern
+"is bypassable by an attacker who can write cookies on the target domain
+(e.g., via a vulnerable sibling subdomain, DNS takeover, or plaintext-HTTP
+cookie injection on a non-C<__Host-> cookie)". The origin check narrows
+this: current browsers send C<Sec-Fetch-Site>, so a forged request from a
+sibling subdomain (C<same-site>) is still refused, but a client that sends
+neither C<Sec-Fetch-Site> nor C<Origin> is protected by the token alone.
+
+=over 4
+
+=item * C<session =E<gt> 1> binds the token to the session, so a planted
+cookie is useless. Use it whenever the application has a session.
+
+=item * Over HTTPS, C<< cookie_name => '__Host-csrf_token', secure => 1 >>
+stops subdomains overwriting the cookie (browsers refuse a C<__Host->
+cookie set with a C<Domain>, without C<Secure>, or off C<Path=/>).
+
+=item * The origin check compares C<Origin> with the C<Host> header this
+middleware is handed. Put L<PAGI::Middleware::ReverseProxy> outside it when
+a proxy rewrites C<Host>, or list the public origin in C<trusted_origins>.
+
+=back
 
 =head1 SEE ALSO
 
