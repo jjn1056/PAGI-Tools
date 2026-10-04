@@ -345,20 +345,7 @@ sub as_app_object {
 
 async sub invoke_app {
     my ($value, $scope, $receive, $send) = @_;
-    return await _await_native(to_app($value), $scope, $receive, $send);
-}
-
-# Runs a native application and passes back what it resolved to. It answers
-# by sending, so a returned response object is the sign of a ($request) handler
-# given where a native application belongs, and fails loudly instead of being
-# dropped.
-async sub _await_native {
-    my ($app, $scope, $receive, $send) = @_;
-    my $returned = await Future->wrap($app->($scope, $receive, $send));
-    croak 'a native ($scope, $receive, $send) application returned a response '
-        . 'instead of sending it; for a ($request) handler use request_response()'
-        if blessed($returned) && $returned->can('to_app');
-    return $returned;
+    return await Future->wrap(to_app($value)->($scope, $receive, $send));
 }
 
 # Resolve a short class name the way middleware() does: a leading '+' names
@@ -749,13 +736,6 @@ to execute an application value. The example above is equivalent to:
     return await Future->wrap(
         $app->($scope, $receive, $send)
     );
-
-except for one check: a native application answers by sending, so if the
-application returns (or its Future resolves to) a response object instead,
-C<invoke_app> dies with C<a native ($scope, $receive, $send) application
-returned a response instead of sending it; for a ($request) handler use
-request_response()>. Mounts, L<PAGI::App::URLMap> and L<PAGI::App::Cascade>
-run their applications the same way.
 
 This is useful in a native PAGI application or middleware that wants to emit a
 L<PAGI::Response>, a L<PAGI::Pages> result, or another app object without

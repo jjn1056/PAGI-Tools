@@ -214,7 +214,7 @@ sub wrap {
 async sub _answer {
     my ($self, $scope, $receive, $send) = @_;
     if (my $app = $self->{handler_app}) {
-        return await PAGI::Utils::_await_native($app, $scope, $receive, $send);
+        return await Future->wrap($app->($scope, $receive, $send));
     }
     my $context = PAGI::ErrorContext->new($scope);
     my $answer = $context->default;

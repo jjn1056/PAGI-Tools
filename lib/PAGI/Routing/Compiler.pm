@@ -278,7 +278,7 @@ sub _compile_mounted_app {
         : PAGI::Utils::to_app($base);
     my $awaiting = async sub {
         my ($scope, $receive, $send) = @_;
-        await PAGI::Utils::_await_native($app, $scope, $receive, $send);
+        await Future->wrap($app->($scope, $receive, $send));
         return;
     };
 

@@ -130,12 +130,7 @@ sub to_app {
             };
 
             my $completed = eval {
-                await PAGI::Utils::_await_native(
-                    $app,
-                    $scope,
-                    $receive,
-                    $observing_send,
-                );
+                await Future->wrap($app->($scope, $receive, $observing_send));
                 1;
             };
             my $error = $@ unless $completed;
