@@ -103,7 +103,7 @@ subtest 'HTTP policy middleware preserves non-HTTP event streams and send settle
     my $static_root = tempdir(CLEANUP => 1);
     my @cases = (
         ['CSRF', sub {
-            PAGI::Middleware::CSRF->new(secret => 'test-secret');
+            PAGI::Middleware::CSRF->new;
         }],
         ['ContentNegotiation', sub {
             PAGI::Middleware::ContentNegotiation->new(
@@ -189,7 +189,7 @@ subtest 'HTTP policy middleware preserves non-HTTP event streams and send settle
 subtest 'CSRF passes WebSocket and SSE scopes through untouched' => sub {
     for my $type (qw(websocket sse)) {
         my $seen;
-        my $wrapped = PAGI::Middleware::CSRF->new(secret => 'test-secret')->wrap(async sub {
+        my $wrapped = PAGI::Middleware::CSRF->new->wrap(async sub {
             my ($scope, $receive, $send) = @_;
             $seen = $scope;
         });

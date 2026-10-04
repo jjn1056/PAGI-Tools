@@ -19,7 +19,7 @@ use File::Temp qw(tempdir);
 # A slot that answers a request reads a bare coderef as a Request handler.
 
 subtest 'CSRF refuse: a Request handler reads the failure' => sub {
-    my $app = PAGI::Middleware::CSRF->new(secret => 's', refuse => sub { my ($request) = @_;
+    my $app = PAGI::Middleware::CSRF->new(refuse => sub { my ($request) = @_;
         response('JSON', { error => csrf($request)->failure }, status => 403);
     })->wrap(sub { die 'not reached' });
     my $res = PAGI::Test::Client->new(app => $app)->post('/');

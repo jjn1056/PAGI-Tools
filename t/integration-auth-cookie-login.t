@@ -45,6 +45,11 @@ for my $case (['at the root', '', $app], ['under /app', '/app', compose(routes =
         like($anonymous_id, qr/\A[a-f0-9]{64}\z/, 'anonymous request gets the session cookie');
         my $token = form_token($form);
         ok($token, 'the form carries the CSRF token');
+        ok(!defined $client->cookie('csrf_token'), 'the token lives in the session, not a cookie');
+        my $cross = $client->post("$p/account/login",
+            headers => { 'Sec-Fetch-Site' => 'cross-site' },
+            form => { username => 'demo', password => 'secret', csrf_token => $token });
+        is($cross->status, 403, 'a cross-site login post is refused, token or not');
 
         my $forged = $client->post("$p/account/login",
             form => { username => 'demo', password => 'secret' });
@@ -73,6 +78,9 @@ for my $case (['at the root', '', $app], ['under /app', '/app', compose(routes =
 
         my $home = $client->get("$p/account/");
         is($home->status, 200, 'authenticated home succeeds');
+        isnt(form_token($home->text), $token, 'login replaced the CSRF token');
+        is($client->post("$p/account/logout", form => { csrf_token => $token })->status, 403,
+            'the token from before login no longer verifies');
         like($home->text, qr/Hello, demo/, 'and greets the user');
         like($home->text, qr{<form method="post" action="\Q$p\E/account/logout">}, 'logout posts to the mounted route');
 

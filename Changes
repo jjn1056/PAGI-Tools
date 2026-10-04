@@ -26,6 +26,10 @@
   - Session's session_state and session_store constructors.
   - PAGI::Test::Client root_path; PAGI::Middleware::BufferedResponse;
     App::File from_app_path; the process-streaming example.
+  - PAGI::Middleware::CSRF: session => 1 keeps the token in the session
+    and replaces it when the session is regenerated (at login);
+    an origin check (Sec-Fetch-Site, then Origin vs Host) on unsafe
+    requests, with trusted_origins; httponly.
 
   [Changed]
   - raw_path is the full requested path at every mount level; AccessLog
@@ -134,6 +138,10 @@
     dies, and its cleanup is skipped (the error is logged).
   - PAGI::Middleware::CSRF's enforce is removed: refuse => 0 replaces
     enforce => 'app', and passing enforce dies.
+  - PAGI::Middleware::CSRF's secret is removed (tokens are random; passing
+    it dies); its cookie is no longer HttpOnly unless httponly => 1;
+    cross-origin unsafe requests are refused. PAGI::CSRF's verify fails a
+    cross-origin request.
   - PAGI::Middleware::RateLimit's backend is removed (it was never used);
     passing it dies.
   - PAGI::App::Throttle is removed; PAGI::Middleware::RateLimit is the one

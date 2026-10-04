@@ -163,7 +163,7 @@ subtest 'two requests in flight, a layer suspended between edit and send' => sub
 subtest 'RequestId, CSRF, Session and Cookie leave a shared array alone' => sub {
     for my $case (
         [RequestId => PAGI::Middleware::RequestId->new],
-        [CSRF      => PAGI::Middleware::CSRF->new(secret => 's')],
+        [CSRF      => PAGI::Middleware::CSRF->new],
         [Session   => PAGI::Middleware::Session->new],
         [Cookie    => PAGI::Middleware::Cookie->new],
     ) {

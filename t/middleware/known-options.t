@@ -7,7 +7,6 @@ use PAGI::Middleware;
 my %required = (
     Authentication     => [backend => sub {}],
     ContentNegotiation => [supported_types => ['text/plain']],
-    CSRF               => [secret => 's'],
     Rewrite            => [rules => []],
     Static             => [root => '.'],
     TrustedHosts       => [hosts => ['example.com']],
@@ -15,7 +14,7 @@ my %required = (
 );
 # Options _init reads only to reject them with a message of their own.
 my %rejected = (
-    CSRF               => ['enforce'],
+    CSRF               => ['enforce', 'secret'],
     ContentNegotiation => ['strict', 'default_type'],
     RateLimit          => ['backend'],
 );
@@ -52,7 +51,7 @@ subtest 'a third-party subclass is not checked' => sub {
 
 subtest 'a removed option keeps its own message' => sub {
     require PAGI::Middleware::CSRF;
-    like dies { PAGI::Middleware::CSRF->new(secret => 's', enforce => 1) },
+    like dies { PAGI::Middleware::CSRF->new(enforce => 1) },
         qr/CSRF 'enforce' was removed/;
 };
 

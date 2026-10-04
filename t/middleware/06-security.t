@@ -861,7 +861,7 @@ subtest 'security-owned rejections await concrete response emission' => sub {
         ],
         [
             'CSRF 403',
-            PAGI::Middleware::CSRF->new(secret => 'test-secret')
+            PAGI::Middleware::CSRF->new
                 ->wrap(async sub { die 'CSRF rejection reached downstream' }),
             {
                 type => 'http', method => 'POST', path => '/', headers => [],
@@ -904,7 +904,7 @@ subtest 'TrustedHosts does not catch downstream exceptions' => sub {
 # =============================================================================
 
 subtest 'CSRF rejects POST without token' => sub {
-    my $mw = PAGI::Middleware::CSRF->new(secret => 'test-secret');
+    my $mw = PAGI::Middleware::CSRF->new;
 
     my $app_called = 0;
     my $app = async sub  {
@@ -958,7 +958,7 @@ sub csrf_request {
 }
 
 subtest 'CSRF refuses with a plain 403 by default' => sub {
-    my ($sent, $seen) = csrf_request(PAGI::Middleware::CSRF->new(secret => 's'),
+    my ($sent, $seen) = csrf_request(PAGI::Middleware::CSRF->new,
         headers => [['Accept', 'application/json']]);
     is scalar(@$seen), 0, 'the application is not called';
     is $sent->[0]{status}, 403, 'status 403';
@@ -977,18 +977,18 @@ subtest 'CSRF records why the check failed, in order' => sub {
     for my $case (@cases) {
         my ($reason, $headers) = @$case;
         my (undef, $seen) = csrf_request(
-            PAGI::Middleware::CSRF->new(secret => 's', refuse => 0), headers => $headers);
+            PAGI::Middleware::CSRF->new(refuse => 0), headers => $headers);
         is $seen->[0]{'pagi.csrf_failure'}, $reason, "records $reason";
         is csrf($seen->[0])->failure, $reason, "csrf()->failure reads $reason";
     }
-    my (undef, $seen) = csrf_request(PAGI::Middleware::CSRF->new(secret => 's', refuse => 0),
+    my (undef, $seen) = csrf_request(PAGI::Middleware::CSRF->new(refuse => 0),
         headers => [['cookie', 'a=1; csrf_token=abc; b=2'], ['x-csrf-token', 'abc']]);
     ok !exists $seen->[0]{'pagi.csrf_failure'}, 'a passing check records no failure';
     is csrf($seen->[0])->valid, 1, 'and is valid';
 };
 
 subtest 'CSRF refuse => 0 lets the application decide' => sub {
-    my ($sent, $seen) = csrf_request(PAGI::Middleware::CSRF->new(secret => 's', refuse => 0));
+    my ($sent, $seen) = csrf_request(PAGI::Middleware::CSRF->new(refuse => 0));
     is scalar(@$seen), 1, 'the application is called';
     is $sent->[0]{status}, 200, 'and its response is sent';
     ok length($seen->[0]{'pagi.csrf_token'}), 'a token is in the scope';
@@ -1011,7 +1011,7 @@ subtest 'CSRF refuse accepts any application' => sub {
     );
     for my $label (sort keys %apps) {
         my ($sent, $seen) = csrf_request(
-            PAGI::Middleware::CSRF->new(secret => 's', refuse => $apps{$label}));
+            PAGI::Middleware::CSRF->new(refuse => $apps{$label}));
         is scalar(@$seen), 0, "$label: the application is not called";
         is $sent->[0]{status}, 403, "$label: its status";
         is [response_header_values($sent->[0], 'Content-Type')], ['application/json'],
@@ -1020,8 +1020,7 @@ subtest 'CSRF refuse accepts any application' => sub {
 };
 
 subtest 'CSRF reuses one configured refuse Response' => sub {
-    my $mw = PAGI::Middleware::CSRF->new(secret => 's',
-        refuse => response('Text', 'Bad CSRF', status => 400));
+    my $mw = PAGI::Middleware::CSRF->new(refuse => response('Text', 'Bad CSRF', status => 400));
     for my $n (1, 2) {
         my ($sent) = csrf_request($mw);
         is $sent->[0]{status}, 400, "refusal $n status";
@@ -1038,7 +1037,7 @@ subtest "CSRF never adds its cookie to an application's own header list" => sub 
         await $send->({ type => 'http.response.start', status => 403, headers => \@shared });
         await $send->({ type => 'http.response.body', body => 'no', more => 0 });
     });
-    my $mw = PAGI::Middleware::CSRF->new(secret => 's', refuse => $refuse);
+    my $mw = PAGI::Middleware::CSRF->new(refuse => $refuse);
     csrf_request($mw) for 1 .. 3;
     is scalar(@shared), 1, "the application's header list is unchanged";
 
@@ -1049,7 +1048,7 @@ subtest "CSRF never adds its cookie to an application's own header list" => sub 
 
 subtest 'CSRF refuse: the refusing application can read the reason' => sub {
     my $reason;
-    my $mw = PAGI::Middleware::CSRF->new(secret => 's', refuse => sub {
+    my $mw = PAGI::Middleware::CSRF->new(refuse => sub {
         my ($request) = @_;
         $reason = csrf($request)->failure;
         return response('Text', '', status => 403);
@@ -1059,36 +1058,36 @@ subtest 'CSRF refuse: the refusing application can read the reason' => sub {
 };
 
 subtest 'CSRF refusal of a first POST still issues the cookie' => sub {
-    my ($sent) = csrf_request(PAGI::Middleware::CSRF->new(secret => 's'));
+    my ($sent) = csrf_request(PAGI::Middleware::CSRF->new);
     my ($cookie) = response_header_values($sent->[0], 'Set-Cookie');
-    like $cookie, qr/\Acsrf_token=[0-9a-f]+; Path=\/; HttpOnly; SameSite=Strict\z/,
+    like $cookie, qr/\Acsrf_token=[0-9a-f]+; Path=\/; SameSite=Strict\z/,
         'the refusal sets the minted token';
 };
 
 subtest 'CSRF refuse rejects every plain value but 0' => sub {
     for my $value (undef, '', '0E0', '0.0') {
         my $label = defined $value ? "'$value'" : 'undef';
-        like dies { PAGI::Middleware::CSRF->new(secret => 's', refuse => $value) },
+        like dies { PAGI::Middleware::CSRF->new(refuse => $value) },
             qr/\QCSRF 'refuse' must be an application, or 0 to let the application decide\E/,
             "$label is refused";
     }
-    ok lives { PAGI::Middleware::CSRF->new(secret => 's', refuse => 0) }, '0 is accepted';
-    ok lives { PAGI::Middleware::CSRF->new(secret => 's', refuse => '0') }, "'0' is accepted";
-    like dies { PAGI::Middleware::CSRF->new(secret => 's', refuse => 'yes') },
+    ok lives { PAGI::Middleware::CSRF->new(refuse => 0) }, '0 is accepted';
+    ok lives { PAGI::Middleware::CSRF->new(refuse => '0') }, "'0' is accepted";
+    like dies { PAGI::Middleware::CSRF->new(refuse => 'yes') },
         qr/\QCSRF 'refuse' must be an application, or 0 to let the application decide\E/,
         'a non-application string is refused';
 };
 
 subtest 'CSRF checks HEAD when safe_methods leaves it out' => sub {
     my ($sent, $seen) = csrf_request(
-        PAGI::Middleware::CSRF->new(secret => 's', safe_methods => ['GET']),
+        PAGI::Middleware::CSRF->new(safe_methods => ['GET']),
         method => 'HEAD');
     is scalar(@$seen), 0, 'HEAD without a token does not reach the application';
     is $sent->[0]{status}, 403, 'and is refused';
 };
 
 subtest 'CSRF allows POST with valid token' => sub {
-    my $mw = PAGI::Middleware::CSRF->new(secret => 'test-secret');
+    my $mw = PAGI::Middleware::CSRF->new;
 
     # Generate a token first with a GET request
     my $token;
@@ -1179,7 +1178,7 @@ subtest 'CSRF allows POST with valid token' => sub {
 };
 
 subtest 'CSRF allows GET without token' => sub {
-    my $mw = PAGI::Middleware::CSRF->new(secret => 'test-secret');
+    my $mw = PAGI::Middleware::CSRF->new;
 
     my $app_called = 0;
     my $app = async sub  {
@@ -1225,7 +1224,7 @@ subtest 'CSRF allows GET without token' => sub {
 subtest 'CSRF enforce was removed' => sub {
     for my $enforce (qw(app header bogus)) {
         like(
-            dies { PAGI::Middleware::CSRF->new(secret => 'test-secret', enforce => $enforce) },
+            dies { PAGI::Middleware::CSRF->new(enforce => $enforce) },
             qr/\QCSRF 'enforce' was removed: use refuse => 0 for the application to decide; the default refuses\E/,
             "enforce => '$enforce' dies with the replacement",
         );
@@ -1233,7 +1232,7 @@ subtest 'CSRF enforce was removed' => sub {
 };
 
 subtest "CSRF refuse => 0 passes an unsafe request through with no token" => sub {
-    my $mw = PAGI::Middleware::CSRF->new(secret => 'test-secret', refuse => 0);
+    my $mw = PAGI::Middleware::CSRF->new(refuse => 0);
 
     my $seen_token;
     my $app_called = 0;
@@ -1273,7 +1272,7 @@ subtest "CSRF refuse => 0 passes an unsafe request through with no token" => sub
 
 subtest "CSRF refuse => 0 preserves an application-owned Response" => sub {
     my $mw = PAGI::Middleware::CSRF->new(
-        secret => 'test-secret', refuse => 0,
+        refuse => 0,
     );
     my @sent;
     my $send = async sub { my ($event) = @_; push @sent, $event };
@@ -1310,7 +1309,7 @@ subtest "CSRF refuse => 0 preserves an application-owned Response" => sub {
 };
 
 subtest "CSRF refuse => 0 stashes the existing COOKIE token, not a new one" => sub {
-    my $mw = PAGI::Middleware::CSRF->new(secret => 'test-secret', refuse => 0);
+    my $mw = PAGI::Middleware::CSRF->new(refuse => 0);
 
     # First, a GET establishes a cookie token.
     my $cookie_token;
@@ -1368,7 +1367,7 @@ subtest "CSRF refuse => 0 stashes the existing COOKIE token, not a new one" => s
 };
 
 subtest 'CSRF cookie has no Secure attribute by default' => sub {
-    my $mw = PAGI::Middleware::CSRF->new(secret => 'test-secret');
+    my $mw = PAGI::Middleware::CSRF->new;
 
     my $app = async sub  {
         my ($scope, $receive, $send) = @_;
@@ -1392,7 +1391,7 @@ subtest 'CSRF cookie has no Secure attribute by default' => sub {
 };
 
 subtest "CSRF cookie includes Secure attribute when secure => 1" => sub {
-    my $mw = PAGI::Middleware::CSRF->new(secret => 'test-secret', secure => 1);
+    my $mw = PAGI::Middleware::CSRF->new(secure => 1);
 
     my $app = async sub  {
         my ($scope, $receive, $send) = @_;
