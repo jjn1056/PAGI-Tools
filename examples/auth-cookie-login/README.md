@@ -40,8 +40,9 @@ Both forms are protected by `PAGI::Middleware::CSRF`. They post plain HTML, so
 the token travels in a hidden `csrf_token` field, which the middleware does
 not read: the app runs it with `refuse => 0`, and each POST handler checks
 the parsed field with `csrf($request)->verify` and answers 403 when it does
-not match. The token cookie is `HttpOnly`, so the page -- not JavaScript --
-hands the token back.
+not match. The token lives in the session (`session => 1`), so there is no
+CSRF cookie to plant, and the middleware refuses a cross-site post before
+the handler runs.
 
 ## Serving it under a prefix
 

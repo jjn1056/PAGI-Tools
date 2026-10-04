@@ -27,8 +27,8 @@ sub html_escape ($text) {
     return $text =~ s/([&<>"'])/$entity{$1}/gr;
 }
 
-# Every form carries the CSRF token as a hidden field. The cookie holding it
-# is HttpOnly, so the page, not JavaScript, is what hands the token back.
+# Every form carries the CSRF token as a hidden field. The token lives in
+# the session (session => 1), so the page is what hands it back.
 sub csrf_field ($request) {
     return sprintf(qq{<input type="hidden" name="csrf_token" value="%s">},
         html_escape(csrf($request)->token));
@@ -36,6 +36,7 @@ sub csrf_field ($request) {
 
 # The middleware runs with refuse => 0 because a form's token is in the
 # body, which it does not read: each POST handler checks the parsed field.
+# verify() also fails a request the middleware found to be cross-origin.
 sub csrf_refused ($request, $form) {
     return undef if csrf($request)->verify($form->get('csrf_token') // '');
     return response('Text', 'CSRF token validation failed', status => 403);
@@ -140,7 +141,9 @@ compose(
             state  => session_state('Cookie', cookie_name => 'hello_session', expire => 3600),
             expire => 3600,
         ),
-        middleware('CSRF', refuse => 0),
+        # The token lives in the session, so a cookie planted by another
+        # site or subdomain cannot stand in for it.
+        middleware('CSRF', session => 1, refuse => 0),
         middleware('Authentication', backend => \&session_user),
     ],
 );
