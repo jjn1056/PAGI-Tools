@@ -16,8 +16,11 @@ PAGI::Response::Redirect - buffered HTTP redirect response
 =head1 SYNOPSIS
 
     use PAGI::Response qw(response);
-    my $response = PAGI::Response::Redirect->new('/next', status => 303);
-    my $same = response('Redirect', '/next', status => 303);
+    my $response = response('Redirect', '/next', status => 303);
+
+    # The same, by class -- what response() calls:
+    use PAGI::Response::Redirect;
+    my $same = PAGI::Response::Redirect->new('/next', status => 303);
 
 =head1 DESCRIPTION
 
