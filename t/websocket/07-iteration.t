@@ -267,4 +267,54 @@ subtest 'each_json: on_close runs when the connection ends after a callback dies
     ok($cleanup_ran, 'on_close ran despite each_json callback dying');
 };
 
+subtest 'each_text delivers "0" and "" and runs until disconnect' => sub {
+    my @events = (
+        { type => 'websocket.connect' },
+        { type => 'websocket.receive', text => 'a' },
+        { type => 'websocket.receive', text => '0' },
+        { type => 'websocket.receive', text => '' },
+        { type => 'websocket.receive', text => 'b' },
+        { type => 'websocket.disconnect', code => 1000 },
+    );
+    my $send = sub { Future->done };
+    my $scope   = ws_scope();
+    my $receive = receive_from($scope, @events);
+    my $ws = PAGI::WebSocket->new($scope, $receive, $send);
+    $ws->accept->get;
+
+    my @received;
+    $ws->each_text(async sub {
+        my ($text) = @_;
+        push @received, $text;
+    })->get;
+
+    is(\@received, ['a', '0', '', 'b'], 'every text frame delivered');
+    ok($ws->is_closed, 'iteration ended at the disconnect');
+};
+
+subtest 'each_bytes delivers "0" and "" and runs until disconnect' => sub {
+    my @events = (
+        { type => 'websocket.connect' },
+        { type => 'websocket.receive', bytes => 'a' },
+        { type => 'websocket.receive', bytes => '0' },
+        { type => 'websocket.receive', bytes => '' },
+        { type => 'websocket.receive', bytes => 'b' },
+        { type => 'websocket.disconnect', code => 1000 },
+    );
+    my $send = sub { Future->done };
+    my $scope   = ws_scope();
+    my $receive = receive_from($scope, @events);
+    my $ws = PAGI::WebSocket->new($scope, $receive, $send);
+    $ws->accept->get;
+
+    my @received;
+    $ws->each_bytes(async sub {
+        my ($bytes) = @_;
+        push @received, $bytes;
+    })->get;
+
+    is(\@received, ['a', '0', '', 'b'], 'every binary frame delivered');
+    ok($ws->is_closed, 'iteration ended at the disconnect');
+};
+
 done_testing;

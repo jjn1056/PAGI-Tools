@@ -184,6 +184,8 @@
     could issue sse.start twice.
   - PAGI::Test::Client shared one lifespan state across requests, sent no
     raw_path, and lost notifications and errors after a terminal send.
+  - PAGI::WebSocket each_text and each_bytes stopped at a message that is
+    false in Perl ("0" or empty), as if the client had gone.
 
 0.002002 - 2026-07-15
   - PAGI::Middleware::Session: non-'http' scopes that carry a headers key
