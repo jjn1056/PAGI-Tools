@@ -243,6 +243,31 @@ subtest 'manual peer Close: the app hears it when transport completes; racing da
     is $ws->receive_text, undef, 'post-Close application data was never delivered';
 };
 
+subtest 'manual peer Close: an app already waiting in receive hears it when transport completes' => sub {
+    # The common case: an application looping on receive is parked there when
+    # the peer's Close arrives. Its own receive must stay pending until the
+    # transport completes, then resolve with the scope already ended.
+    my %seen;
+    my $ws = PAGI::Test::Client->new(app => async sub {
+        my ($scope, $receive, $send) = @_;
+        my $conn = $scope->{'pagi.connection'};
+        await $receive->();
+        await $send->({type => 'websocket.accept'});
+        $seen{waiting} = 1;
+        my $event = await $receive->();
+        $seen{type}      = $event->{type};
+        $seen{code}      = $event->{code};
+        $seen{connected} = $conn->is_connected ? 1 : 0;
+    })->websocket('/', close_mode => 'manual');
+    ok $seen{waiting}, 'the app is waiting in receive';
+    $ws->close(1000, 'bye');
+    ok !exists $seen{type}, 'its receive stays pending while transport completion is pending (as PAGI::Server)';
+    $ws->complete_close;
+    is $seen{type}, 'websocket.disconnect', 'the waiting receive got the disconnect';
+    is $seen{code}, 1000, 'with the peer code';
+    is $seen{connected}, 0, 'the scope had ended when it arrived';
+};
+
 subtest 'close_incomplete requires peer Close without mutating a pending scope' => sub {
     my %slot;
     my $ws = PAGI::Test::Client->new(app => ws_app(\%slot, 1))->websocket('/', close_mode => 'manual');
