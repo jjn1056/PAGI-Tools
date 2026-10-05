@@ -186,7 +186,7 @@ subtest 'HTTP policy middleware preserves non-HTTP event streams and send settle
     }
 };
 
-subtest 'CSRF passes WebSocket and SSE scopes through untouched' => sub {
+subtest 'CSRF passes SSE scopes through untouched, and offers WebSocket a token' => sub {
     for my $type (qw(websocket sse)) {
         my $seen;
         my $wrapped = PAGI::Middleware::CSRF->new->wrap(async sub {
@@ -199,8 +199,14 @@ subtest 'CSRF passes WebSocket and SSE scopes through untouched' => sub {
             async sub { },
         ));
         ok $seen, "$type reaches the application";
-        ok !exists($seen->{'pagi.csrf_token'}) && !exists($seen->{'pagi.csrf_failure'}),
-            "$type scope gets no CSRF keys";
+        ok !exists($seen->{'pagi.csrf_failure'}), "$type records no failure";
+        if ($type eq 'websocket') {
+            # A handshake is origin-checked, and csrf($ws) works on it.
+            like $seen->{'pagi.csrf_token'}, qr/\A[0-9a-f]{64}\z/, 'websocket scope carries a token';
+        }
+        else {
+            ok !exists($seen->{'pagi.csrf_token'}), 'sse scope gets no CSRF keys';
+        }
     }
 };
 

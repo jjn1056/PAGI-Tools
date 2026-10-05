@@ -258,4 +258,48 @@ subtest 'a token known before login is useless after it' => sub {
     isnt($fresh, $after, 'a destroyed session starts over with a new token');
 };
 
+# A WebSocket handshake carries the browser's cookies and is outside CORS, so
+# the origin check applies to it too (cross-site WebSocket hijacking).
+sub handshake {
+    my ($mw, @headers) = @_;
+    return run_csrf($mw, type => 'websocket', method => 'GET',
+        headers => [['host', 'example.com'], @headers]);
+}
+
+subtest 'a WebSocket handshake gets the origin check' => sub {
+    my $mw = PAGI::Middleware::CSRF->new;
+    my (undef, $seen) = handshake($mw, ['origin', 'https://example.com']);
+    is(scalar @$seen, 1, 'same origin: reaches the application');
+
+    my ($sent, $seen2) = handshake($mw, ['origin', 'https://evil.example']);
+    is(scalar @$seen2, 0, 'cross-site Origin: never reaches the application');
+    is($sent->[0]{type}, 'http.response.start', 'refused with an HTTP response, before accept');
+    is($sent->[0]{status}, 403, '403');
+
+    (undef, $seen2) = handshake($mw, ['sec-fetch-site', 'cross-site']);
+    is(scalar @$seen2, 0, 'Sec-Fetch-Site cross-site: refused');
+
+    (undef, $seen2) = handshake($mw);
+    is(scalar @$seen2, 1, 'no Origin and no Sec-Fetch-Site (a native client): reaches the application');
+
+    (undef, $seen2) = handshake(PAGI::Middleware::CSRF->new(trusted_origins => ['https://app.example.com']),
+        ['origin', 'https://app.example.com']);
+    is(scalar @$seen2, 1, 'a trusted origin: reaches the application');
+};
+
+subtest 'a cross-site handshake is recorded under refuse => 0' => sub {
+    require PAGI::CSRF;
+    my (undef, $seen) = handshake(PAGI::Middleware::CSRF->new(refuse => 0), ['origin', 'https://evil.example']);
+    is(scalar @$seen, 1, 'the application decides');
+    my $guard = PAGI::CSRF->new($seen->[0]);
+    is($guard->failure, 'cross_origin', 'failure is cross_origin');
+    is($guard->valid, 0, 'not valid');
+};
+
+subtest 'an SSE request is not origin-checked' => sub {
+    my (undef, $seen) = run_csrf(PAGI::Middleware::CSRF->new, type => 'sse', method => 'GET',
+        headers => [['host', 'example.com'], ['origin', 'https://evil.example']]);
+    is(scalar @$seen, 1, 'reaches the application');
+};
+
 done_testing;
