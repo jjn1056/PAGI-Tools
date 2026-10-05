@@ -227,15 +227,19 @@ subtest 'manual peer-first Close keeps peer metadata across racing app Close' =>
     is [$event->{code}, $event->{reason}], [1008, 'peer'], 'receive metadata agrees';
 };
 
-subtest 'manual peer Close suppresses later application data while transport is pending' => sub {
+subtest 'manual peer Close: the app hears it when transport completes; racing data is discarded' => sub {
     my %slot;
     my $ws = PAGI::Test::Client->new(app => ws_app(\%slot, 0))->websocket('/', close_mode => 'manual');
     $ws->close(1000, 'peer');
-    is $slot{receive}->()->get->{type}, 'websocket.disconnect', 'app has received peer Close';
     ok $slot{conn}->is_connected, 'transport completion is still pending';
+    my $pending = $slot{receive}->();
+    ok !$pending->is_ready, 'no disconnect while transport completion is pending (as PAGI::Server)';
     ok $slot{send}->({type => 'websocket.send', text => 'after Close'})->is_done,
         'racing data send may be discarded successfully';
     $ws->complete_close;
+    ok $pending->is_ready, 'the disconnect arrives when the transport completes';
+    is $pending->get->{type}, 'websocket.disconnect', 'it is the peer Close';
+    ok !$slot{conn}->is_connected, 'with the scope already ended';
     is $ws->receive_text, undef, 'post-Close application data was never delivered';
 };
 

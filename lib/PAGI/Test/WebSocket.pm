@@ -48,7 +48,7 @@ sub _start {
 
     # Create receive coderef for the app
     my $receive = async sub {
-        if ($self->{_end_event}) {
+        if ($self->_end_event_ready) {
             return { %{$self->{_end_event}} };
         }
 
@@ -178,9 +178,20 @@ sub _pump_app {
     $self->_wake_pending_receives if $self->{_end_event};
 }
 
+# The end event reaches the application once the scope has ended -- its
+# connection object is terminal -- as PAGI::Server delivers it. A peer Close
+# recorded in manual close mode therefore waits for complete_close or an
+# abnormal ending.
+sub _end_event_ready {
+    my ($self) = @_;
+    return 0 unless $self->{_end_event};
+    my $conn = $self->{scope}{'pagi.connection'};
+    return $conn && $conn->is_connected ? 0 : 1;
+}
+
 sub _wake_pending_receives {
     my ($self) = @_;
-    return unless $self->{_end_event};
+    return unless $self->_end_event_ready;
 
     while (my $future = shift @{$self->{_pending_receives}}) {
         $future->done({ %{$self->{_end_event}} }) unless $future->is_ready;
