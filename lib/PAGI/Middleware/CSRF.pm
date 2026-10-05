@@ -51,6 +51,16 @@ C<Host> header. An origin in C<trusted_origins> always passes, and a request
 with neither header (a non-browser client, or an older browser) is left to
 the token check. A failure is recorded as C<cross_origin>.
 
+A WebSocket handshake gets the same origin check: it carries the browser's
+cookies and WebSockets are outside CORS, so a page on another site could
+otherwise open an authenticated socket (cross-site WebSocket hijacking). A
+cross-origin handshake is answered by C<refuse> before accept -- by default
+the 403 -- or, under C<refuse =E<gt> 0>, reaches the application with
+C<cross_origin> recorded. There is no token check on a handshake (a browser
+cannot add headers to one); its scope carries the token for C<csrf($ws)>,
+taken from the cookie or session without setting either. SSE requests are
+not checked: a page on another site cannot read the stream.
+
 =head1 CONFIGURATION
 
 An option not listed here dies at construction.
@@ -193,6 +203,10 @@ sub wrap {
 
     return async sub {
         my ($scope, $receive, $send) = @_;
+        if ($scope->{type} eq 'websocket') {
+            await $self->_websocket_handshake($app, $scope, $receive, $send);
+            return;
+        }
         if ($scope->{type} ne 'http') {
             await $app->($scope, $receive, $send);
             return;
@@ -257,6 +271,27 @@ sub _rotating_send {
             if $event->{type} eq 'http.response.start' && $session->{_regenerated};
         await $send->($event);
     };
+}
+
+# A WebSocket handshake carries the browser's cookies and is outside CORS, so
+# a page on another site could otherwise open an authenticated socket
+# (cross-site WebSocket hijacking): it gets the same origin check as an unsafe
+# request, and a failure is refused before accept, like any refusal. There is
+# no token check -- a browser cannot add headers to a handshake. The token is
+# offered for csrf($ws) without side effects: no cookie is set and no session
+# is created.
+async sub _websocket_handshake {
+    my ($self, $app, $scope, $receive, $send) = @_;
+    my $session = $scope->{'pagi.session'};
+    my $token = ($self->{session}
+            ? (ref($session) eq 'HASH' ? $session->{csrf_token} : undef)
+            : $self->_get_cookie_token($scope))
+        // $self->_generate_token();
+    my %recorded = ('pagi.csrf_token' => $token);
+    my $failure = $self->_origin_failure($scope);
+    $recorded{'pagi.csrf_failure'} = $failure if defined $failure;
+    my $target = defined($failure) && $self->{refuse} ? $self->{refuse} : $app;
+    await $target->($self->modify_scope($scope, \%recorded), $receive, $send);
 }
 
 # The token for this request and the one it must match. Under session => 1

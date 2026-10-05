@@ -31,7 +31,8 @@
   - PAGI::Middleware::CSRF: session => 1 keeps the token in the session
     and replaces it when the session is regenerated (at login);
     an origin check (Sec-Fetch-Site, then Origin vs Host) on unsafe
-    requests, with trusted_origins; httponly.
+    requests and on WebSocket handshakes (cross-site WebSocket hijacking),
+    with trusted_origins; httponly.
 
   [Changed]
   - raw_path is the full requested path at every mount level; AccessLog
