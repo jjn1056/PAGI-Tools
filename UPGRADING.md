@@ -3,7 +3,7 @@
 This release breaks most of the 0.002002 API on purpose: routing, the
 Context handler objects, the Response builder and the stock applications
 are replaced. There are no compatibility aliases; every removed form fails
-when used. Upgrade PAGI::Server to **0.002014** or later at the same time.
+when used. Upgrade PAGI::Server to **0.003000** or later at the same time.
 
 Start with the table, then the worked port. Each row links to the details
 in [UPGRADING-REFERENCE.md](UPGRADING-REFERENCE.md).

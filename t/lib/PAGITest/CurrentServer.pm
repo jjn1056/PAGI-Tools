@@ -10,7 +10,7 @@ our @EXPORT_OK = qw(current_server_unavailable);
 # Real-server tests exercise the PAGI::Server release line this PAGI-Tools
 # cycle ships with. An older installed server implements a connection contract
 # Tools no longer targets, so those tests skip rather than report its gaps.
-our $SERVER_VERSION = '0.002014';
+our $SERVER_VERSION = '0.003000';
 
 # Returns a skip reason, or nothing when the current PAGI::Server is loadable.
 sub current_server_unavailable {
