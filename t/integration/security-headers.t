@@ -61,6 +61,7 @@ subtest 'Default security headers are added' => sub {
     };
 
     my $server = PAGI::Server->new(
+        access_log => undef,
         app   => $app,
         host  => '127.0.0.1',
         port  => 0,
@@ -105,6 +106,7 @@ subtest 'Custom header values are respected' => sub {
     };
 
     my $server = PAGI::Server->new(
+        access_log => undef,
         app   => $app,
         host  => '127.0.0.1',
         port  => 0,
@@ -141,6 +143,7 @@ subtest 'Headers can be disabled with undef' => sub {
     };
 
     my $server = PAGI::Server->new(
+        access_log => undef,
         app   => $app,
         host  => '127.0.0.1',
         port  => 0,
@@ -181,6 +184,7 @@ subtest 'Content-Security-Policy can be set' => sub {
     };
 
     my $server = PAGI::Server->new(
+        access_log => undef,
         app   => $app,
         host  => '127.0.0.1',
         port  => 0,
@@ -216,6 +220,7 @@ subtest 'Permissions-Policy can be set' => sub {
     };
 
     my $server = PAGI::Server->new(
+        access_log => undef,
         app   => $app,
         host  => '127.0.0.1',
         port  => 0,
@@ -285,6 +290,7 @@ subtest 'Non-HTTP scopes pass through unchanged' => sub {
     };
 
     my $server = PAGI::Server->new(
+        access_log => undef,
         app   => $app,
         host  => '127.0.0.1',
         port  => 0,
@@ -323,6 +329,7 @@ subtest 'All security headers together' => sub {
     };
 
     my $server = PAGI::Server->new(
+        access_log => undef,
         app   => $app,
         host  => '127.0.0.1',
         port  => 0,

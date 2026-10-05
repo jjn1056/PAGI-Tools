@@ -26,6 +26,7 @@ sub create_server {
     my ($app) = @_;
 
     my $server = PAGI::Server->new(
+        access_log => undef,
         app   => $app,
         host  => '127.0.0.1',
         port  => 0,

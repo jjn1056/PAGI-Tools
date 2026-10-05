@@ -34,6 +34,7 @@ my $app = PAGI::App::WrapPSGI->new(psgi_app => $psgi_app)->to_app;
 # Test 1: PSGI bridge runs legacy PSGI apps
 subtest 'PSGI bridge runs legacy PSGI apps - 09-psgi-bridge app' => sub {
     my $server = PAGI::Server->new(
+        access_log => undef,
         app   => $app,
         host  => '127.0.0.1',
         port  => 0,
@@ -61,6 +62,7 @@ subtest 'PSGI bridge runs legacy PSGI apps - 09-psgi-bridge app' => sub {
 # Test 2: PSGI bridge passes request body to psgi.input
 subtest 'PSGI bridge passes request body to psgi.input' => sub {
     my $server = PAGI::Server->new(
+        access_log => undef,
         app   => $app,
         host  => '127.0.0.1',
         port  => 0,
@@ -124,6 +126,7 @@ subtest 'PSGI env contains all required keys' => sub {
     };
 
     my $server = PAGI::Server->new(
+        access_log => undef,
         app   => $wrapped_app,
         host  => '127.0.0.1',
         port  => 0,
@@ -198,6 +201,7 @@ subtest 'PSGI array body response works' => sub {
     };
 
     my $server = PAGI::Server->new(
+        access_log => undef,
         app   => $wrapped_app,
         host  => '127.0.0.1',
         port  => 0,
@@ -256,6 +260,7 @@ subtest 'PSGI filehandle body response works' => sub {
     };
 
     my $server = PAGI::Server->new(
+        access_log => undef,
         app   => $wrapped_app,
         host  => '127.0.0.1',
         port  => 0,
@@ -317,6 +322,7 @@ subtest 'PSGI streaming response (coderef body) works' => sub {
     };
 
     my $server = PAGI::Server->new(
+        access_log => undef,
         app   => $wrapped_app,
         host  => '127.0.0.1',
         port  => 0,
