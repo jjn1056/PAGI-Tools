@@ -313,9 +313,9 @@ sub close {
         (defined $reason ? (reason => $reason) : ()),
     };
     # A peer-initiated Close is answered by the test server automatically.
-    # Manual mode holds only transport completion for explicit resolution.
+    # Manual mode holds only transport completion for explicit resolution;
+    # pending receives stay parked until it resolves (see _end_event_ready).
     return $self->complete_close if $self->{close_mode} eq 'cooperative';
-    $self->_wake_pending_receives;
     return $self->pump;
 }
 
@@ -556,7 +556,10 @@ test against L<PAGI::Server> and a real WebSocket client.
 Supplies a Close from the test peer. With no arguments the code is 1000
 and reason is an empty string. C<close(undef, undef)> models an empty Close
 payload (peer metadata C<1005>/C<undef>). Pending and later application
-receives report the Close. Repeated peer Close calls are harmless.
+receives report the Close once the scope has ended, as PAGI::Server delivers
+it: at once in the default cooperative mode, and in C<manual> mode only after
+C<complete_close> or C<simulate_abnormal_close>. Repeated peer Close calls are
+harmless.
 
 =head2 Close outcome controls
 
@@ -570,7 +573,8 @@ holds closure open so a test can supply peer Close and transport outcomes
 separately. An application Close alone leaves the connection active and its
 peer metadata undefined. C<close> supplies peer metadata; the simulated
 server answers a peer-initiated Close automatically. C<complete_close>
-requires a peer Close and completes the transport cleanly.
+requires a peer Close and completes the transport cleanly; the application's
+C<websocket.disconnect> arrives then, not at C<close>.
 
 C<simulate_close_timeout> ends an application Close waiting for a peer with
 C<close_timeout>, peer code 1006 and undefined peer reason. It requires an
@@ -646,8 +650,8 @@ This module implements the PAGI WebSocket protocol:
 
 =item 5. Either side ends the connection: the test via L</close> or
 L</simulate_abnormal_close> (delivering exactly one C<websocket.disconnect>
-to the app, carrying a truthful code and reason -- see L</SEND
-STRICTNESS>), or the app via C<websocket.close>
+to the app once the scope has ended, carrying a truthful code and reason --
+see L</SEND STRICTNESS>), or the app via C<websocket.close>
 
 =back
 
