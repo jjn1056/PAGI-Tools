@@ -690,7 +690,7 @@ async sub each_message {
 async sub each_text {
     my ($self, $callback) = @_;
 
-    while (my $text = await $self->receive_text) {
+    while (defined(my $text = await $self->receive_text)) {
         await $callback->($text);
     }
 
@@ -700,7 +700,7 @@ async sub each_text {
 async sub each_bytes {
     my ($self, $callback) = @_;
 
-    while (my $bytes = await $self->receive_bytes) {
+    while (defined(my $bytes = await $self->receive_bytes)) {
         await $callback->($bytes);
     }
 

@@ -48,7 +48,7 @@ sub _start {
 
     # Create receive coderef for the app
     my $receive = async sub {
-        if ($self->{_end_event}) {
+        if ($self->_end_event_ready) {
             return { %{$self->{_end_event}} };
         }
 
@@ -178,9 +178,20 @@ sub _pump_app {
     $self->_wake_pending_receives if $self->{_end_event};
 }
 
+# The end event reaches the application once the scope has ended -- its
+# connection object is terminal -- as PAGI::Server delivers it. A peer Close
+# recorded in manual close mode therefore waits for complete_close or an
+# abnormal ending.
+sub _end_event_ready {
+    my ($self) = @_;
+    return 0 unless $self->{_end_event};
+    my $conn = $self->{scope}{'pagi.connection'};
+    return $conn && $conn->is_connected ? 0 : 1;
+}
+
 sub _wake_pending_receives {
     my ($self) = @_;
-    return unless $self->{_end_event};
+    return unless $self->_end_event_ready;
 
     while (my $future = shift @{$self->{_pending_receives}}) {
         $future->done({ %{$self->{_end_event}} }) unless $future->is_ready;
@@ -192,7 +203,9 @@ sub _wake_pending_receives {
 sub send_text {
     my ($self, $text) = @_;
 
-    croak "Cannot send on closed WebSocket" if $self->{closed};
+    # After the test peer's own Close it sends no data (RFC 6455 5.5.1), even
+    # while manual close mode holds the transport open.
+    croak "Cannot send on closed WebSocket" if $self->{closed} || $self->{_peer_close};
 
     push @{$self->{send_queue}}, {
         type => 'websocket.receive',
@@ -208,7 +221,9 @@ sub send_text {
 sub send_bytes {
     my ($self, $bytes) = @_;
 
-    croak "Cannot send on closed WebSocket" if $self->{closed};
+    # After the test peer's own Close it sends no data (RFC 6455 5.5.1), even
+    # while manual close mode holds the transport open.
+    croak "Cannot send on closed WebSocket" if $self->{closed} || $self->{_peer_close};
 
     push @{$self->{send_queue}}, {
         type => 'websocket.receive',
@@ -302,9 +317,9 @@ sub close {
         (defined $reason ? (reason => $reason) : ()),
     };
     # A peer-initiated Close is answered by the test server automatically.
-    # Manual mode holds only transport completion for explicit resolution.
+    # Manual mode holds only transport completion for explicit resolution;
+    # pending receives stay parked until it resolves (see _end_event_ready).
     return $self->complete_close if $self->{close_mode} eq 'cooperative';
-    $self->_wake_pending_receives;
     return $self->pump;
 }
 
@@ -465,13 +480,16 @@ directly; use L<PAGI::Test::Client>'s C<websocket> method instead.
 
     $ws->send_text('Hello, server!');
 
-Sends a text message to the WebSocket application.
+Sends a text message to the WebSocket application. Croaks once the test
+has closed the connection with L</close>, even while C<manual> close mode
+holds the transport open: a peer sends no data after its Close.
 
 =head2 send_bytes
 
     $ws->send_bytes("\x00\x01\x02\x03");
 
-Sends a binary message to the WebSocket application.
+Sends a binary message to the WebSocket application. Croaks after L</close>,
+as L</send_text> does.
 
 =head2 send_json
 
@@ -545,7 +563,10 @@ test against L<PAGI::Server> and a real WebSocket client.
 Supplies a Close from the test peer. With no arguments the code is 1000
 and reason is an empty string. C<close(undef, undef)> models an empty Close
 payload (peer metadata C<1005>/C<undef>). Pending and later application
-receives report the Close. Repeated peer Close calls are harmless.
+receives report the Close once the scope has ended, as PAGI::Server delivers
+it: at once in the default cooperative mode, and in C<manual> mode only after
+C<complete_close> or C<simulate_abnormal_close>. Repeated peer Close calls are
+harmless.
 
 =head2 Close outcome controls
 
@@ -559,7 +580,8 @@ holds closure open so a test can supply peer Close and transport outcomes
 separately. An application Close alone leaves the connection active and its
 peer metadata undefined. C<close> supplies peer metadata; the simulated
 server answers a peer-initiated Close automatically. C<complete_close>
-requires a peer Close and completes the transport cleanly.
+requires a peer Close and completes the transport cleanly; the application's
+C<websocket.disconnect> arrives then, not at C<close>.
 
 C<simulate_close_timeout> ends an application Close waiting for a peer with
 C<close_timeout>, peer code 1006 and undefined peer reason. It requires an
@@ -635,8 +657,8 @@ This module implements the PAGI WebSocket protocol:
 
 =item 5. Either side ends the connection: the test via L</close> or
 L</simulate_abnormal_close> (delivering exactly one C<websocket.disconnect>
-to the app, carrying a truthful code and reason -- see L</SEND
-STRICTNESS>), or the app via C<websocket.close>
+to the app once the scope has ended, carrying a truthful code and reason --
+see L</SEND STRICTNESS>), or the app via C<websocket.close>
 
 =back
 

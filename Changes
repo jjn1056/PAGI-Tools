@@ -1,10 +1,10 @@
 # Revision history for PAGI-Tools
 
-0.002003 - 2026-09-30
+0.003000 - 2026-09-30
 
   Most of the 0.002002 API is replaced; there are no compatibility aliases.
   UPGRADING.md has a table of what replaces what and a worked port;
-  UPGRADING-REFERENCE.md has the details. Needs PAGI::Server 0.002014.
+  UPGRADING-REFERENCE.md has the details. Needs PAGI::Server 0.003000.
 
   [New]
   - PAGI::Routing (route, websocket, sse, mount, router, path_for,
@@ -124,7 +124,7 @@
     response (when the status sent is 5xx), and rethrows an exception raised after the response
     started instead of swallowing it.
   - PAGI::WebSocket and PAGI::SSE require pagi.connection (PAGI::Server
-    0.002014); their state is a PAGI::State object; deny takes a response.
+    0.003000); their state is a PAGI::State object; deny takes a response.
   - A request body cut short by a disconnect croaks instead of returning
     the bytes that arrived.
   - File, Directory and Static share one request-path contract: hidden
@@ -184,6 +184,11 @@
     could issue sse.start twice.
   - PAGI::Test::Client shared one lifespan state across requests, sent no
     raw_path, and lost notifications and errors after a terminal send.
+  - PAGI::WebSocket each_text and each_bytes stopped at a message that is
+    false in Perl ("0" or empty), as if the client had gone.
+  - PAGI::Test::WebSocket in manual close mode handed the application a
+    peer's Close before the transport completed; it now arrives when the
+    scope ends, as PAGI::Server delivers it.
 
 0.002002 - 2026-07-15
   - PAGI::Middleware::Session: non-'http' scopes that carry a headers key

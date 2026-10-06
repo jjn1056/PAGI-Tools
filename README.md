@@ -209,7 +209,7 @@ PAGI-Tools targets [PAGI::Spec::Www](https://metacpan.org/pod/PAGI%3A%3ASpec%3A%
 not on any one server: it needs a server that implements Www 0.6, which puts a
 `pagi.connection` object in every `http`, `websocket` and `sse` scope and
 advertises `$scope->{pagi}{spec_version}` as `0.6`. [PAGI::Server](https://metacpan.org/pod/PAGI%3A%3AServer), the
-reference implementation, does so from 0.002014.
+reference implementation, does so from 0.003000.
 
 Tools checks the connection's capabilities where it uses them, not the version
 number. [PAGI::WebSocket](https://metacpan.org/pod/PAGI%3A%3AWebSocket) and [PAGI::SSE](https://metacpan.org/pod/PAGI%3A%3ASSE) die at construction when the scope

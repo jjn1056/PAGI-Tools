@@ -227,16 +227,82 @@ subtest 'manual peer-first Close keeps peer metadata across racing app Close' =>
     is [$event->{code}, $event->{reason}], [1008, 'peer'], 'receive metadata agrees';
 };
 
-subtest 'manual peer Close suppresses later application data while transport is pending' => sub {
+subtest 'manual peer Close: the app hears it when transport completes; racing data is discarded' => sub {
     my %slot;
     my $ws = PAGI::Test::Client->new(app => ws_app(\%slot, 0))->websocket('/', close_mode => 'manual');
     $ws->close(1000, 'peer');
-    is $slot{receive}->()->get->{type}, 'websocket.disconnect', 'app has received peer Close';
     ok $slot{conn}->is_connected, 'transport completion is still pending';
+    my $pending = $slot{receive}->();
+    ok !$pending->is_ready, 'no disconnect while transport completion is pending (as PAGI::Server)';
     ok $slot{send}->({type => 'websocket.send', text => 'after Close'})->is_done,
         'racing data send may be discarded successfully';
     $ws->complete_close;
+    ok $pending->is_ready, 'the disconnect arrives when the transport completes';
+    is $pending->get->{type}, 'websocket.disconnect', 'it is the peer Close';
+    ok !$slot{conn}->is_connected, 'with the scope already ended';
     is $ws->receive_text, undef, 'post-Close application data was never delivered';
+};
+
+subtest 'manual peer Close: an app already waiting in receive hears it when transport completes' => sub {
+    # The common case: an application looping on receive is parked there when
+    # the peer's Close arrives. Its own receive must stay pending until the
+    # transport completes, then resolve with the scope already ended.
+    my %seen;
+    my $ws = PAGI::Test::Client->new(app => async sub {
+        my ($scope, $receive, $send) = @_;
+        my $conn = $scope->{'pagi.connection'};
+        await $receive->();
+        await $send->({type => 'websocket.accept'});
+        $seen{waiting} = 1;
+        my $event = await $receive->();
+        $seen{type}      = $event->{type};
+        $seen{code}      = $event->{code};
+        $seen{connected} = $conn->is_connected ? 1 : 0;
+    })->websocket('/', close_mode => 'manual');
+    ok $seen{waiting}, 'the app is waiting in receive';
+    $ws->close(1000, 'bye');
+    ok !exists $seen{type}, 'its receive stays pending while transport completion is pending (as PAGI::Server)';
+    $ws->complete_close;
+    is $seen{type}, 'websocket.disconnect', 'the waiting receive got the disconnect';
+    is $seen{code}, 1000, 'with the peer code';
+    is $seen{connected}, 0, 'the scope had ended when it arrived';
+};
+
+subtest 'manual close mode, callback style: the app finishes when the callback returns' => sub {
+    # The callback form closes the socket for the test when the callback
+    # returns; in manual mode that close must also finish the transport, or
+    # the app stays parked in receive and anything after its loop never runs.
+    my %seen;
+    PAGI::Test::Client->new(app => async sub {
+        my ($scope, $receive, $send) = @_;
+        my $conn = $scope->{'pagi.connection'};
+        await $receive->();
+        await $send->({type => 'websocket.accept'});
+        while (1) {
+            my $event = await $receive->();
+            last if $event->{type} eq 'websocket.disconnect';
+            push @{ $seen{texts} }, $event->{text};
+        }
+        $seen{after_loop} = 1;
+        $seen{connected}  = $conn->is_connected ? 1 : 0;
+    })->websocket('/', close_mode => 'manual', sub {
+        my ($ws) = @_;
+        $ws->send_text('x');
+    });
+    is $seen{texts}, ['x'], 'the app received the message';
+    ok $seen{after_loop}, 'the app left its receive loop when the callback returned';
+    is $seen{connected}, 0, 'the scope had ended';
+};
+
+subtest 'manual close mode: the test cannot send after its own close' => sub {
+    # A peer sends no data after its Close (RFC 6455 5.5.1), so the test peer
+    # refuses to, as it does once the socket is closed.
+    my %slot;
+    my $ws = PAGI::Test::Client->new(app => ws_app(\%slot, 0))->websocket('/', close_mode => 'manual');
+    $ws->close(1000, 'peer');
+    like dies { $ws->send_text('after Close') }, qr/Cannot send on closed WebSocket/, 'send_text after close croaks';
+    like dies { $ws->send_bytes("\x00") }, qr/Cannot send on closed WebSocket/, 'send_bytes after close croaks';
+    $ws->complete_close;
 };
 
 subtest 'close_incomplete requires peer Close without mutating a pending scope' => sub {

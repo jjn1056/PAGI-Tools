@@ -9,7 +9,7 @@ removed form fails rather than being translated.
 `PAGI::Compose`, `PAGI::Routing`, `PAGI::Pages`, the concrete `PAGI::Response`
 classes, `PAGI::Auth` and `PAGI::Middleware::Authentication` are new in this
 release. Their POD documents them; this guide covers what changes for code
-that already exists. Upgrade PAGI::Server to 0.002014 or later at the same
+that already exists. Upgrade PAGI::Server to 0.003000 or later at the same
 time (see [pagi.connection](#breaking-pagisse-and-pagiwebsocket-require-pagiconnection)).
 
 ## Checklist
@@ -926,7 +926,7 @@ $sse->on_close(sub ($sse, $reason, $detail = undef) { cleanup() });
 
 PAGI::Spec::Www 0.6 requires a `pagi.connection` object in every `http`,
 `websocket` and `sse` scope. PAGI::Server provides it on websocket and sse
-scopes from **0.002014**. `PAGI::SSE` and `PAGI::WebSocket` now die without
+scopes from **0.003000**. `PAGI::SSE` and `PAGI::WebSocket` now die without
 it, so upgrade PAGI::Server together with this release:
 
 ```text

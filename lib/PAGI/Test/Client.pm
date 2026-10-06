@@ -410,7 +410,13 @@ sub websocket {
     if ($callback) {
         eval { $callback->($ws) };
         my $err = $@;
-        $ws->close unless $ws->is_closed;
+        # Finish the socket for the test: the peer's Close (a no-op if the
+        # callback sent one), then the transport, which manual close mode
+        # otherwise holds open, leaving the app parked in receive.
+        unless ($ws->is_closed) {
+            $ws->close;
+            $ws->complete_close;
+        }
         die $err if $err;
         return;
     }
@@ -1359,6 +1365,11 @@ Clears all session cookies.
         my ($ws) = @_;
         # ...
     });
+
+In callback style the socket is closed for the test when the callback
+returns, unless it already is: a normal peer Close, and in C<manual> close
+mode the transport is completed too, so the application's C<receive> loop
+ends.
 
 See L<PAGI::Test::WebSocket> for the WebSocket connection API, including
 its send strictness (L<PAGI::Test::WebSocket/SEND STRICTNESS>), the

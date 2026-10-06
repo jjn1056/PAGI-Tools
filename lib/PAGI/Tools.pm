@@ -3,7 +3,7 @@ package PAGI::Tools;
 use strict;
 use warnings;
 
-our $VERSION = '0.002003';
+our $VERSION = '0.003000';
 
 1;
 
@@ -248,7 +248,7 @@ PAGI-Tools targets L<PAGI::Spec::Www> B<0.6>. It depends on the specification,
 not on any one server: it needs a server that implements Www 0.6, which puts a
 C<pagi.connection> object in every C<http>, C<websocket> and C<sse> scope and
 advertises C<< $scope->{pagi}{spec_version} >> as C<0.6>. L<PAGI::Server>, the
-reference implementation, does so from 0.002014.
+reference implementation, does so from 0.003000.
 
 Tools checks the connection's capabilities where it uses them, not the version
 number. L<PAGI::WebSocket> and L<PAGI::SSE> die at construction when the scope
