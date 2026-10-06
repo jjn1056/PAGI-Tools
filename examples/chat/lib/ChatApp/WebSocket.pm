@@ -94,6 +94,11 @@ async sub chat {
     }
     return if $ws->is_closed;
 
+    # Every room with its member count, whether this connection is new or a
+    # resumed session (the resume message lists only the session's own rooms).
+    await _send_room_list($ws, $session_id);
+    return if $ws->is_closed;
+
     # Protocol-level pings keep proxies from closing an idle connection. The
     # server runs the timer; the browser also sends its own application
     # 'ping' messages, answered below with 'pong'.

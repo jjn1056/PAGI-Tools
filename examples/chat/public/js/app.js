@@ -267,7 +267,6 @@
                 state.username = data.name;
                 sessionStorage.setItem('chat-session-id', data.session_id);
                 updateUserInfo();
-                updateRoomsList(data.rooms.map(name => ({ name, users: 0 })));
                 break;
 
             case 'resumed':
@@ -302,7 +301,6 @@
                     }
                 }
 
-                updateRoomsList(data.rooms.map(name => ({ name, users: 0 })));
                 showToast('Session resumed', 'success');
                 break;
 
@@ -320,7 +318,7 @@
                     });
                 }
                 updateUsersList(data.users || []);
-                updateRoomsList();
+                setRoomUserCount(data.room, data.users || []);
                 break;
 
             case 'left':
@@ -332,6 +330,7 @@
                     sendMessage({ type: 'get_history', room: 'general' });
                 }
                 updateRoomsList();
+                sendMessage({ type: 'get_rooms' });
                 break;
 
             case 'message':
@@ -358,7 +357,7 @@
                     addSystemMessage(`${data.user} joined the room`);
                     updateUsersList(data.users || []);
                 }
-                updateRoomsList();
+                setRoomUserCount(data.room, data.users || []);
                 break;
 
             case 'user_left':
@@ -366,7 +365,7 @@
                     addSystemMessage(`${data.user} left the room`);
                     updateUsersList(data.users || []);
                 }
-                updateRoomsList();
+                setRoomUserCount(data.room, data.users || []);
                 break;
 
             case 'typing':
@@ -488,6 +487,15 @@
         document.querySelectorAll('#rooms-list li').forEach(li => {
             li.classList.toggle('active', li.dataset.room === state.currentRoom);
         });
+    }
+
+    // Set one room's member count from its user list and redraw the rooms.
+    function setRoomUserCount(roomName, users) {
+        const room = (state.roomsData || []).find(r => r.name === roomName);
+        if (room) {
+            room.users = users.length;
+        }
+        updateRoomsList();
     }
 
     function updateRoomsList(rooms) {
