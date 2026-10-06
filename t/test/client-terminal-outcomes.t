@@ -268,6 +268,43 @@ subtest 'manual peer Close: an app already waiting in receive hears it when tran
     is $seen{connected}, 0, 'the scope had ended when it arrived';
 };
 
+subtest 'manual close mode, callback style: the app finishes when the callback returns' => sub {
+    # The callback form closes the socket for the test when the callback
+    # returns; in manual mode that close must also finish the transport, or
+    # the app stays parked in receive and anything after its loop never runs.
+    my %seen;
+    PAGI::Test::Client->new(app => async sub {
+        my ($scope, $receive, $send) = @_;
+        my $conn = $scope->{'pagi.connection'};
+        await $receive->();
+        await $send->({type => 'websocket.accept'});
+        while (1) {
+            my $event = await $receive->();
+            last if $event->{type} eq 'websocket.disconnect';
+            push @{ $seen{texts} }, $event->{text};
+        }
+        $seen{after_loop} = 1;
+        $seen{connected}  = $conn->is_connected ? 1 : 0;
+    })->websocket('/', close_mode => 'manual', sub {
+        my ($ws) = @_;
+        $ws->send_text('x');
+    });
+    is $seen{texts}, ['x'], 'the app received the message';
+    ok $seen{after_loop}, 'the app left its receive loop when the callback returned';
+    is $seen{connected}, 0, 'the scope had ended';
+};
+
+subtest 'manual close mode: the test cannot send after its own close' => sub {
+    # A peer sends no data after its Close (RFC 6455 5.5.1), so the test peer
+    # refuses to, as it does once the socket is closed.
+    my %slot;
+    my $ws = PAGI::Test::Client->new(app => ws_app(\%slot, 0))->websocket('/', close_mode => 'manual');
+    $ws->close(1000, 'peer');
+    like dies { $ws->send_text('after Close') }, qr/Cannot send on closed WebSocket/, 'send_text after close croaks';
+    like dies { $ws->send_bytes("\x00") }, qr/Cannot send on closed WebSocket/, 'send_bytes after close croaks';
+    $ws->complete_close;
+};
+
 subtest 'close_incomplete requires peer Close without mutating a pending scope' => sub {
     my %slot;
     my $ws = PAGI::Test::Client->new(app => ws_app(\%slot, 1))->websocket('/', close_mode => 'manual');

@@ -203,7 +203,9 @@ sub _wake_pending_receives {
 sub send_text {
     my ($self, $text) = @_;
 
-    croak "Cannot send on closed WebSocket" if $self->{closed};
+    # After the test peer's own Close it sends no data (RFC 6455 5.5.1), even
+    # while manual close mode holds the transport open.
+    croak "Cannot send on closed WebSocket" if $self->{closed} || $self->{_peer_close};
 
     push @{$self->{send_queue}}, {
         type => 'websocket.receive',
@@ -219,7 +221,9 @@ sub send_text {
 sub send_bytes {
     my ($self, $bytes) = @_;
 
-    croak "Cannot send on closed WebSocket" if $self->{closed};
+    # After the test peer's own Close it sends no data (RFC 6455 5.5.1), even
+    # while manual close mode holds the transport open.
+    croak "Cannot send on closed WebSocket" if $self->{closed} || $self->{_peer_close};
 
     push @{$self->{send_queue}}, {
         type => 'websocket.receive',
@@ -476,13 +480,16 @@ directly; use L<PAGI::Test::Client>'s C<websocket> method instead.
 
     $ws->send_text('Hello, server!');
 
-Sends a text message to the WebSocket application.
+Sends a text message to the WebSocket application. Croaks once the test
+has closed the connection with L</close>, even while C<manual> close mode
+holds the transport open: a peer sends no data after its Close.
 
 =head2 send_bytes
 
     $ws->send_bytes("\x00\x01\x02\x03");
 
-Sends a binary message to the WebSocket application.
+Sends a binary message to the WebSocket application. Croaks after L</close>,
+as L</send_text> does.
 
 =head2 send_json
 
