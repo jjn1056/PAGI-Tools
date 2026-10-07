@@ -222,10 +222,13 @@ sub wrap {
                 my $label = ($scope->{type} // 'http') eq 'websocket' ? 'WebSocket'
                           : ($scope->{type} // 'http') eq 'sse'       ? 'SSE'
                           : 'HTTP';
+                # An SSE client cannot announce that it is leaving, so a
+                # stream the client left (a closed tab) is its ordinary end:
+                # nothing to tell the developer.
                 $self->_note(
                     "$label app stopped after the connection disconnected abnormally ($reason); "
                   . "omitting its remaining terminal event is correct."
-                );
+                ) unless $label eq 'SSE' && ($reason // '') eq 'client_closed';
             } elsif (defined $diag && $diag eq 'no_start') {
                 $self->_warn(
                     "HTTP app completed without sending http.response.start. "
@@ -575,6 +578,10 @@ gone, so an "incomplete" response here is correct, not a bug.
 disconnect reason, so the signal isn't lost -- and, like Lint's own
 complementary checks (see L</Division of labor>), this note is never
 fatal, even in strict mode.
+
+=item * The one exception is an SSE stream the client left (reason
+C<client_closed>): a client cannot announce that it is leaving an SSE
+stream, so that is the stream's ordinary end and is not noted.
 
 =back
 

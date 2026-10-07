@@ -120,6 +120,10 @@
   - PAGI::Test::Client: a WebSocket or SSE application that fails after
     accepting or starting -- an on_close failure included -- fails the
     test, as an HTTP application's does; it used to pass silently.
+  - PAGI::Middleware::Lint no longer notes an SSE stream the client left
+    (client_closed, a closed tab): a client cannot announce that it is
+    leaving, so that is the stream's ordinary end. Other abnormal ends,
+    and WebSocket and HTTP disconnects, are still noted.
 
   [Breaking -- see UPGRADING.md]
   - PAGI::App::Router and PAGI::Endpoint::Router are removed; PAGI::Routing

@@ -584,4 +584,20 @@ subtest 'clean peer-first protocol terminal facts satisfy completion' => sub {
     }
 };
 
+subtest 'an SSE stream the client left needs no note; other abnormal ends do' => sub {
+    my $start = { type => 'sse.start', status => 200, headers => [] };
+    my ($left) = lint_protocol_app(sse => [$start], connected => 0, reason => 'client_closed');
+    is $left, [], 'a client leaving is how an SSE stream normally ends: nothing to note';
+
+    my ($timeout) = lint_protocol_app(sse => [$start], connected => 0, reason => 'write_timeout');
+    like join('', @$timeout),
+        qr/SSE app stopped after the connection disconnected abnormally \(write_timeout\)/,
+        'an SSE stream that ended for another reason is still noted';
+
+    my ($ws) = lint_protocol_app(websocket => [{ type => 'websocket.accept' }],
+        connected => 0, reason => 'client_closed');
+    like join('', @$ws), qr/WebSocket app stopped after the connection disconnected abnormally \(client_closed\)/,
+        'a WebSocket the client dropped is still noted';
+};
+
 done_testing;
