@@ -1563,6 +1563,10 @@ failure is reported nowhere. For a helper never started, C<finished> does
 not wait for the scope to end, since that end waits for the application;
 its C<on_close> callbacks then run after the application returns.
 
+If the handler dies, C<finished> is not reached: the call fails, and the
+server then ends the scope as C<server_error>. The C<on_close> callbacks still
+run, but outside the call, so a server shutting down does not wait for them.
+
 =head2 on_error
 
     $sse->on_error(sub {
