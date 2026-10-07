@@ -10,6 +10,7 @@ use PAGI::Compose qw(compose);
 use PAGI::Routing qw(websocket sse);
 use PAGI::Endpoint::WebSocket;
 use PAGI::Endpoint::SSE;
+use PAGI::Test::Client;
 
 # Each wrapper that runs a helper handler ends its call only after the scope
 # has ended and the helper's on_close cleanup has finished.
@@ -80,5 +81,24 @@ for my $wrapper (@wrappers) {
         ok($call->is_ready, 'the call completes');
     };
 }
+
+subtest "a routed call under the test kit's manual close mode waits for the handshake" => sub {
+    my %state;
+    my $app = compose(routes => [ websocket('/x' => async sub {
+        my ($ws) = @_;
+        $ws->on_close(sub { $state{cleaned}++; return });
+        await $ws->accept;
+        await $ws->close;
+        $state{handler_returned} = 1;
+    }) ])->to_app;
+    my $ws = PAGI::Test::Client->new(app => $app)->websocket('/x', close_mode => 'manual');
+    ok($state{handler_returned}, 'the handler returned after sending its Close');
+    ok(!$state{cleaned}, 'on_close waits for the closing handshake');
+    ok(!$ws->{app_future}->is_ready, "the route's call waits for it too");
+    $ws->close;            # the peer answers the Close
+    $ws->complete_close;   # and the transport completes
+    is($state{cleaned}, 1, 'then on_close runs');
+    ok($ws->{app_future}->is_done, "and the route's call completes");
+};
 
 done_testing;

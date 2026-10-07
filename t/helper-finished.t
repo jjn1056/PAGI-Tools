@@ -145,4 +145,11 @@ subtest "a failing close() is the caller's, not finished's" => sub {
     ok($ws->finished->is_done, 'finished does not repeat it');
 };
 
+subtest 'an SSE helper built after its scope ended still finishes' => sub {
+    my $scope = sse_scope();
+    $scope->{'pagi.connection'}->_mark_disconnected('client_closed');
+    my $sse = PAGI::SSE->new($scope, sub { Future->new }, sub { Future->done });
+    ok($sse->finished->is_done, 'done');
+};
+
 done_testing;
