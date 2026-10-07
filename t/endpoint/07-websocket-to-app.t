@@ -110,6 +110,8 @@ subtest 'app reuses only a compatible exact-scope WebSocket cache' => sub {
     ) {
         subtest $case => sub {
             my $scope = ws_scope(path => '/ws');
+            # A same-scope helper shares the scope's own receive channel.
+            my $receive = receive_from($scope, { type => 'websocket.disconnect', code => 1000 });
             my $parent_scope = ws_scope(path => '/parent');
             my $parent = PAGI::WebSocket->new(
                 $parent_scope, sub { Future->done }, sub { Future->done },
@@ -121,15 +123,13 @@ subtest 'app reuses only a compatible exact-scope WebSocket cache' => sub {
                     : $case eq 'throwing scope'
                         ? Local::DyingWebSocketCache->new
                         : PAGI::WebSocket->new(
-                            $scope, sub { Future->done }, sub { Future->done },
+                            $scope, $receive, sub { Future->done },
                         );
             $scope->{'pagi.websocket'} = $cached;
             $CacheAwareEndpoint::seen = undef;
 
             CacheAwareEndpoint->to_app->(
-                $scope,
-                receive_from($scope, { type => 'websocket.disconnect', code => 1000 }),
-                sub { Future->done },
+                $scope, $receive, sub { Future->done },
             )->get;
 
             isa_ok($CacheAwareEndpoint::seen, ['PAGI::WebSocket'],

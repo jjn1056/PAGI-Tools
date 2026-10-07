@@ -53,7 +53,8 @@ for my $kind (qw(websocket sse)) {
                     : ("$kind." . ($kind eq 'websocket' ? 'accept' : 'start'), ($outcome eq 'active' || $outcome eq 'explicit' ? "$kind.close" : ()));
                 is(\@events, \@expected, 'boundary sends only missing terminal event');
                 if ($outcome eq 'failure') { like($future->failure, qr/handler failed/, 'handler exception preserved'); }
-                elsif ($kind eq 'websocket' || $outcome !~ /active|explicit/) { ok($future->is_ready, 'boundary returns without awaiting peer'); }
+                elsif ($outcome =~ /active|explicit/) { ok(!$future->is_ready, 'boundary waits for the closing handshake'); }
+                else { ok($future->is_ready, 'boundary returns without awaiting peer'); }
                 $conn->_set_peer_close(1001, 'peer') if $kind eq 'websocket';
                 $conn->_mark_complete;
                 ok($future->is_ready, 'operation settles after terminal notification');

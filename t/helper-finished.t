@@ -60,6 +60,19 @@ for my $case (@cases) {
     };
 }
 
+for my $case (@cases) {
+    my ($class, $build) = @$case;
+    subtest "$class: finished means the connection is over, even with no on_close" => sub {
+        my ($h, $scope) = $build->();
+        my $closing = $h->close;
+        my $finished = $h->finished;
+        ok(!$finished->is_ready, 'not after the application closes, while the scope is open');
+        $scope->{'pagi.connection'}->_mark_complete;
+        ok($finished->is_done, 'done once the scope has ended');
+        ok($closing->is_ready, 'and the close completed');
+    };
+}
+
 subtest 'PAGI::SSE: an on_close failure does not fail close() or run()' => sub {
     my ($sse, $scope) = $cases[1][1]->();
     $sse->on_close(sub { die "cleanup broke\n" });

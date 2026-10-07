@@ -336,23 +336,16 @@ async sub _close_callbacks_worker {
     return;
 }
 
-# Resolves to the helper once all the work it started has settled -- its
-# on_close callbacks included, which run when the scope ends; fails with the
+# Resolves to the helper once its scope has ended and all the work it
+# started -- its on_close callbacks included -- has settled; fails with the
 # first on_close failure.
 async sub finished {
     my ($self) = @_;
-    # on_close callbacks run when the scope ends, so wait for that end when
-    # some are still to run -- unless the scope was never accepted (or
-    # started): that end waits for the application, the caller itself.
-    await $self->{_ended}->without_cancel
-        if $self->_close_callbacks_pending && $self->_ends_without_application;
+    # A scope never accepted (or started) ends only when the application
+    # returns, so waiting for its end would wait for the caller itself.
+    await $self->{_ended}->without_cancel if $self->_ends_without_application;
     await $self->{_owner}->settled;
     return $self;
-}
-
-sub _close_callbacks_pending {
-    my ($self) = @_;
-    return !$self->{_close_callbacks_ran} && @{ $self->{_on_close} };
 }
 
 sub _ends_without_application {
@@ -1457,10 +1450,8 @@ background receive watcher.
 
     await $ws->finished;
 
-Resolves to C<$ws> once everything the helper started has settled: its
-C<close>, its best-effort sends, and its C<on_close> callbacks. Those run when
-the scope ends, so while any are registered C<finished> also waits for that
-end; a helper with no C<on_close> callbacks has nothing to wait for there. It
+Resolves to C<$ws> once the scope has ended and everything the helper started
+-- its C<on_close> callbacks, a C<close>, best-effort sends -- has settled. It
 fails with the first C<on_close> failure. Routes and
 L<PAGI::Endpoint::WebSocket> await it for you, so their call ends only after the
 cleanup has finished, and a shutting-down server waits for it. An application
