@@ -10,6 +10,7 @@ use Future;
 use JSON::MaybeXS ();
 use PAGI::Headers ();
 use PAGI::Common ();
+use PAGI::FutureOwner;
 use Scalar::Util qw(blessed);
 
 
@@ -49,13 +50,14 @@ sub new {
     Scalar::Util::weaken($scope->{'pagi.websocket'});
 
     $self->{_cleanup_future} = Future->new;
-    # The connection owns this helper until end; the retained worker then
-    # owns asynchronous cleanup until all registered hooks have settled.
+    $self->{_owner} = PAGI::FutureOwner->new;
+    $self->{_ended} = Future->new;
+    # The connection owns this helper until end. Cleanup then belongs to the
+    # helper's owner, so whoever awaits finished waits for it too.
     $scope->{'pagi.connection'}->on_end(sub {
         $self->_refresh_connection;
-        # Nobody awaits cleanup here, so keep its Future until it settles
-        # rather than dropping it while a hook is still suspended.
-        $self->_run_close_callbacks->retain;
+        $self->_start_close_callbacks;
+        $self->{_ended}->done;
         return;
     });
     $self->_refresh_connection;
@@ -296,34 +298,58 @@ sub on_close {
     return $self;
 }
 
-# Internal: run all on_close callbacks exactly once
+# Internal: run all on_close callbacks exactly once, as work the helper owns
 sub _run_close_callbacks {
     my ($self) = @_;
-    my $completion = $self->{_cleanup_future};
-    return $completion->without_cancel if $self->{_close_callbacks_ran};
+    $self->_start_close_callbacks;
+    return $self->{_cleanup_future}->without_cancel;
+}
+
+sub _start_close_callbacks {
+    my ($self) = @_;
+    return if $self->{_close_callbacks_ran};
     $self->{_close_callbacks_ran} = 1;
-    my $worker = $self->_close_callbacks_worker;
-    $worker->on_ready(sub {
-        my ($ready) = @_;
-        $ready->is_failed ? $completion->fail($ready->failure) : $completion->done;
-    });
-    $worker->retain;
-    return $completion->without_cancel;
+    my $completion = $self->{_cleanup_future};
+    my $worker = $self->{_owner}->adopt($self->_close_callbacks_worker);
+    # The cleanup Future means the callbacks have run; a callback's failure
+    # is reported once, through finished.
+    $worker->on_ready(sub { $completion->done unless $completion->is_ready });
+    return;
 }
 
 async sub _close_callbacks_worker {
     my ($self) = @_;
+    my @failures;
     for my $cb (@{$self->{_on_close}}) {
-        eval {
+        my $ok = eval {
             my $result = $cb->($self->close_code, $self->close_reason, $self->disconnect_detail);
             await $result if blessed($result) && $result->isa('Future');
+            1;
         };
-        warn "PAGI::WebSocket on_close callback error: $@" if $@;
+        push @failures, $@ unless $ok;
     }
     $self->{_on_close} = [];
     $self->{_on_error} = [];
     $self->{_on_message} = [];
+    # Every callback has run; the first failure is the helper's to report.
+    die $failures[0] if @failures;
     return;
+}
+
+# Resolves to the helper once its scope has ended and all the work it
+# started has settled; fails with the first on_close failure.
+async sub finished {
+    my ($self) = @_;
+    # A scope never accepted (or started) ends only when the application
+    # returns, so waiting for its end would wait for the caller itself.
+    await $self->{_ended}->without_cancel if $self->_ends_without_application;
+    await $self->{_owner}->settled;
+    return $self;
+}
+
+sub _ends_without_application {
+    my ($self) = @_;
+    return $self->connection_state ne 'connecting';
 }
 
 # Internal: a disconnect event arrived off the wire. The connection already
@@ -1381,8 +1407,9 @@ reason is available through C<disconnect_reason>. Register before awaited I/O:
 registration after cleanup has begun (including constructor-time terminal
 notification) croaks. A local C<close> request alone does not start cleanup.
 Callbacks can be regular subs or async subs — async results are
-automatically awaited. Multiple callbacks run in registration order.
-Exceptions are caught and warned but don't prevent other callbacks.
+automatically awaited. Multiple callbacks run in registration order. A
+callback that dies does not stop the others; once all have run, the first
+failure is reported through L</finished>.
 
 Returns C<$self> for chaining.
 
@@ -1394,10 +1421,25 @@ closure, use C<Scalar::Util::weaken> to avoid a memory leak:
     weaken($weak_ws);
     $ws->on_close(sub { $weak_ws->... if $weak_ws });
 
-The connection retains the helper until terminal notification. One retained
-worker runs all hooks in order, survives handler return and cancellation of
-cleanup observers, and releases hooks and helper references when cleanup
-finishes. There is no background receive watcher.
+The connection retains the helper until terminal notification. The helper's
+own L<PAGI::FutureOwner> then holds the worker that runs all hooks in order;
+it survives handler return and cancellation of cleanup observers, and
+releases hooks and helper references when cleanup finishes. There is no
+background receive watcher.
+
+=head2 finished
+
+    await $ws->finished;
+
+Resolves to C<$ws> once the scope has ended and everything the helper started
+-- its C<on_close> callbacks, a C<close>, best-effort sends -- has settled. It
+fails with the first C<on_close> failure. Routes and
+L<PAGI::Endpoint::WebSocket> await it for you, so their call ends only after the
+cleanup has finished, and a shutting-down server waits for it. An application
+that constructs the helper itself should C<await $ws-E<gt>finished> before it
+returns; otherwise its cleanup is not part of its call, and an C<on_close>
+failure is reported nowhere. For a helper never accepted, C<finished> does
+not wait for the scope to end, since that end waits for the application.
 
 =head2 on_error
 
