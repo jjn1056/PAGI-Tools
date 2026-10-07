@@ -220,7 +220,19 @@ sub receive_json {
 
 sub close {
     my ($self, $reason) = @_;
-    return $self->_transport_closed(reason => $reason // 'client_closed');
+    $self->_transport_closed(reason => $reason // 'client_closed');
+    return $self->_raise_app_failure;
+}
+
+# The application's failure after the socket was accepted (or the stream
+# started), raised once where the test ends the interaction -- the test
+# client stands in for the server, which would report it.
+sub _raise_app_failure {
+    my ($self) = @_;
+    my $app = $self->{app_future};
+    return $self unless $app && $app->is_ready && $app->is_failed;
+    return $self if $self->{_app_failure_raised}++;
+    $app->get;
 }
 
 sub _transport_closed {
@@ -428,6 +440,9 @@ C<sse.disconnect> (carrying this reason, default C<client_closed>) to the
 application on pending and later receives -- whether the app is already waiting on
 C<receive> or calls it later. Idempotent: a second C<close> call is a
 no-op.
+
+It dies with the application's failure if it has failed after starting the
+stream (see L<PAGI::Test::Client/sse>); that is raised once.
 
 =head2 is_closed
 
