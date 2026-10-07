@@ -60,8 +60,9 @@ sub receive_from {
 # Returns a send coderef that pushes each event onto @$sent and records on the
 # scope's connection what a server records: websocket.accept and sse.start
 # start the response, sse.close completes it, and an HTTP refusal completes
-# with its final body. An application's websocket.close changes nothing: the
-# server waits for the peer to answer it.
+# with its final body. An application's websocket.close is answered at once,
+# as a cooperative peer does (PAGI::Test::WebSocket's default close_mode), so
+# the closing handshake completes.
 sub send_to {
     my ($scope, $sent) = @_;
     my $connection = $scope->{'pagi.connection'};
@@ -75,6 +76,10 @@ sub send_to {
         }
         elsif ($type eq 'sse.close'
             || ($type eq 'http.response.body' && !$event->{more})) {
+            $connection->_mark_complete;
+        }
+        elsif ($type eq 'websocket.close' && $connection->is_connected) {
+            $connection->_set_peer_close($event->{code} // 1000, $event->{reason} // '');
             $connection->_mark_complete;
         }
         return Future->done;

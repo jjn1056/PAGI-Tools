@@ -5,7 +5,7 @@
 # Demonstrates different patterns for running work after sending a response.
 #
 # IMPORTANT: Understand the difference between:
-#   1. Async I/O (non-blocking) - Use fire-and-forget Futures with on_fail + retain
+#   1. Async I/O (non-blocking) - hand the Future to a PAGI::FutureOwner
 #   2. Blocking/CPU work - Use IO::Async::Function (runs in subprocess)
 #
 # Every route is an ordinary handler: it starts its background work, then
@@ -26,8 +26,15 @@ use Future::AsyncAwait;
 use Future::IO;    # pagi-server binds the implementation
 
 use PAGI::Compose qw(compose);
+use PAGI::FutureOwner;
 use PAGI::Routing qw(route websocket);
 use PAGI::Response qw(response);
+
+# Work the client does not wait for belongs to $background, which reports
+# failures and lets shutdown wait for it.
+my $background = PAGI::FutureOwner->new(
+    on_failure => sub { warn "Background task failed: $_[0]" },
+);
 
 #---------------------------------------------------------
 # PATTERN 1: Async I/O (Non-Blocking)
@@ -36,8 +43,7 @@ use PAGI::Response qw(response);
 # async libraries. These yield control back to the event
 # loop while waiting, so they don't block other requests.
 #
-# IMPORTANT: Always add ->on_fail() before ->retain() on fire-and-forget
-# Futures. Bare retain() silently swallows errors!
+# Hand each one to $background rather than dropping it.
 #---------------------------------------------------------
 
 # Simulated async email API (would use async HTTP client in practice)
@@ -58,16 +64,6 @@ async sub log_to_analytics {
     warn "[async] Logging '$event' to analytics...\n";
     await Future::IO->sleep(1);
     warn "[async] Analytics logged!\n";
-}
-
-# Helper to fire-and-forget an async sub properly
-sub fire_and_forget {
-    my ($future) = @_;
-    # on_fail() logs errors, retain() keeps future alive
-    $future->on_fail(sub {
-        my ($error) = @_;
-        warn "Background task failed: $error\n";
-    })->retain();
 }
 
 #---------------------------------------------------------
@@ -110,11 +106,7 @@ sub run_blocking_task {
         my ($result) = @_;
         warn "[main] Subprocess returned: $result\n";
     });
-    $f->on_fail(sub {
-        my ($error) = @_;
-        warn "[main] Subprocess error: $error\n";
-    });
-    $f->retain();
+    $background->adopt($f);
 }
 
 #---------------------------------------------------------
@@ -144,9 +136,9 @@ sub quick_sync_task {
 sub async_tasks {
     my ($request) = @_;
 
-    # Fire-and-forget with error logging (on_fail + retain pattern)
-    fire_and_forget(send_welcome_email('user@example.com'));
-    fire_and_forget(log_to_analytics('page_view', { path => '/' }));
+    # Not awaited: $background owns it.
+    $background->adopt(send_welcome_email('user@example.com'));
+    $background->adopt(log_to_analytics('page_view', { path => '/' }));
 
     quick_sync_task("Logging request");
 
@@ -178,8 +170,8 @@ async sub signup {
     my $email = $data->{email} // 'unknown@example.com';
 
     # The user does not wait for the email: it is sent in the background.
-    fire_and_forget(send_welcome_email($email));
-    fire_and_forget(log_to_analytics('signup', { email => $email }));
+    $background->adopt(send_welcome_email($email));
+    $background->adopt(log_to_analytics('signup', { email => $email }));
 
     quick_sync_task("New signup: $email");
 
@@ -205,8 +197,8 @@ async sub messages {
         # The reply is part of the conversation, so it is awaited.
         await $ws->try_send_text("Got: $text");
 
-        # Background work is not: fire-and-forget (on_fail + retain).
-        fire_and_forget(log_to_analytics('ws_message', { text => $text }));
+        # Background work is not awaited: $background owns it.
+        $background->adopt(log_to_analytics('ws_message', { text => $text }));
 
         # For CPU-intensive processing (e.g., NLP, image analysis):
         # run_blocking_task("analyze_message", 1);
@@ -259,4 +251,7 @@ route('/async'    => \&async_tasks),
 route('/blocking' => \&blocking_tasks),
 route('/signup'   => \&signup, methods => ['POST']),
 websocket('/ws'   => \&messages),
-]);
+], lifespan => {
+    # Work still running finishes before the process exits.
+    shutdown => async sub { await $background->settled },
+});

@@ -2502,19 +2502,25 @@ authoritative terminal source.
 
 Web requests should respond quickly. Long-running work should be done in the background.
 
-=head2 Fire-and-Forget Async I/O
+=head2 Background Work the Client Does Not Wait For
 
-For non-blocking operations (async HTTP calls, async database queries),
-use C<< ->on_fail() >> to handle errors, then C<< ->retain() >> to prevent
-"lost future" warnings:
+Work a handler starts and does not await -- an email, an analytics call --
+still needs an owner: something that keeps it alive, hears when it fails,
+and lets shutdown wait for it. L<PAGI::FutureOwner> is that owner:
 
   use strict;
   use warnings;
   use Future::AsyncAwait;
   use Future::IO;
   use PAGI::Compose qw(compose);
+  use PAGI::FutureOwner;
   use PAGI::Response qw(response);
   use PAGI::Routing qw(route);
+
+  # Each failure is reported as it happens.
+  my $background = PAGI::FutureOwner->new(
+      on_failure => sub { warn "Background task failed: $_[0]" },
+  );
 
   # Simulated async email service
   async sub send_welcome_email {
@@ -2524,23 +2530,23 @@ use C<< ->on_fail() >> to handle errors, then C<< ->retain() >> to prevent
       warn "Email sent to $email\n";
   }
 
-  my $app = compose(routes => [
-  route('/signup' => sub {
-      my ($request) = @_;
+  my $app = compose(
+      routes => [
+          route('/signup' => sub {
+              my ($request) = @_;
+              # Started now; the client does not wait for it.
+              $background->adopt(send_welcome_email('user@example.com'));
+              return response('JSON', { status => 'created' }, status => 201);
+          }, methods => ['POST']),
+      ],
+      lifespan => {
+          # Emails still being sent finish before the process exits.
+          shutdown => async sub { await $background->settled },
+      },
+  )->to_app;
 
-      # Fire-and-forget: scheduled now, without making the client wait.
-      # Always add on_fail() before retain()
-      # to avoid silently swallowing errors.
-      send_welcome_email('user@example.com')
-          ->on_fail(sub { warn "Email send failed: @_" })
-          ->retain();
-
-      return response('JSON', { status => 'created' }, status => 201);
-  }, methods => ['POST']),
-  ])->to_app;
-
-B<Warning:> C<< ->retain() >> alone silently swallows errors - always add
-C<< ->on_fail() >> first.
+Do not drop such a Future, and do not C<< ->retain >> it: a retained Future
+belongs to nobody, so nothing can wait for it and its failure is lost.
 
 B<Middleware authors:> If your middleware inherits from L<IO::Async::Notifier>,
 use C<< $self->adopt_future($f) >> instead. It properly tracks futures and
@@ -2559,10 +2565,16 @@ For blocking or CPU-intensive work, use L<IO::Async::Function> to run in a child
   use IO::Async::Function;
   use IO::Async::Loop;
   use PAGI::Compose qw(compose);
+  use PAGI::FutureOwner;
   use PAGI::Response qw(response);
   use PAGI::Routing qw(route);
 
   my $loop = IO::Async::Loop->new;
+
+  # Owns work started for a client that does not wait for it (Option B).
+  my $background = PAGI::FutureOwner->new(
+      on_failure => sub { warn "PDF failed: $_[0]" },
+  );
 
   # Worker runs code in subprocess
   my $pdf_worker = IO::Async::Function->new(
@@ -2587,8 +2599,7 @@ For blocking or CPU-intensive work, use L<IO::Async::Function> to run in a child
       # Option B: start the work, then return immediately
       # my $f = $pdf_worker->call(args => ['report']);
       # $f->on_done(sub { warn "PDF ready: $_[0]\n" });
-      # $f->on_fail(sub { warn "PDF failed: $_[0]\n" });
-      # $f->retain();
+      # $background->adopt($f);
       # return response('JSON', { status => 'processing' }, status => 202);
   }, methods => ['POST']),
   ])->to_app;

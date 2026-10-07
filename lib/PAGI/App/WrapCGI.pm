@@ -159,8 +159,12 @@ sub to_app {
             = await _read_head($stdout, $ends);
         if ($outcome ne 'head') {
             _stop($pid, $exited);
-            $_->retain for $exited, $feeding;
-            return await $self->_refuse($scope, $receive, $send, $outcome);
+            # The refusal goes out at once, but the request owns the script
+            # until it is reaped and its input is no longer being written --
+            # even when the refusal itself fails.
+            my $refusing = $self->_refuse($scope, $receive, $send, $outcome);
+            await Future->wait_all($refusing, $exited, $feeding);
+            return $refusing->get;
         }
 
         # The script may still be running when its output is no longer
@@ -345,14 +349,15 @@ async sub _read_head {
 
 sub _remaining { my ($ends) = @_; my $left = $ends - Time::HiRes::time(); return $left > 0 ? $left : 0 }
 
-# Asks a running script to stop: TERM now, KILL after a grace period.
+# Asks a running script to stop: TERM now, KILL after a grace period. The
+# script's exit, which the request awaits, holds the escalation until then.
 sub _stop {
     my ($pid, $exited) = @_;
     return if $exited->is_ready;
     kill 'TERM', $pid;
-    Future::IO->sleep($KILL_GRACE)
-        ->on_done(sub { kill 'KILL', $pid unless $exited->is_ready })
-        ->retain;
+    my $escalation = Future::IO->sleep($KILL_GRACE)
+        ->on_done(sub { kill 'KILL', $pid unless $exited->is_ready });
+    $exited->on_ready(sub { $escalation->cancel unless $escalation->is_ready });
     return;
 }
 

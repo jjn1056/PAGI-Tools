@@ -358,8 +358,8 @@ subtest 'on_disconnect Future is awaited by cleanup' => sub {
         receive_from($scope, { type => 'websocket.disconnect', code => 1000 }),
         sub { Future->done },
     );
-    ok($running->is_ready,
-        'the endpoint returns while connection-end cleanup continues');
+    ok(!$running->is_ready,
+        'the endpoint call waits while connection-end cleanup continues');
     is($SynchronousDisconnectEndpoint::called, 1, 'disconnect hook was called');
     ok(!$SynchronousDisconnectEndpoint::returned->is_ready,
         'disconnect return Future is pending');
@@ -368,6 +368,7 @@ subtest 'on_disconnect Future is awaited by cleanup' => sub {
     $SynchronousDisconnectEndpoint::returned->done;
     is($SynchronousDisconnectEndpoint::later_cleanup, 1,
         'cleanup continues after disconnect hook settles');
+    ok($running->is_ready, 'then the endpoint call completes');
     is($running->get, undef, 'endpoint completes cleanly');
 };
 

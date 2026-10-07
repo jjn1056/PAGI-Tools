@@ -752,6 +752,9 @@ L<PAGI::WebSocket> simplifies WebSocket connections:
 
   await $ws->close(1000, 'Goodbye');
 
+Built this way, by hand, the handler ends with C<await $ws-E<gt>finished>, so
+its C<on_close> cleanup is part of its call.
+
 Before C<accept>, a concrete Response or another application can deny the
 handshake:
 
@@ -803,6 +806,9 @@ L<PAGI::SSE> simplifies Server-Sent Events:
 
   # Wait for disconnect
   await $sse->run;
+
+Built this way, by hand, the handler ends with C<await $sse-E<gt>finished>, so
+its C<on_close> cleanup is part of its call.
 
 Before C<start>, decline with the same Response vocabulary:
 

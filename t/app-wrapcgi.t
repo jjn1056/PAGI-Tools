@@ -165,9 +165,48 @@ subtest 'timeout before the headers: 504, and the script is killed' => sub {
     is $body, 'CGI script timed out', 'plain text';
     ok time - $started < 5, 'answered at the timeout, not when the script finished';
     my $pid = do { open my $fh, '<', $pidfile or die $!; <$fh> };
-    my $gone = 0;
-    for (1 .. 50) { $loop->delay_future(after => 0.1)->get; $gone = 1, last unless kill 0, $pid }
-    ok $gone, 'the script process is gone';
+    ok !(kill 0, $pid), 'the script is reaped by the time the request completes';
+};
+
+subtest 'a script that ignores TERM is killed, and the request waits for it' => sub {
+    my $pidfile = "$tmp/stubborn.pid";
+    my $started = time;
+    my ($status) = run_cgi(
+        scope => { query => "mode=stubborn&pidfile=$pidfile" }, options => { timeout => 1 });
+    my $took = time - $started;
+    is $status, 504, '504 at the timeout';
+    ok $took >= 2.5 && $took < 8, sprintf('the request completed after KILL (%.1fs)', $took);
+    my $pid = do { open my $fh, '<', $pidfile or die $!; <$fh> };
+    ok !(kill 0, $pid), 'and the script is reaped';
+};
+
+subtest 'a refusal that dies still waits for the script and its input' => sub {
+    my $pidfile = "$tmp/refuse-dies.pid";
+    my $app = PAGI::App::WrapCGI->new(
+        script => $script, timeout => 1, refuse => sub { die "refusal broke\n" },
+    )->to_app;
+    # The body is still uploading when the script is refused; the client goes
+    # away a little later.
+    my $calls = 0;
+    my $receive = async sub {
+        return { type => 'http.request', body => 'x' x 10, more => 1 } unless $calls++;
+        await $loop->delay_future(after => 1.5);
+        return { type => 'http.disconnect' };
+    };
+    my @warnings;
+    local $SIG{__WARN__} = sub { push @warnings, @_ };
+    my $started = time;
+    my $done = $app->(scope_for(
+        method => 'POST', query => "mode=stubborn&pidfile=$pidfile",
+        headers => [['content-length', '100']],
+    ), $receive, async sub { });
+    $loop->await($done);
+    my $took = time - $started;
+    like scalar($done->failure), qr/refusal broke/, "the refusal's failure is the call's";
+    ok $took >= 2.5, sprintf('reported once the script was killed (%.1fs)', $took);
+    my $pid = do { open my $fh, '<', $pidfile or die $!; <$fh> };
+    ok !(kill 0, $pid), 'and reaped';
+    is \@warnings, [], 'no Future is lost';
 };
 
 subtest 'timeout after the body started: the stream is cut off' => sub {

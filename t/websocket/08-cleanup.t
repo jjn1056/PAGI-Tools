@@ -145,8 +145,10 @@ subtest 'on_close exception does not prevent other callbacks' => sub {
     $ws->receive->get;
 
     ok($second_ran, 'second callback ran despite first dying');
-    ok scalar @warnings, 'exception in on_close callback was warned';
-    like $warnings[0], qr/First callback error/, 'warning contains error text';
+    is(\@warnings, [], 'nothing is warned');
+    my $finished = $ws->finished;
+    ok($finished->is_failed, 'finished reports the failure');
+    like(scalar $finished->failure, qr/First callback error/, 'the first callback error');
 };
 
 subtest 'on_close works with sync callbacks' => sub {

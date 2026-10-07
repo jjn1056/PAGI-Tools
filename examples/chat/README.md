@@ -68,7 +68,10 @@ compose(
 
 No event loop is named in application code. The one timer the application
 needs, the grace period before announcing that a disconnected user left, is a
-`Future::IO->sleep`; `pagi-server` binds the Future::IO implementation.
+`Future::IO->sleep`; `pagi-server` binds the Future::IO implementation. When
+the server shuts down, `on_close` sees `$ws->disconnect_reason` is
+`server_shutdown` and skips the grace period: nobody remains to hear "user
+left".
 
 ```
 examples/chat/

@@ -9,6 +9,7 @@ use Future;
 use JSON::MaybeXS ();
 use PAGI::Headers ();
 use PAGI::Common ();
+use PAGI::FutureOwner;
 use Scalar::Util qw(blessed);
 use Encode qw(decode FB_CROAK FB_DEFAULT LEAVE_SRC);
 
@@ -47,13 +48,14 @@ sub new {
     Scalar::Util::weaken($scope->{'pagi.sse'});
 
     $self->{_cleanup_future} = Future->new;
-    # The connection owns this helper until end; the retained worker then
-    # owns asynchronous cleanup until all registered hooks have settled.
+    $self->{_owner} = PAGI::FutureOwner->new;
+    $self->{_ended} = Future->new;
+    # The connection owns this helper until end. Cleanup then belongs to the
+    # helper's owner, so whoever awaits finished waits for it too.
     $scope->{'pagi.connection'}->on_end(sub {
         $self->_refresh_connection;
-        # Nobody awaits cleanup here, so keep its Future until it settles
-        # rather than dropping it while a hook is still suspended.
-        $self->_run_close_callbacks->retain;
+        $self->_start_close_callbacks;
+        $self->{_ended}->done;
         return;
     });
     $self->_refresh_connection;
@@ -479,9 +481,10 @@ async sub send_event {
 
 # Safe send - returns bool instead of throwing
 # Best-effort sends never throw, so broadcast loops may make one and drop
-# the Future. Each keeps itself alive until it settles, so a send waiting
-# its turn behind another still goes out and is not reported as lost.
-sub try_send { my $self = shift; return $self->_try_send(@_)->retain }
+# the Future. The helper keeps each until it settles, so a send waiting its
+# turn behind another still goes out and is not reported as lost, and
+# finished waits for it.
+sub try_send { my $self = shift; return $self->_keep($self->_try_send(@_)) }
 
 async sub _try_send {
     my ($self, $data) = @_;
@@ -501,7 +504,7 @@ async sub _try_send {
     return 1;
 }
 
-sub try_send_json { my $self = shift; return $self->_try_send_json(@_)->retain }
+sub try_send_json { my $self = shift; return $self->_keep($self->_try_send_json(@_)) }
 
 async sub _try_send_json {
     my ($self, $data) = @_;
@@ -539,7 +542,7 @@ async sub send_comment {
     return $self;
 }
 
-sub try_send_comment { my $self = shift; return $self->_try_send_comment(@_)->retain }
+sub try_send_comment { my $self = shift; return $self->_keep($self->_try_send_comment(@_)) }
 
 async sub _try_send_comment {
     my ($self, $comment) = @_;
@@ -559,7 +562,7 @@ async sub _try_send_comment {
     return 1;
 }
 
-sub try_send_event { my $self = shift; return $self->_try_send_event(@_)->retain }
+sub try_send_event { my $self = shift; return $self->_keep($self->_try_send_event(@_)) }
 
 async sub _try_send_event {
     my ($self, %opts) = @_;
@@ -636,33 +639,71 @@ sub on {
     }
 }
 
-# Internal: run all on_close callbacks
+# Internal: run all on_close callbacks exactly once, as work the helper owns
 sub _run_close_callbacks {
     my ($self) = @_;
-    my $completion = $self->{_cleanup_future};
-    return $completion->without_cancel if $self->{_close_callbacks_ran};
+    $self->_start_close_callbacks;
+    return $self->{_cleanup_future}->without_cancel;
+}
+
+sub _start_close_callbacks {
+    my ($self) = @_;
+    return if $self->{_close_callbacks_ran};
     $self->{_close_callbacks_ran} = 1;
-    my $worker = $self->_close_callbacks_worker;
-    $worker->on_ready(sub {
-        my ($ready) = @_;
-        $ready->is_failed ? $completion->fail($ready->failure) : $completion->done;
-    });
-    $worker->retain;
-    return $completion->without_cancel;
+    my $completion = $self->{_cleanup_future};
+    my $worker = $self->{_owner}->adopt($self->_close_callbacks_worker);
+    # The cleanup Future means the callbacks have run; a callback's failure
+    # is reported once, through finished.
+    $worker->on_ready(sub { $completion->done unless $completion->is_ready });
+    return;
 }
 
 async sub _close_callbacks_worker {
     my ($self) = @_;
+    my @failures;
     for my $cb (@{$self->{_on_close}}) {
-        eval {
+        my $ok = eval {
             my $result = $cb->($self, $self->disconnect_reason, $self->disconnect_detail);
             await $result if blessed($result) && $result->isa('Future');
+            1;
         };
-        warn "PAGI::SSE on_close callback error: $@" if $@;
+        push @failures, $@ unless $ok;
     }
     $self->{_on_close} = [];
     $self->{_on_error} = [];
+    # Every callback has run; the first failure is the helper's to report.
+    die $failures[0] if @failures;
     return;
+}
+
+# Resolves to the helper once its scope has ended and all the work it
+# started -- its on_close callbacks included -- has settled; fails with the
+# first on_close failure.
+async sub finished {
+    my ($self) = @_;
+    # A scope never accepted (or started) ends only when the application
+    # returns, so waiting for its end would wait for the caller itself.
+    await $self->{_ended}->without_cancel if $self->_ends_without_application;
+    await $self->{_owner}->settled;
+    return $self;
+}
+
+sub _ends_without_application {
+    my ($self) = @_;
+    return $self->connection_state ne 'pending';
+}
+
+# Keeps a Future the helper returned to its caller until it settles, so
+# finished waits for it. Its failure is the caller's to see: the owner keeps
+# only its completion. The callback also holds the caller's Future, so a
+# caller may drop it.
+sub _keep {
+    my ($self, $future) = @_;
+    my $completion = $future->else_done;
+    my $held = $future;
+    $completion->on_ready(sub { undef $held });
+    $self->{_owner}->adopt($completion);
+    return $future;
 }
 
 # Close the connection
@@ -671,12 +712,12 @@ sub close {
     return Future->done($self) if $self->_response_claimed_before_start;
     if ($self->{_close_callbacks_ran}) {
         return $self->{_close_send}
-            ? $self->{_close_send}->without_cancel->then(sub { Future->done($self) })->retain
+            ? $self->_keep($self->{_close_send}->without_cancel->then(sub { Future->done($self) }))
             : Future->done($self);
     }
-    return $self->{_close_operation}->without_cancel->then(sub { Future->done($self) })->retain
+    return $self->_keep($self->{_close_operation}->without_cancel->then(sub { Future->done($self) }))
         if $self->{_close_operation};
-    return $self->{_close_send}->without_cancel->then(sub { Future->done($self) })->retain
+    return $self->_keep($self->{_close_send}->without_cancel->then(sub { Future->done($self) }))
         if $self->{_close_send};
     return Future->done($self) if $self->is_closed;
     croak "SSE close requires an active accepted/started connection"
@@ -705,7 +746,7 @@ sub close {
     })->();
     $self->{_close_operation} = $operation;
     $operation->on_ready(sub { delete $self->{_close_operation} });
-    return $operation->without_cancel->then(sub { Future->done($self) })->retain;
+    return $self->_keep($operation->without_cancel->then(sub { Future->done($self) }));
 }
 
 # Wait until the connection ends. Disconnect is learned from the connection,
@@ -940,6 +981,10 @@ guaranteed singleton: if every strong reference is dropped the object may be
 garbage-collected, and a later C<new()> will build a fresh one with reset
 state. In normal use a handler keeps C<$sse> alive for the life of the
 connection, so this does not arise.
+
+An application that constructs the helper itself should
+C<await $sse-E<gt>finished> before it returns; see L</finished>. Routes and the
+Endpoint classes do this for you.
 
 =head1 SCOPE ACCESSORS
 
@@ -1467,8 +1512,9 @@ Registers cleanup for the connection's terminal C<on_end> notification.
 Register before awaited I/O. Registration after cleanup has started or
 finished (including constructor-time terminal notification) croaks.
 Callbacks can be regular subs or async subs — async results are
-automatically awaited. Multiple callbacks run in registration order.
-Exceptions are caught and warned but do not prevent other callbacks.
+automatically awaited. Multiple callbacks run in registration order. A
+callback that dies does not stop the others; once all have run, the first
+failure is reported through L</finished>.
 
 Callbacks receive three arguments:
 
@@ -1497,9 +1543,29 @@ it, use C<Scalar::Util::weaken>:
     weaken($weak_sse);
     $sse->on_close(sub { $weak_sse->... if $weak_sse });
 
-The connection retains the helper until terminal notification. A single
-retained worker then owns asynchronous hooks, surviving handler return until
-cleanup settles and releases the hooks and helper.
+The connection retains the helper until terminal notification. The helper's
+own L<PAGI::FutureOwner> then holds the single worker that runs the hooks,
+surviving handler return until cleanup settles and releases the hooks and
+helper.
+
+=head2 finished
+
+    await $sse->finished;
+
+Resolves to C<$sse> once the scope has ended and everything the helper started
+-- its C<on_close> callbacks, a C<close>, best-effort sends -- has settled. It
+fails with the first C<on_close> failure. Routes and
+L<PAGI::Endpoint::SSE> await it for you, so their call ends only after the
+cleanup has finished, and a shutting-down server waits for it. An application
+that constructs the helper itself should C<await $sse-E<gt>finished> before it
+returns; otherwise its cleanup is not part of its call, and an C<on_close>
+failure is reported nowhere. For a helper never started, C<finished> does
+not wait for the scope to end, since that end waits for the application;
+its C<on_close> callbacks then run after the application returns.
+
+If the handler dies, C<finished> is not reached: the call fails, and the
+server then ends the scope as C<server_error>. The C<on_close> callbacks still
+run, but outside the call, so a server shutting down does not wait for them.
 
 =head2 on_error
 
@@ -1586,6 +1652,7 @@ Returns C<$self> for chaining.
         });
 
         await $sse->run;
+        await $sse->finished;    # its on_close cleanup is part of this call
     }
 
 =head1 SEE ALSO

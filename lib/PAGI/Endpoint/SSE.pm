@@ -77,6 +77,8 @@ sub to_app {
 
         await $endpoint->handle($sse);
         await $sse->close if $sse->is_connected;
+        # The call ends with the scope and the helper's own cleanup.
+        await $sse->finished;
         return;
     };
 }

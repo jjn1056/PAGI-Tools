@@ -164,6 +164,7 @@ SKIP: {
                 is($connected->{type}, 'connected', 'the WebSocket route accepts chat');
                 is($connected->{name}, 'RootMount', 'with the name from the query string');
                 is($ws->receive_json->{type}, 'joined', 'and joins the general room');
+                is($ws->receive_json->{type}, 'room_list', 'then gets the room list');
                 $ws->send_json({ type => 'ping', ts => 17 });
                 is($ws->receive_json, { type => 'pong', ts => 17 },
                     'application pings are answered');
