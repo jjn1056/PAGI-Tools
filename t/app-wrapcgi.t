@@ -165,9 +165,19 @@ subtest 'timeout before the headers: 504, and the script is killed' => sub {
     is $body, 'CGI script timed out', 'plain text';
     ok time - $started < 5, 'answered at the timeout, not when the script finished';
     my $pid = do { open my $fh, '<', $pidfile or die $!; <$fh> };
-    my $gone = 0;
-    for (1 .. 50) { $loop->delay_future(after => 0.1)->get; $gone = 1, last unless kill 0, $pid }
-    ok $gone, 'the script process is gone';
+    ok !(kill 0, $pid), 'the script is reaped by the time the request completes';
+};
+
+subtest 'a script that ignores TERM is killed, and the request waits for it' => sub {
+    my $pidfile = "$tmp/stubborn.pid";
+    my $started = time;
+    my ($status) = run_cgi(
+        scope => { query => "mode=stubborn&pidfile=$pidfile" }, options => { timeout => 1 });
+    my $took = time - $started;
+    is $status, 504, '504 at the timeout';
+    ok $took >= 2.5 && $took < 8, sprintf('the request completed after KILL (%.1fs)', $took);
+    my $pid = do { open my $fh, '<', $pidfile or die $!; <$fh> };
+    ok !(kill 0, $pid), 'and the script is reaped';
 };
 
 subtest 'timeout after the body started: the stream is cut off' => sub {

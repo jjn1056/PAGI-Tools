@@ -32,6 +32,7 @@ elsif ($mode eq 'bigio') {                   # writes 1MB before reading 1MB
     print "\nread ", length($in), "\n";
 }
 elsif ($mode eq 'slow_head') { sleep 30; print "Content-Type: text/plain\r\n\r\nlate" }
+elsif ($mode eq 'stubborn') { $SIG{TERM} = 'IGNORE'; sleep 30 }
 elsif ($mode eq 'slow_body') {
     print "Content-Type: text/plain\r\n\r\nfirst\n";
     sleep 30;
