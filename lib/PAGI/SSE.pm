@@ -481,9 +481,10 @@ async sub send_event {
 
 # Safe send - returns bool instead of throwing
 # Best-effort sends never throw, so broadcast loops may make one and drop
-# the Future. Each keeps itself alive until it settles, so a send waiting
-# its turn behind another still goes out and is not reported as lost.
-sub try_send { my $self = shift; return $self->_try_send(@_)->retain }
+# the Future. The helper keeps each until it settles, so a send waiting its
+# turn behind another still goes out and is not reported as lost, and
+# finished waits for it.
+sub try_send { my $self = shift; return $self->_keep($self->_try_send(@_)) }
 
 async sub _try_send {
     my ($self, $data) = @_;
@@ -503,7 +504,7 @@ async sub _try_send {
     return 1;
 }
 
-sub try_send_json { my $self = shift; return $self->_try_send_json(@_)->retain }
+sub try_send_json { my $self = shift; return $self->_keep($self->_try_send_json(@_)) }
 
 async sub _try_send_json {
     my ($self, $data) = @_;
@@ -541,7 +542,7 @@ async sub send_comment {
     return $self;
 }
 
-sub try_send_comment { my $self = shift; return $self->_try_send_comment(@_)->retain }
+sub try_send_comment { my $self = shift; return $self->_keep($self->_try_send_comment(@_)) }
 
 async sub _try_send_comment {
     my ($self, $comment) = @_;
@@ -561,7 +562,7 @@ async sub _try_send_comment {
     return 1;
 }
 
-sub try_send_event { my $self = shift; return $self->_try_send_event(@_)->retain }
+sub try_send_event { my $self = shift; return $self->_keep($self->_try_send_event(@_)) }
 
 async sub _try_send_event {
     my ($self, %opts) = @_;
@@ -691,18 +692,31 @@ sub _ends_without_application {
     return $self->connection_state ne 'pending';
 }
 
+# Keeps a Future the helper returned to its caller until it settles, so
+# finished waits for it. Its failure is the caller's to see: the owner keeps
+# only its completion. The callback also holds the caller's Future, so a
+# caller may drop it.
+sub _keep {
+    my ($self, $future) = @_;
+    my $completion = $future->else_done;
+    my $held = $future;
+    $completion->on_ready(sub { undef $held });
+    $self->{_owner}->adopt($completion);
+    return $future;
+}
+
 # Close the connection
 sub close {
     my ($self, @args) = @_;
     return Future->done($self) if $self->_response_claimed_before_start;
     if ($self->{_close_callbacks_ran}) {
         return $self->{_close_send}
-            ? $self->{_close_send}->without_cancel->then(sub { Future->done($self) })->retain
+            ? $self->_keep($self->{_close_send}->without_cancel->then(sub { Future->done($self) }))
             : Future->done($self);
     }
-    return $self->{_close_operation}->without_cancel->then(sub { Future->done($self) })->retain
+    return $self->_keep($self->{_close_operation}->without_cancel->then(sub { Future->done($self) }))
         if $self->{_close_operation};
-    return $self->{_close_send}->without_cancel->then(sub { Future->done($self) })->retain
+    return $self->_keep($self->{_close_send}->without_cancel->then(sub { Future->done($self) }))
         if $self->{_close_send};
     return Future->done($self) if $self->is_closed;
     croak "SSE close requires an active accepted/started connection"
@@ -731,7 +745,7 @@ sub close {
     })->();
     $self->{_close_operation} = $operation;
     $operation->on_ready(sub { delete $self->{_close_operation} });
-    return $operation->without_cancel->then(sub { Future->done($self) })->retain;
+    return $self->_keep($operation->without_cancel->then(sub { Future->done($self) }));
 }
 
 # Wait until the connection ends. Disconnect is learned from the connection,

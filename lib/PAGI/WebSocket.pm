@@ -429,11 +429,24 @@ async sub accept {
     return $self;
 }
 
+# Keeps a Future the helper returned to its caller until it settles, so
+# finished waits for it. Its failure is the caller's to see: the owner keeps
+# only its completion. The callback also holds the caller's Future, so a
+# caller may drop it.
+sub _keep {
+    my ($self, $future) = @_;
+    my $completion = $future->else_done;
+    my $held = $future;
+    $completion->on_ready(sub { undef $held });
+    $self->{_owner}->adopt($completion);
+    return $future;
+}
+
 # Close the WebSocket connection
 sub close {
     my ($self, @args) = @_;
     return Future->done($self) if $self->_response_claimed_before_start;
-    return $self->{_close_send}->without_cancel->then(sub { Future->done($self) })->retain
+    return $self->_keep($self->{_close_send}->without_cancel->then(sub { Future->done($self) }))
         if $self->{_close_send};
     return Future->done if $self->is_closed;
     # Before accept the scope is an HTTP exchange: refusing it is deny's job.
@@ -458,7 +471,7 @@ sub close {
             else { $settled->done }
         });
     }
-    return $settled->without_cancel->then(sub { Future->done($self) })->retain;
+    return $self->_keep($settled->without_cancel->then(sub { Future->done($self) }));
 }
 
 # Delegate the handshake refusal to a public PAGI application. Valid only
@@ -538,9 +551,10 @@ async sub send_json {
 # Safe send methods - return bool instead of throwing
 
 # Best-effort sends never throw, so broadcast loops may make one and drop
-# the Future. Each keeps itself alive until it settles, so a send waiting
-# its turn behind another still goes out and is not reported as lost.
-sub try_send_text { my $self = shift; return $self->_try_send_text(@_)->retain }
+# the Future. The helper keeps each until it settles, so a send waiting its
+# turn behind another still goes out and is not reported as lost, and
+# finished waits for it.
+sub try_send_text { my $self = shift; return $self->_keep($self->_try_send_text(@_)) }
 
 async sub _try_send_text {
     my ($self, $text) = @_;
@@ -563,7 +577,7 @@ async sub _try_send_text {
     return 1;
 }
 
-sub try_send_bytes { my $self = shift; return $self->_try_send_bytes(@_)->retain }
+sub try_send_bytes { my $self = shift; return $self->_keep($self->_try_send_bytes(@_)) }
 
 async sub _try_send_bytes {
     my ($self, $bytes) = @_;
@@ -586,7 +600,7 @@ async sub _try_send_bytes {
     return 1;
 }
 
-sub try_send_json { my $self = shift; return $self->_try_send_json(@_)->retain }
+sub try_send_json { my $self = shift; return $self->_keep($self->_try_send_json(@_)) }
 
 async sub _try_send_json {
     my ($self, $data) = @_;

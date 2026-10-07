@@ -84,4 +84,52 @@ subtest 'a helper built after its scope ended still finishes' => sub {
     ok($ws->finished->is_done, 'done');
 };
 
+subtest 'finished waits for a best-effort send still in flight' => sub {
+    my @issued;
+    my $send = sub { push @issued, Future->new; return $issued[-1] };
+    my $scope = ws_scope();
+    my $ws = PAGI::WebSocket->new($scope, sub { Future->new }, $send);
+    my $accepting = $ws->accept;
+    $issued[0]->done;
+    $accepting->get;
+    $ws->try_send_text('to a slow client');    # dropped, still pending
+    $scope->{'pagi.connection'}->_mark_disconnected('client_closed');
+    my $finished = $ws->finished;
+    ok(!$finished->is_ready, 'not while the send is pending');
+    $_->done for grep { !$_->is_ready } @issued;
+    ok($finished->is_done, 'done once it settled');
+};
+
+subtest 'a dropped close() still completes, and nothing complains' => sub {
+    my @issued;
+    my $send = sub { push @issued, [$_[0], Future->new]; return $issued[-1][1] };
+    my $scope = ws_scope();
+    my $ws = PAGI::WebSocket->new($scope, sub { Future->new }, $send);
+    my $accepting = $ws->accept;
+    $issued[0][1]->done;
+    $accepting->get;
+    my @warnings;
+    {
+        local $SIG{__WARN__} = sub { push @warnings, @_ };
+        $ws->close;                              # Future dropped
+        $_->[1]->done for grep { !$_->[1]->is_ready } @issued;
+        $scope->{'pagi.connection'}->_mark_complete;
+    }
+    is([map { $_->[0]{type} } @issued], ['websocket.accept', 'websocket.close'], 'the Close went out');
+    ok($ws->finished->is_done, 'finished');
+    is(\@warnings, [], 'no lost-Future warnings');
+};
+
+subtest "a failing close() is the caller's, not finished's" => sub {
+    my $scope = ws_scope();
+    my $calls = 0;
+    my $send = sub { return $calls++ ? Future->fail("wire broke\n") : Future->done };
+    my $ws = PAGI::WebSocket->new($scope, sub { Future->new }, $send);
+    $ws->accept->get;
+    my $closing = $ws->close;
+    ok($closing->is_failed, 'close() reports the failure to its caller');
+    $scope->{'pagi.connection'}->_mark_disconnected('write_error');
+    ok($ws->finished->is_done, 'finished does not repeat it');
+};
+
 done_testing;
