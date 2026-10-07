@@ -946,6 +946,10 @@ WebSocket object back. This ensures consistent state (is_connected, is_closed,
 callbacks) across multiple code paths that may create WebSocket objects from
 the same scope.
 
+An application that constructs the helper itself should
+C<await $ws-E<gt>finished> before it returns; see L</finished>. Routes and the
+Endpoint classes do this for you.
+
 =head1 SCOPE ACCESSORS
 
 =head2 scope, path, raw_path, query_string, scheme, http_version
@@ -1602,6 +1606,8 @@ Returns C<$self> for chaining.
             $data->{from} = $user_id;
             await broadcast($data);
         });
+
+        await $ws->finished;    # its on_close cleanup is part of this call
     }
 
     async sub broadcast {

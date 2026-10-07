@@ -34,8 +34,15 @@ async sub chat {
     my $send_cb = sub { $ws->try_send_json($_[0]) };
 
     # Runs on any disconnect. Other users hear "user left" only if this one
-    # does not reconnect within the grace period (see ChatApp::State).
+    # does not reconnect within the grace period (see ChatApp::State). When
+    # the server is shutting down nobody remains to hear it, so the grace
+    # period is not started; the connection object reports that as the
+    # standard disconnect reason, which a client's own Close cannot fake.
     $ws->on_close(sub {
+        if (($ws->disconnect_reason // '') eq 'server_shutdown') {
+            print STDERR "[ws] $session->{name}: ended by server shutdown\n" if $session;
+            return;
+        }
         my $broadcast_leave = sub {
             my ($room_name, $username) = @_;
             for my $other (@{ get_room_users($room_name) }) {

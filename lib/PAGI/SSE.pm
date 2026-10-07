@@ -988,6 +988,10 @@ garbage-collected, and a later C<new()> will build a fresh one with reset
 state. In normal use a handler keeps C<$sse> alive for the life of the
 connection, so this does not arise.
 
+An application that constructs the helper itself should
+C<await $sse-E<gt>finished> before it returns; see L</finished>. Routes and the
+Endpoint classes do this for you.
+
 =head1 SCOPE ACCESSORS
 
 =head2 scope, path, raw_path, query_string, scheme, http_version
@@ -1652,6 +1656,7 @@ Returns C<$self> for chaining.
         });
 
         await $sse->run;
+        await $sse->finished;    # its on_close cleanup is part of this call
     }
 
 =head1 SEE ALSO

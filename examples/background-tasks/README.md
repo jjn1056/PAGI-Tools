@@ -10,10 +10,14 @@ handler receives one `PAGI::WebSocket`. The background work runs on after the
 handler has returned, so the response is not held up by it:
 
 ```perl
+my $background = PAGI::FutureOwner->new(
+    on_failure => sub { warn "Background task failed: $_[0]" },
+);
+
 async sub signup {
     my ($request) = @_;
     my $data = await $request->json;
-    fire_and_forget(send_welcome_email($data->{email}));
+    $background->adopt(send_welcome_email($data->{email}));
     return response('JSON', { status => 'created' }, status => 201);
 }
 
@@ -21,7 +25,9 @@ compose(routes => [
     route('/signup' => \&signup, methods => ['POST']),
     websocket('/ws' => \&messages),
     ...
-]);
+], lifespan => {
+    shutdown => async sub { await $background->settled },
+});
 ```
 
 ## Run
@@ -39,10 +45,12 @@ Watch the server console for background task output.
 For network calls, database queries, file I/O using async libraries:
 
 ```perl
-fire_and_forget(send_welcome_email($email));
+$background->adopt(send_welcome_email($email));
 ```
 
-Always use `->on_fail()` before `->retain()` to avoid silently swallowing errors.
+Hand work the client does not wait for to a `PAGI::FutureOwner`, and await its
+`settled` in `lifespan.shutdown`: its failures are reported, and shutdown waits
+for it.
 
 ### 2. Blocking/CPU Work (Subprocess)
 
