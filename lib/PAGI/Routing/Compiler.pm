@@ -337,6 +337,8 @@ sub _compile_protocol_leaf {
             my $returned = $handler->($protocol);
             await Future->wrap($returned);
             await $protocol->close if $protocol->is_connected;
+            # The call ends with the scope and the helper's own cleanup.
+            await $protocol->finished;
             return;
         };
     }

@@ -30,6 +30,8 @@ sub to_app {
 
         await Future->wrap($endpoint->handle($websocket));
         await $websocket->close if $websocket->is_connected;
+        # The call ends with the scope and the helper's own cleanup.
+        await $websocket->finished;
         return;
     };
 }
