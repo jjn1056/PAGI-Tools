@@ -96,9 +96,8 @@ subtest 'PAGI::SSE' => sub {
     my @warnings;
     local $SIG{__WARN__} = sub { push @warnings, @_ };
     my $disconnect = Future->new;
-    my $handler = $app->to_app->(
-        sse_scope(path => '/events'), sub { $disconnect }, $send,
-    );
+    my $scope = sse_scope(path => '/events');
+    my $handler = $app->to_app->($scope, sub { $disconnect }, $send);
     $issued[0]{future}->done;    # let the first send through
     PAGITest::SSESynopsis::publish(event => 'news', data => 'three');
     while (my ($pending) = grep { !$_->{future}->is_ready } @issued) {
@@ -107,7 +106,11 @@ subtest 'PAGI::SSE' => sub {
     is [map { $_->{event}{data} } grep { $_->{event}{type} eq 'sse.send' } @issued],
         ['one', 'two', 'three'],
         'an event published during the replay follows it';
+    # The client goes away: as a server does, end the connection, then deliver
+    # the event. Left open, the handler would still be suspended at exit.
+    $scope->{'pagi.connection'}->_mark_disconnected('client_closed');
     $disconnect->done({ type => 'sse.disconnect' });
+    ok $handler->is_done, 'the stream ends when the client goes away';
     is \@warnings, [], 'and nothing complains';
 };
 
