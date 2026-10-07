@@ -37,7 +37,7 @@ in [UPGRADING-REFERENCE.md](UPGRADING-REFERENCE.md).
 | `PAGI::App::Loader` | `pagi-server --app`, or `do $file` ([details](UPGRADING-REFERENCE.md#breaking-pagiapploader-is-removed)) |
 | WebSocket/SSE `->state` hashref | a `PAGI::State` object ([details](UPGRADING-REFERENCE.md#breaking-direct-websocket-and-sse-state-matches-request)) |
 | WebSocket `on_close` `($code, $reason)`; SSE `on_close` `($sse, $reason)` | a third argument, `$detail`; a strict signature must accept it ([details](UPGRADING-REFERENCE.md#breaking-on_close-callbacks-receive-a-third-argument)) |
-| a failing `on_close` callback was warned | every callback runs; the first failure fails the call, which the server logs |
+| a failing `on_close` callback was warned | every callback runs; the first failure fails `finished`, so a route's call fails and the server logs it (a helper you build yourself reports it only if you `await $ws->finished`) |
 | `PAGI::WebSocket->new` / `PAGI::SSE->new` in your own handler | end the handler with `await $ws->finished`, so `on_close` cleanup is part of its call (routes and Endpoint classes do it for you) |
 | `$f->on_fail(...)->retain` for work the client does not wait for | `PAGI::FutureOwner`: `$owner->adopt($f)`, then `await $owner->settled` in `lifespan.shutdown` |
 | `$ws->deny(status => ..., body => ...)` | `$ws->deny($response)`; new `$sse->decline($response)` ([details](UPGRADING-REFERENCE.md#refuse-websocketsse-with-request-handlers-or-applications)) |

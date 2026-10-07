@@ -74,6 +74,8 @@ a larger framework:
 
 =item * L<PAGI::State>, L<PAGI::Stash>, L<PAGI::Session>, L<PAGI::CSRF>, and L<PAGI::Transport>
 
+=item * L<PAGI::FutureOwner> for work an application starts and does not wait for
+
 =item * L<PAGI::Test::Client> and related in-process testing tools
 
 =back

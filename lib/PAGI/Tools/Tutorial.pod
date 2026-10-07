@@ -751,6 +751,7 @@ L<PAGI::WebSocket> simplifies WebSocket connections:
   });
 
   await $ws->close(1000, 'Goodbye');
+  await $ws->finished;    # the connection is over; on_close has run
 
 Built this way, by hand, the handler ends with C<await $ws-E<gt>finished>, so
 its C<on_close> cleanup is part of its call.
@@ -806,6 +807,7 @@ L<PAGI::SSE> simplifies Server-Sent Events:
 
   # Wait for disconnect
   await $sse->run;
+  await $sse->finished;    # the stream is over; on_close has run
 
 Built this way, by hand, the handler ends with C<await $sse-E<gt>finished>, so
 its C<on_close> cleanup is part of its call.

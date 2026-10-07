@@ -2571,7 +2571,7 @@ For blocking or CPU-intensive work, use L<IO::Async::Function> to run in a child
 
   my $loop = IO::Async::Loop->new;
 
-  # Owns work started for a client that does not wait for it (Option B).
+  # Owns work started for a client that does not wait for it.
   my $background = PAGI::FutureOwner->new(
       on_failure => sub { warn "PDF failed: $_[0]" },
   );
@@ -2588,21 +2588,29 @@ For blocking or CPU-intensive work, use L<IO::Async::Function> to run in a child
   );
   $loop->add($pdf_worker);
 
-  my $app = compose(routes => [
-  route('/generate-pdf' => async sub {
-      my ($request) = @_;
+  my $app = compose(
+      routes => [
+          # Wait for the result: this request waits; others do not.
+          route('/generate-pdf' => async sub {
+              my ($request) = @_;
+              my $result = await $pdf_worker->call(args => ['report']);
+              return response('JSON', { result => $result });
+          }, methods => ['POST']),
 
-      # Option A: Wait for result (blocks this request only)
-      my $result = await $pdf_worker->call(args => ['report']);
-      return response('JSON', { result => $result });
-
-      # Option B: start the work, then return immediately
-      # my $f = $pdf_worker->call(args => ['report']);
-      # $f->on_done(sub { warn "PDF ready: $_[0]\n" });
-      # $background->adopt($f);
-      # return response('JSON', { status => 'processing' }, status => 202);
-  }, methods => ['POST']),
-  ])->to_app;
+          # Start the work and answer at once; $background owns the work.
+          route('/generate-pdf/later' => sub {
+              my ($request) = @_;
+              my $f = $pdf_worker->call(args => ['report']);
+              $f->on_done(sub { warn "PDF ready: $_[0]\n" });
+              $background->adopt($f);
+              return response('JSON', { status => 'processing' }, status => 202);
+          }, methods => ['POST']),
+      ],
+      lifespan => {
+          # Work still running finishes before the process exits.
+          shutdown => async sub { await $background->settled },
+      },
+  )->to_app;
 
 B<Warning:> IO::Async::Function forks child processes. If running with C<--workers N>, each server worker forks its own Function workers. With 4 server workers and 2 Function workers each, you have 12 processes. For high-volume CPU work, consider a dedicated job queue instead.
 

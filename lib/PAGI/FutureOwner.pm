@@ -107,7 +107,8 @@ C<on_failure>, if given, is called with each adopted Future's failure as it
 happens, and C<settled> then never fails. That suits a long-lived owner, such
 as an application's background work. Without it, the first failure is held
 and C<settled> fails with it. C<on_failure> is called from inside the failing
-Future's callbacks and must not die.
+Future's callbacks and must not die. It croaks if C<on_failure> is given and
+is not a code reference.
 
 =head2 adopt
 
@@ -115,7 +116,8 @@ Future's callbacks and must not die.
 
 Holds C<$future> until it is done, failed or cancelled, and returns it.
 Neither the owner nor the Future needs any other reference meanwhile. A
-cancelled Future counts as settled and is not a failure.
+cancelled Future counts as settled and is not a failure. It croaks unless
+given a Future.
 
 =head2 settled
 
