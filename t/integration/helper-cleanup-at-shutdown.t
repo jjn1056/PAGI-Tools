@@ -32,7 +32,9 @@ my $app = compose(
             my ($ws) = @_;
             $ws->on_close(async sub {
                 push @order, 'ws ended: ' . ($ws->disconnect_reason // 'none');
-                await Future::IO->sleep(0.3);
+                # Longer than the SSE cleanup, whose own close already holds
+                # the shutdown for its 0.3s: this one must be waited for.
+                await Future::IO->sleep(0.8);
                 push @order, 'ws cleanup finished';
             });
             await $ws->accept;

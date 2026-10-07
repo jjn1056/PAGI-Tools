@@ -180,6 +180,35 @@ subtest 'a script that ignores TERM is killed, and the request waits for it' => 
     ok !(kill 0, $pid), 'and the script is reaped';
 };
 
+subtest 'a refusal that dies still waits for the script and its input' => sub {
+    my $pidfile = "$tmp/refuse-dies.pid";
+    my $app = PAGI::App::WrapCGI->new(
+        script => $script, timeout => 1, refuse => sub { die "refusal broke\n" },
+    )->to_app;
+    # The body is still uploading when the script is refused; the client goes
+    # away a little later.
+    my $calls = 0;
+    my $receive = async sub {
+        return { type => 'http.request', body => 'x' x 10, more => 1 } unless $calls++;
+        await $loop->delay_future(after => 1.5);
+        return { type => 'http.disconnect' };
+    };
+    my @warnings;
+    local $SIG{__WARN__} = sub { push @warnings, @_ };
+    my $started = time;
+    my $done = $app->(scope_for(
+        method => 'POST', query => "mode=stubborn&pidfile=$pidfile",
+        headers => [['content-length', '100']],
+    ), $receive, async sub { });
+    $loop->await($done);
+    my $took = time - $started;
+    like scalar($done->failure), qr/refusal broke/, "the refusal's failure is the call's";
+    ok $took >= 2.5, sprintf('reported once the script was killed (%.1fs)', $took);
+    my $pid = do { open my $fh, '<', $pidfile or die $!; <$fh> };
+    ok !(kill 0, $pid), 'and reaped';
+    is \@warnings, [], 'no Future is lost';
+};
+
 subtest 'timeout after the body started: the stream is cut off' => sub {
     my $pidfile = "$tmp/body.pid";
     my $app = PAGI::App::WrapCGI->new(script => $script, timeout => 1)->to_app;

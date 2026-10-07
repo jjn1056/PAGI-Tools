@@ -336,8 +336,9 @@ async sub _close_callbacks_worker {
     return;
 }
 
-# Resolves to the helper once its scope has ended and all the work it
-# started has settled; fails with the first on_close failure.
+# Resolves to the helper once all the work it started has settled -- its
+# on_close callbacks included, which run when the scope ends; fails with the
+# first on_close failure.
 async sub finished {
     my ($self) = @_;
     # on_close callbacks run when the scope ends, so wait for that end when

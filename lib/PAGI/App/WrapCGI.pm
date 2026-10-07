@@ -159,11 +159,12 @@ sub to_app {
             = await _read_head($stdout, $ends);
         if ($outcome ne 'head') {
             _stop($pid, $exited);
-            my $refused = await $self->_refuse($scope, $receive, $send, $outcome);
-            # The response has gone; the request still owns the script until
-            # it is reaped and its input is no longer being written.
-            await Future->wait_all($exited, $feeding);
-            return $refused;
+            # The refusal goes out at once, but the request owns the script
+            # until it is reaped and its input is no longer being written --
+            # even when the refusal itself fails.
+            my $refusing = $self->_refuse($scope, $receive, $send, $outcome);
+            await Future->wait_all($refusing, $exited, $feeding);
+            return $refusing->get;
         }
 
         # The script may still be running when its output is no longer
