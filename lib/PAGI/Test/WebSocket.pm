@@ -105,7 +105,7 @@ sub _start {
                 $self->{close_code} = $event->{code} // 1000;
                 $self->{close_reason} = $event->{reason} // '';
                 if ($self->{close_mode} eq 'cooperative') {
-                    $self->close($self->{close_code}, $self->{close_reason});
+                    $self->_close($self->{close_code}, $self->{close_reason});
                 }
             }
         }
@@ -297,7 +297,24 @@ sub receive_json {
     return JSON::MaybeXS::decode_json($text);
 }
 
+# The application's failure after the socket was accepted (or the stream
+# started), raised once where the test ends the interaction -- the test
+# client stands in for the server, which would report it.
+sub _raise_app_failure {
+    my ($self) = @_;
+    my $app = $self->{app_future};
+    return $self unless $app && $app->is_ready && $app->is_failed;
+    return $self if $self->{_app_failure_raised}++;
+    $app->get;
+}
+
 sub close {
+    my ($self, @args) = @_;
+    $self->_close(@args);
+    return $self->_raise_app_failure;
+}
+
+sub _close {
     my ($self, @args) = @_;
     my $conn = $self->{scope}{'pagi.connection'};
     return $self->pump unless $conn->is_connected;
@@ -319,11 +336,17 @@ sub close {
     # A peer-initiated Close is answered by the test server automatically.
     # Manual mode holds only transport completion for explicit resolution;
     # pending receives stay parked until it resolves (see _end_event_ready).
-    return $self->complete_close if $self->{close_mode} eq 'cooperative';
+    return $self->_complete_close if $self->{close_mode} eq 'cooperative';
     return $self->pump;
 }
 
 sub complete_close {
+    my ($self) = @_;
+    $self->_complete_close;
+    return $self->_raise_app_failure;
+}
+
+sub _complete_close {
     my ($self) = @_;
     my $conn = $self->{scope}{'pagi.connection'};
     return $self->pump unless $conn->is_connected;
@@ -567,6 +590,10 @@ receives report the Close once the scope has ended, as PAGI::Server delivers
 it: at once in the default cooperative mode, and in C<manual> mode only after
 C<complete_close> or C<simulate_abnormal_close>. Repeated peer Close calls are
 harmless.
+
+C<close> and C<complete_close> die with the application's failure if it has
+failed after accepting the socket (see L<PAGI::Test::Client/websocket>); it is
+raised once.
 
 =head2 Close outcome controls
 

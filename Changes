@@ -117,6 +117,9 @@
     been reaped.
   - Nothing in PAGI-Tools uses ->retain; the cookbook and the
     background-tasks example teach PAGI::FutureOwner instead.
+  - PAGI::Test::Client: a WebSocket or SSE application that fails after
+    accepting or starting -- an on_close failure included -- fails the
+    test, as an HTTP application's does; it used to pass silently.
 
   [Breaking -- see UPGRADING.md]
   - PAGI::App::Router and PAGI::Endpoint::Router are removed; PAGI::Routing

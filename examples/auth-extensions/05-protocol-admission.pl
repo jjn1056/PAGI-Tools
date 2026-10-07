@@ -34,6 +34,7 @@ compose(
             }
             await $ws->accept;
             await $ws->close;
+            await $ws->finished;    # the closing handshake done, on_close run
             die 'WebSocket cleanup did not run' unless $cleaned;
             return;
         }),
@@ -46,6 +47,7 @@ compose(
             }
             await $stream->start;
             await $stream->close;
+            await $stream->finished;    # the stream over, on_close run
             die 'SSE cleanup did not run' unless $cleaned;
             return;
         }),

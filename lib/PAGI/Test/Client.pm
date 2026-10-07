@@ -414,14 +414,16 @@ sub websocket {
         # callback sent one), then the transport, which manual close mode
         # otherwise holds open, leaving the app parked in receive.
         unless ($ws->is_closed) {
-            $ws->close;
-            $ws->complete_close;
+            $ws->_close;
+            $ws->_complete_close;
         }
         die $err if $err;
+        $ws->_raise_app_failure;
         return;
     }
 
-    return $ws;
+    # An application that already failed fails the call, as an HTTP one does.
+    return $ws->_raise_app_failure;
 }
 
 sub sse {
@@ -533,12 +535,14 @@ sub sse {
     if ($callback) {
         eval { $callback->($sse) };
         my $err = $@;
-        $sse->close unless $sse->is_closed;
+        $sse->_transport_closed(reason => 'client_closed') unless $sse->is_closed;
         die $err if $err;
+        $sse->_raise_app_failure;
         return;
     }
 
-    return $sse;
+    # An application that already failed fails the call, as an HTTP one does.
+    return $sse->_raise_app_failure;
 }
 
 sub start {
@@ -1371,6 +1375,15 @@ returns, unless it already is: a normal peer Close, and in C<manual> close
 mode the transport is completed too, so the application's C<receive> loop
 ends.
 
+An application that fails after accepting the socket fails the test, as an
+HTTP application's failure does: the test client stands in for the server,
+which would report it. The failure -- including one from an C<on_close>
+callback, which L<PAGI::WebSocket/finished> carries -- is raised once, when
+the test ends the interaction: as C<websocket> returns in callback style
+(after the callback's own error, if any), as it returns the object in
+explicit style if the application has already failed, or from L<PAGI::Test::WebSocket/close>
+and L<PAGI::Test::WebSocket/complete_close>.
+
 See L<PAGI::Test::WebSocket> for the WebSocket connection API, including
 its send strictness (L<PAGI::Test::WebSocket/SEND STRICTNESS>), the
 portable and extension denial paths, and C<simulate_abnormal_close>.
@@ -1418,6 +1431,10 @@ portable and extension denial paths, and C<simulate_abnormal_close>.
 
 See L<PAGI::Test::SSE> for the SSE connection API and its send strictness
 (L<PAGI::Test::SSE/SEND STRICTNESS>).
+
+An application that fails after starting the stream fails the test, raised
+once in the same places as for L</websocket>: as C<sse> returns (in either
+style, once the application has failed) or from L<PAGI::Test::SSE/close>.
 
 =head1 LIFESPAN
 
