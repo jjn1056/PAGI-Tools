@@ -33,6 +33,12 @@
     an origin check (Sec-Fetch-Site, then Origin vs Host) on unsafe
     requests and on WebSocket handshakes (cross-site WebSocket hijacking),
     with trusted_origins; httponly.
+  - PAGI::FutureOwner: own the Futures you start until they settle; await
+    settled for all of them (in lifespan.shutdown, say). Replaces ->retain
+    for background work.
+  - PAGI::WebSocket and PAGI::SSE: finished, which resolves once the
+    helper's own work (its close, best-effort sends and on_close callbacks)
+    has settled.
 
   [Changed]
   - raw_path is the full requested path at every mount level; AccessLog
@@ -102,6 +108,14 @@
   - The Session middleware re-sends the cookie on a read once half of
     expire has passed.
   - PAGI::WebSocket and PAGI::SSE send one message at a time.
+  - A routed or Endpoint WebSocket/SSE call now ends after its on_close
+    cleanup, so a shutting-down PAGI::Server waits for that cleanup. Every
+    on_close callback runs; the first failure fails the call (the server
+    logs it) instead of being warned.
+  - PAGI::App::WrapCGI: a refused request completes once its script has
+    been reaped.
+  - Nothing in PAGI-Tools uses ->retain; the cookbook and the
+    background-tasks example teach PAGI::FutureOwner instead.
 
   [Breaking -- see UPGRADING.md]
   - PAGI::App::Router and PAGI::Endpoint::Router are removed; PAGI::Routing
