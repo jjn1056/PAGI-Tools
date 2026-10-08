@@ -27,9 +27,8 @@ requires 'HTTP::Date', '6.06';
 # Fast JSON (optional)
 recommends 'Cpanel::JSON::XS', '4.19';
 
-# Secure random fallback for systems without /dev/urandom
-# (PAGI::Utils::Random degrades gracefully without it)
-recommends 'Crypt::URandom', '0.36';
+# PAGI::Utils::Random's source of secure random bytes
+requires 'Crypt::URandom', '0.36';
 
 # Testing
 on 'test' => sub {

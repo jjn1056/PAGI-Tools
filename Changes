@@ -199,6 +199,9 @@
   - PAGI::Middleware::ETag derives the ETag from the body's SHA-256 digest
     instead of MD5, so a crafted body cannot collide with another's
     validator; existing ETags change once (#22).
+  - PAGI::Utils::Random takes its bytes from Crypt::URandom, now a
+    required dependency, which uses a system call such as getrandom(2)
+    where one exists; it used to open /dev/urandom on every call (#17).
   - GZip sent every compressed response as 200, whatever its status.
   - ETag, GZip and ContentLength corrupted file/fh bodies, worked from
     partial bodies, emitted a start without a status when the application
