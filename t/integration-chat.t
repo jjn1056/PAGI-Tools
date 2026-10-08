@@ -170,6 +170,16 @@ SKIP: {
                     'application pings are answered');
             });
 
+            # A session id the server does not know is never adopted: the
+            # server issues its own, so a client cannot choose or guess one.
+            $client->websocket('/ws/chat?name=Mallory&session=attacker-chosen', sub {
+                my ($ws) = @_;
+                my $connected = $ws->receive_json;
+                is($connected->{type}, 'connected', 'an unknown session id starts a new session');
+                like($connected->{session_id}, qr/\A[0-9a-f]{64}\z/, 'with a server-generated id');
+                isnt($connected->{session_id}, 'attacker-chosen', 'not the id the client sent');
+            });
+
             my $websocket_miss = $client->websocket('/ws/missing');
             ok($websocket_miss->is_closed, 'a WebSocket miss is refused');
             ok(!defined $websocket_miss->close_code, 'with no RFC 6455 close code');

@@ -86,7 +86,9 @@ async sub chat {
     }
     else {
         my $username = sanitize_username($raw_name || 'Anonymous');
-        $session_id ||= _generate_session_id();
+        # A new session always gets an id from the server: one the client
+        # sent but the server does not know is never adopted.
+        $session_id = _generate_session_id();
 
         $session = create_session($session_id, $username, $send_cb);
 
