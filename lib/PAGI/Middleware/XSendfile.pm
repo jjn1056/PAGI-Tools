@@ -69,6 +69,9 @@ This middleware intercepts it and instead sends:
     # Headers include: X-Accel-Redirect: /protected/files/large.bin
     # Body is empty - proxy serves the file
 
+The response's own headers are kept, except C<Content-Length>: the body is now
+empty and the proxy sends the file's length itself.
+
 =head1 REVERSE PROXY CONFIGURATION
 
 =head2 Nginx
@@ -431,7 +434,10 @@ sub wrap {
                         my $start = $pending_start;
                         $pending_start = undef;
                         $state = 'intercepted';
-                        my @headers = @{$start->{headers} // []};
+                        # The body is emptied for the front end to fill, so a
+                        # Content-Length for the file would no longer be true.
+                        my @headers = grep { lc($_->[0]) ne 'content-length' }
+                            @{$start->{headers} // []};
 
                         # Add the X-Sendfile header
                         push @headers, [$self->{type}, $mapped_path];

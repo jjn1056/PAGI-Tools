@@ -186,6 +186,8 @@
     pagi.original_method, pagi.original_path, pagi.request_id.
 
   [Fixed]
+  - PAGI::Middleware::XSendfile removes Content-Length when it hands a
+    file to the proxy, since the body it sends is empty (#19).
   - GZip sent every compressed response as 200, whatever its status.
   - ETag, GZip and ContentLength corrupted file/fh bodies, worked from
     partial bodies, emitted a start without a status when the application

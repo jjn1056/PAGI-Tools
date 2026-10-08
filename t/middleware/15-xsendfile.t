@@ -137,6 +137,25 @@ subtest 'X-Sendfile header added for file response' => sub {
     is $sent[1]{body}, '', 'body is empty (proxy serves the file)';
 };
 
+subtest 'the emptied response carries no Content-Length' => sub {
+    for my $name ('Content-Length', 'content-length') {
+        my ($sent) = record_file_response(
+            config => { type => 'X-Sendfile' },
+            start  => {
+                type    => 'http.response.start',
+                status  => 200,
+                headers => [[$name, '1234'], ['Content-Type', 'text/plain']],
+            },
+            body => { type => 'http.response.body', file => '/var/www/files/doc.txt' },
+        );
+        my $headers = $sent->[0]{headers};
+        is find_header($headers, 'content-length'), undef, "$name removed";
+        is find_header($headers, 'content-type'), 'text/plain', 'other headers kept';
+        ok find_header($headers, 'X-Sendfile'), 'the X-Sendfile header is sent';
+        is $sent->[1]{body}, '', 'with an empty body';
+    }
+};
+
 subtest 'X-Accel-Redirect for Nginx' => sub {
     my $mw = PAGI::Middleware::XSendfile->new(
         type    => 'X-Accel-Redirect',
