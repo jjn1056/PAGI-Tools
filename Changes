@@ -196,6 +196,9 @@
     come from the time and rand(), and the browser made up its own. Other
     users now see a separate public user id: the session id, which resumes
     a session, was listed in every room's users (#24).
+  - PAGI::Middleware::ETag derives the ETag from the body's SHA-256 digest
+    instead of MD5, so a crafted body cannot collide with another's
+    validator; existing ETags change once (#22).
   - GZip sent every compressed response as 200, whatever its status.
   - ETag, GZip and ContentLength corrupted file/fh bodies, worked from
     partial bodies, emitted a start without a status when the application

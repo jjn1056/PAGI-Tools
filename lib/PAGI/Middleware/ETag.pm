@@ -3,7 +3,7 @@ package PAGI::Middleware::ETag;
 use strict;
 use warnings;
 use parent 'PAGI::Middleware';
-use Digest::MD5 qw(md5_hex);
+use Digest::SHA qw(sha256_hex);
 use PAGI::Middleware::BufferedResponse qw(buffer_whole_response);
 use PAGI::Utils::Headers qw(format_etag);
 use PAGI::Utils ();
@@ -24,7 +24,8 @@ PAGI::Middleware::ETag - ETag generation middleware
 =head1 DESCRIPTION
 
 PAGI::Middleware::ETag generates ETag headers for responses based on
-the response body content. Works best with buffered (non-streaming) responses.
+the response body content: the SHA-256 digest of the body. Works best with
+buffered (non-streaming) responses.
 
 =head1 CONFIGURATION
 
@@ -76,7 +77,7 @@ sub wrap {
 sub _generate_etag {
     my ($self, $body) = @_;
 
-    return format_etag(md5_hex($body), weak => $self->{weak} ? 1 : 0);
+    return format_etag(sha256_hex($body), weak => $self->{weak} ? 1 : 0);
 }
 
 1;

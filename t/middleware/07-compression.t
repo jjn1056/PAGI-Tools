@@ -294,7 +294,7 @@ subtest 'ETag middleware - generates ETag' => sub {
 
     my %headers = map { lc($_->[0]) => $_->[1] } @{$events[0]{headers}};
     ok exists $headers{etag}, 'has ETag header';
-    like $headers{etag}, qr/^"[a-f0-9]{32}"$/, 'ETag is MD5 hash format';
+    like $headers{etag}, qr/^"[a-f0-9]{64}"$/, 'ETag is SHA-256 hash format';
 };
 
 subtest 'ETag middleware - generates weak ETag' => sub {
@@ -325,7 +325,7 @@ subtest 'ETag middleware - generates weak ETag' => sub {
     run_async { $wrapped->($scope, $receive, $send) };
 
     my %headers = map { lc($_->[0]) => $_->[1] } @{$events[0]{headers}};
-    like $headers{etag}, qr{^W/"[a-f0-9]{32}"$}, 'ETag has weak prefix';
+    like $headers{etag}, qr{^W/"[a-f0-9]{64}"$}, 'ETag has weak prefix';
 };
 
 subtest 'ETag middleware - preserves existing ETag' => sub {
