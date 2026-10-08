@@ -172,10 +172,30 @@ subtest 'as() resolves names like response()' => sub {
     like dies { builder()->as('Nope', 1) }, qr/response\('Nope'\): cannot load/;
 };
 
-subtest 'as() refuses options the builder owns' => sub {
-    for my $name (qw(status headers content_type)) {
+subtest 'as() refuses headers and content_type, which the builder owns' => sub {
+    for my $name (qw(headers content_type)) {
         like dies { builder()->as('JSON', {}, $name => 1) }, qr/as\(\) takes no '$name' option/;
     }
+};
+
+subtest 'as() passes its arguments through, for any constructor shape' => sub {
+    is sent(builder()->as('Empty'))->status, 204, "Empty takes no value; the class's own default";
+    like dies { builder()->content_type('text/plain')->as('Empty') },
+        qr/Empty response does not permit Content-Type/, "the class's own rules apply";
+    is sent(builder()->status(201)->as('Text', 'status'))->text, 'status',
+        'a value that reads "status" is a value, not an option';
+    is sent(builder()->status(201)->as('Text', 'status'))->status, 201,
+        'and the collected status still applies';
+};
+
+subtest 'a status passed to as() belongs to that body' => sub {
+    my $b = builder()->as('Redirect', '/x', status => 301);
+    is sent($b)->status, 301, 'the body has it';
+    is sent($b->text('next'))->status, 200, 'it was not collected';
+    is sent(builder()->as('Empty', status => 202))->status, 202, 'any class';
+    is sent(builder()->status(500)->as('Problem', { title => 'Bad', status => 400 }, status => 400))
+        ->status, 400, 'it replaces a collected status that would disagree';
+    is sent(builder()->as('JSON', {}, status => 201))->status, 201, 'JSON too';
 };
 
 subtest 'file options pass through; a missing file fails when sent' => sub {
@@ -270,8 +290,9 @@ subtest 'documented delegation between methods' => sub {
     $b->redirect('/x')->empty;
     $b->cookie(a => 1)->delete_cookie('b')->header_try('X-T' => 1);
     is \@My::Recording::Response::calls,
-        [qw(as:Text as:HTML as:JSON as:File as:Stream header:Set-Cookie header:Set-Cookie header:X-T)],
-        'shorthands call as(); redirect and empty do not; cookies and header_try call header()';
+        [qw(as:Text as:HTML as:JSON as:File as:Stream as:Redirect
+            header:Set-Cookie header:Set-Cookie header:X-T)],
+        'body methods call as() except empty(); cookies and header_try call header()';
 };
 
 done_testing;

@@ -127,9 +127,7 @@ sub content_type {
     my ($type) = @type;
     croak 'Content-Type must be a scalar' if ref $type;
     if (my $value = $state->{value}) {
-        $value->content_type(defined $type
-            ? _with_charset($value, $type)
-            : $value->default_content_type);
+        $value->content_type(defined $type ? $type : $value->default_content_type);
     }
     if (defined $type) {
         $state->{content_type} = $type;
@@ -146,19 +144,6 @@ sub content_type_try {
 }
 
 sub has_content_type { $_[0]->has_header('Content-Type') }
-
-# Text and HTML bodies are always UTF-8, so a custom type without a charset
-# says so. JSON is UTF-8 by definition and takes no charset parameter.
-sub _with_charset {
-    my ($value, $type) = @_;
-    return $type
-        unless $value->isa('PAGI::Response::Text') || $value->isa('PAGI::Response::HTML');
-    return $type if $type =~ /charset=/i;
-    my ($media) = $type =~ m{\A\s*([^;\s]+)};
-    return $type
-        if defined $media && (lc($media) eq 'application/json' || $media =~ m{\+json\z}i);
-    return "$type; charset=utf-8";
-}
 
 # --- cookies are Set-Cookie headers ---
 
@@ -177,15 +162,25 @@ sub delete_cookie {
 
 sub as {
     my ($self, $name, @arguments) = @_;
-    croak 'as() requires a Response class name and a value' unless @arguments;
-    my ($value, @options) = @arguments;
-    croak 'as() class options must be name/value pairs' if @options % 2;
-    for (my $index = 0; $index < @options; $index += 2) {
-        my $option = $options[$index];
-        croak "as() takes no '$option' option: set it on the builder"
-            if defined $option && grep { $option eq $_ } qw(status headers content_type);
+    my %given = _builder_options(@arguments);
+    for my $option (qw(headers content_type)) {
+        croak "as() takes no '$option' option: set it on the builder" if $given{$option};
     }
-    return $self->_build($name, $value, \@options, undef);
+    return $self->_build($name, \@arguments, $given{status});
+}
+
+# The builder's own option names among as()'s arguments. They are read the way
+# the response classes read theirs -- positional values, then name/value
+# pairs -- so the pairs line up from the end.
+sub _builder_options {
+    my @arguments = @_;
+    my %given;
+    for (my $index = @arguments - 2; $index >= 0; $index -= 2) {
+        my $name = $arguments[$index];
+        last unless defined $name && !ref $name;
+        $given{$name} = 1 if grep { $name eq $_ } qw(status headers content_type);
+    }
+    return %given;
 }
 
 sub text {
@@ -209,7 +204,7 @@ sub json {
 sub redirect {
     my ($self, $url, @status) = @_;
     croak 'redirect() takes a URL and an optional status' unless @_ >= 2 && @status <= 1;
-    return $self->_build('Redirect', $url, [], $status[0] // 302);
+    return $self->as('Redirect', $url, status => $status[0] // 302);
 }
 
 sub file {
@@ -222,6 +217,8 @@ sub stream {
     return $self->as('Stream', $producer, @options);
 }
 
+# The builder's own empty response (not as('Empty'), which passes the
+# collected state through and so meets Empty's refusal of a Content-Type).
 sub empty {
     my ($self, @arguments) = @_;
     croak 'empty() takes no arguments' if @arguments;
@@ -232,22 +229,18 @@ sub empty {
 sub has_body_source { $_[0]->_state->{value} ? 1 : 0 }
 
 # Build from the collected state; commit only once construction succeeded, so
-# a failure leaves the builder as it was. A status the body brings with it
-# (a redirect's) belongs to the value, not to the collected state.
+# a failure leaves the builder as it was. A status given with the body (a
+# redirect's, or one passed to as()) belongs to the value, not to the
+# collected state, and replaces the collected status for this body.
 sub _build {
-    my ($self, $name, $input, $options, $own_status) = @_;
+    my ($self, $name, $arguments, $has_own_status) = @_;
     my $state = $self->_state;
-    my @pairs = @$options;
-    my $status = defined $own_status ? $own_status : $state->{status};
-    push @pairs, status => $status if defined $status;
+    my @pairs;
+    push @pairs, status => $state->{status} if !$has_own_status && defined $state->{status};
     my @headers = $state->{headers}->flatten;
     push @pairs, headers => \@headers if @headers;
     push @pairs, content_type => $state->{content_type} if defined $state->{content_type};
-    my $value = PAGI::Response::response($name, $input, @pairs);
-    if (defined $state->{content_type}) {
-        my $type = _with_charset($value, $state->{content_type});
-        $value->content_type($type) if $type ne $state->{content_type};
-    }
+    my $value = PAGI::Response::response($name, @$arguments, @pairs);
     $state->{value} = $value;
     return $self;
 }
@@ -326,8 +319,9 @@ C<cookie>) apply to the current value first, then to the collected state.
 A change the value refuses (a status that forbids its body, a redirect's own
 status or Location) croaks and changes nothing.
 
-=item * B<A status a body brings with it> belongs to that value, not to the
-collected state: C<redirect('/x')> then C<text('hi')> is a 200.
+=item * B<A status a body brings with it> (a redirect's, or a C<status>
+passed to L</as>) belongs to that value, not to the collected state:
+C<redirect('/x')> then C<text('hi')> is a 200.
 
 =item * B<Cookies are headers.> C<cookie> adds a C<Set-Cookie> field, so
 order, reading and removal follow the header list.
@@ -429,8 +423,9 @@ C<content_type(undef)>.
     $builder->content_type(undef);
 
 Sets, clears or reads the Content-Type. Clearing means the body class's
-default. For a Text or HTML body, a type without a charset gets
-C<; charset=utf-8>, except JSON types (C<application/json>, C<*+json>).
+default. The body class may adjust the type: Text and HTML add
+C<; charset=utf-8> to one without a charset, except JSON types (see
+L<PAGI::Response::Text>).
 
 =head2 content_type_try
 
@@ -463,10 +458,19 @@ Each method builds the value now and returns the builder.
     $builder->as('JSON', $data);
     $builder->as('+My::Response', $value);
     $builder->as('File', $path, filename => 'report.pdf');
+    $builder->as('Redirect', '/moved', status => 301);
+    $builder->as('Empty');
 
-Builds C<response($name, $value, ...)> with the collected state. C<$name>
-resolves as in L<PAGI::Response/response>. Trailing options are the class's
-own; C<status>, C<headers> and C<content_type> croak, since the builder owns
+Builds C<response($name, @arguments, ...)>: the arguments go to the class
+unchanged, followed by the collected status, headers and Content-Type. So any
+response class works, whatever its constructor takes, and its own rules apply
+(Empty, for example, refuses a collected Content-Type). C<$name> resolves as
+in L<PAGI::Response/response>.
+
+The arguments are read as the response classes read theirs: positional
+values, then name/value pairs. A C<status> among the pairs belongs to this
+body: it replaces the collected status for it and is not collected, as with
+L</redirect>. C<headers> and C<content_type> croak, since the builder owns
 them.
 
 =head2 text
@@ -494,8 +498,8 @@ C<as('JSON', $data)>. Data that cannot be encoded croaks here.
     $builder->redirect('/login');
     $builder->redirect('/moved', 301);
 
-A Redirect with the given status (default 302), which belongs to the value
-rather than the collected state.
+C<as('Redirect', $url, status => $status)>, the status defaulting to 302. It
+belongs to the value rather than the collected state.
 
 =head2 file
 
@@ -514,6 +518,8 @@ has started.
 =head2 empty
 
 An Empty response with the collected status, or 200, and no Content-Type.
+This is the builder's own empty response, not C<as('Empty')>: it leaves a
+collected Content-Type out instead of passing it to Empty, which refuses one.
 
 =head2 has_body_source
 
@@ -556,8 +562,8 @@ calls too:
 
 =over 4
 
-=item * C<text>, C<html>, C<json>, C<file> and C<stream> call L</as>.
-C<redirect> and C<empty> build directly and do not.
+=item * C<text>, C<html>, C<json>, C<file>, C<stream> and C<redirect> call
+L</as>. C<empty> builds the builder's own empty response and does not.
 
 =item * C<cookie>, C<delete_cookie> and C<header_try> call L</header>.
 
