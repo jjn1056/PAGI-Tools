@@ -151,13 +151,10 @@
     // ===== Session Management =====
     // The chat session belongs to one tab: sessionStorage survives a reload
     // (so a reconnect resumes it) but is not shared, so two tabs are two users.
+    // The server issues the id in its 'connected' message; until then there is
+    // none to send.
     function getOrCreateSessionId() {
-        let sessionId = sessionStorage.getItem('chat-session-id');
-        if (!sessionId) {
-            sessionId = `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-            sessionStorage.setItem('chat-session-id', sessionId);
-        }
-        return sessionId;
+        return sessionStorage.getItem('chat-session-id') || '';
     }
 
     function clearSession() {
@@ -271,7 +268,7 @@
 
             case 'resumed':
                 // Session resumed after reconnect
-                state.userId = data.session_id;  // session_id is the user_id
+                state.userId = data.user_id;
                 state.sessionId = data.session_id;
                 state.username = data.name;
                 sessionStorage.setItem('chat-session-id', data.session_id);

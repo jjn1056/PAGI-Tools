@@ -3,11 +3,14 @@ package PAGI::Utils::Random;
 use strict;
 use warnings;
 use Exporter 'import';
+use Carp qw(croak);
 
 our @EXPORT_OK = qw(secure_random_bytes);
 
 sub secure_random_bytes {
     my ($length) = @_;
+    croak 'secure_random_bytes length must be a non-negative integer'
+        unless defined $length && !ref $length && $length =~ /\A[0-9]+\z/;
 
     # Try /dev/urandom first (Unix)
     if (open my $fh, '<:raw', '/dev/urandom') {
@@ -43,7 +46,8 @@ PAGI::Utils::Random - Cryptographically secure random bytes
 
 =head2 secure_random_bytes($length)
 
-Returns C<$length> cryptographically secure random bytes.
+Returns C<$length> cryptographically secure random bytes. Croaks unless
+C<$length> is a non-negative integer; C<0> returns an empty string.
 
 Tries C</dev/urandom> first, then falls back to L<Crypt::URandom>.
 Dies if no secure source is available.
