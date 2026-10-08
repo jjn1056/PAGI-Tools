@@ -268,7 +268,7 @@
 
             case 'resumed':
                 // Session resumed after reconnect
-                state.userId = data.session_id;  // session_id is the user_id
+                state.userId = data.user_id;
                 state.sessionId = data.session_id;
                 state.username = data.name;
                 sessionStorage.setItem('chat-session-id', data.session_id);

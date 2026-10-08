@@ -15,7 +15,7 @@ use ChatApp::State qw(
     get_session_by_name set_session_connected set_session_disconnected
     cancel_disconnect_timer is_session_connected
     get_room add_room get_all_rooms
-    add_user_to_room remove_user_from_room get_room_users
+    add_user_to_room remove_user_from_room get_room_users get_room_sessions
     add_message get_room_messages get_messages_since
     sanitize_username sanitize_room_name
 );
@@ -46,9 +46,8 @@ async sub chat {
         }
         my $broadcast_leave = sub {
             my ($room_name, $username) = @_;
-            for my $other (@{ get_room_users($room_name) }) {
-                my $other_session = get_session($other->{id});
-                next unless $other_session && $other_session->{send_cb};
+            for my $other_session (@{ get_room_sessions($room_name) }) {
+                next unless $other_session->{send_cb};
                 # Best-effort: runs when the grace period ends, outside any
                 # await, and a recipient that has gone is simply skipped.
                 $other_session->{send_cb}->({
@@ -79,6 +78,7 @@ async sub chat {
         await $ws->send_json({
             type           => 'resumed',
             session_id     => $session_id,
+            user_id        => $session->{user_id},
             name           => $session->{name},
             rooms          => [keys %{$session->{rooms}}],
             missedMessages => \%missed_messages,
@@ -95,6 +95,7 @@ async sub chat {
         await $ws->send_json({
             type       => 'connected',
             session_id => $session_id,
+            user_id    => $session->{user_id},
             name       => $username,
             rooms      => [sort keys %{get_all_rooms()}],
         });
@@ -460,13 +461,9 @@ async sub _send_history {
 async sub _broadcast_to_room {
     my ($room_name, $data, $exclude_id) = @_;
 
-    my $room_users = get_room_users($room_name);
-
-    for my $room_user (@$room_users) {
-        next if defined $exclude_id && $room_user->{id} eq $exclude_id;
-
-        my $session = get_session($room_user->{id});
-        next unless $session && $session->{send_cb};
+    for my $session (@{ get_room_sessions($room_name) }) {
+        next if defined $exclude_id && $session->{id} eq $exclude_id;
+        next unless $session->{send_cb};
 
         # Best-effort and not awaited, so one slow client does not hold
         # up the rest of the room.

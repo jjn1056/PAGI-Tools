@@ -180,6 +180,27 @@ SKIP: {
                 isnt($connected->{session_id}, 'attacker-chosen', 'not the id the client sent');
             });
 
+            # The id others see is a public user id, never the session id:
+            # knowing someone's public id must not let a client resume as them.
+            $client->websocket('/ws/chat?name=Alice', sub {
+                my ($ws) = @_;
+                my $connected = $ws->receive_json;
+                my ($session_id, $user_id) = @{$connected}{qw(session_id user_id)};
+                is($ws->receive_json->{type}, 'joined', 'Alice joins the general room');
+                like($user_id // '', qr/\A[0-9a-f]{32}\z/, 'the client is told its public user id');
+                isnt($user_id // '', $session_id, 'which is not its session id');
+                my $users = $client->get('/api/room/general/users')->json;
+                my ($alice) = grep { $_->{name} eq 'Alice' } @$users;
+                is($alice->{id}, $user_id, 'the room lists the public user id');
+                ok(!(grep { ($_->{id} // '') eq $session_id } @$users), 'never the session id');
+                $client->websocket('/ws/chat?name=Mallory&session=' . ($alice->{id} // ''), sub {
+                    my ($other) = @_;
+                    my $reply = $other->receive_json;
+                    is($reply->{type}, 'connected', 'a listed id does not resume the session');
+                    isnt($reply->{name}, 'Alice', 'so nobody becomes Alice');
+                });
+            });
+
             my $websocket_miss = $client->websocket('/ws/missing');
             ok($websocket_miss->is_closed, 'a WebSocket miss is refused');
             ok(!defined $websocket_miss->close_code, 'with no RFC 6455 close code');

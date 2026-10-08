@@ -132,8 +132,8 @@ Type these in the chat input:
 
 ### Server to Client
 ```json
-{ "type": "connected", "session_id": "...", "name": "...", "rooms": [...] }
-{ "type": "resumed", "session_id": "...", "name": "...", "rooms": [...], "missedMessages": {...} }
+{ "type": "connected", "session_id": "...", "user_id": "...", "name": "...", "rooms": [...] }
+{ "type": "resumed", "session_id": "...", "user_id": "...", "name": "...", "rooms": [...], "missedMessages": {...} }
 { "type": "message", "room": "...", "from": "...", "text": "...", "ts": ... }
 { "type": "user_joined", "room": "...", "user": "...", "users": [...] }
 { "type": "user_left", "room": "...", "user": "...", "users": [...] }

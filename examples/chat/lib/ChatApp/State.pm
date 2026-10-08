@@ -7,13 +7,14 @@ use Exporter 'import';
 use Future::IO;
 use Time::HiRes qw(time);
 use Scalar::Util qw(weaken);
+use PAGI::Utils::Random ();
 
 our @EXPORT_OK = qw(
     get_session create_session update_session remove_session
     get_session_by_name set_session_connected set_session_disconnected
     cancel_disconnect_timer is_session_connected
     get_room add_room remove_room get_all_rooms
-    add_user_to_room remove_user_from_room get_room_users
+    add_user_to_room remove_user_from_room get_room_users get_room_sessions
     add_message get_room_messages get_messages_since
     add_sse_subscriber remove_sse_subscriber get_sse_subscribers
     add_system_event get_recent_system_events
@@ -21,7 +22,7 @@ our @EXPORT_OK = qw(
 );
 
 # Shared state across all connections
-my %sessions;        # session_id => { id, name, rooms => {}, send_cb, connected, disconnected_at, disconnect_timer, last_seen, last_message_id }
+my %sessions;        # session_id => { id, user_id (public), name, rooms => {}, send_cb, connected, disconnected_at, disconnect_timer, last_seen, last_message_id }
 my %rooms;           # room_name => { name, users => {}, messages => [], created_at, created_by }
 my %sse_subscribers; # client_id => { sse, last_event_id }
 my @system_events;   # Recent system events for SSE catch-up
@@ -118,6 +119,9 @@ sub create_session {
     # New session
     $sessions{$session_id} = {
         id              => $session_id,
+        # What other users see: the session id itself resumes the session,
+        # so it is never shown to anyone but its owner.
+        user_id         => unpack('H*', PAGI::Utils::Random::secure_random_bytes(16)),
         name            => $name,
         send_cb         => $send_cb,
         rooms           => {},
@@ -370,12 +374,22 @@ sub get_room_users {
         map {
             my $s = $sessions{$_};
             ($s && $s->{connected}) ? {
-                id     => $s->{id},
+                id     => $s->{user_id},
                 name   => $s->{name},
                 typing => ($s->{typing_in} // '') eq $room_name
             } : ()
         }
         keys %{$room->{users}}
+    ];
+}
+
+# A room's connected sessions, for sending to them; never sent to clients.
+sub get_room_sessions {
+    my ($room_name) = @_;
+
+    my $room = $rooms{$room_name} or return [];
+    return [
+        grep { $_ && $_->{connected} } map { $sessions{$_} } keys %{$room->{users}}
     ];
 }
 

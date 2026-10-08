@@ -193,7 +193,9 @@
     with warnings, or die with an unrelated message (#23).
   - The chat example's server issues every new session id from secure
     random bytes and no longer adopts an id the client chose; ids used to
-    come from the time and rand(), and the browser made up its own (#24).
+    come from the time and rand(), and the browser made up its own. Other
+    users now see a separate public user id: the session id, which resumes
+    a session, was listed in every room's users (#24).
   - GZip sent every compressed response as 200, whatever its status.
   - ETag, GZip and ContentLength corrupted file/fh bodies, worked from
     partial bodies, emitted a start without a status when the application
