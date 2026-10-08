@@ -4,6 +4,7 @@ use warnings;
 use Test2::V0;
 use Future::AsyncAwait;
 use IO::Async::Loop;
+use Digest::SHA qw(sha256_hex);
 
 use lib 'lib';
 
@@ -37,6 +38,8 @@ subtest 'buffered response: ETag header generated from the body' => sub {
 
     my ($etag) = map { $_->[1] } grep { lc($_->[0]) eq 'etag' } @{$sent[0]{headers}};
     ok $etag, 'an ETag header was added';
+    my $digest = sha256_hex('hello');
+    like $etag, qr{\A(?:W/)?"\Q$digest\E"\z}, 'the ETag is the SHA-256 of the body';
     is $sent[1]{body}, 'hello', 'body is unchanged';
 };
 
