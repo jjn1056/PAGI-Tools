@@ -39,6 +39,10 @@
   - PAGI::WebSocket and PAGI::SSE: finished, which resolves once the
     scope has ended and the helper's own work (its close, best-effort sends
     and on_close callbacks) has settled.
+  - PAGI::ResponseBuilder: collects a response's status, headers and
+    cookies in stages and builds the body last, as an ordinary Response
+    value, for frameworks to extend. Applications keep using
+    response('Name', ...).
 
   [Changed]
   - raw_path is the full requested path at every mount level; AccessLog
