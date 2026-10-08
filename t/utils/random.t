@@ -18,4 +18,16 @@ subtest 'successive calls return different values' => sub {
     ok $a ne $b, 'two calls produce different output';
 };
 
+subtest 'zero bytes is an empty string' => sub {
+    is secure_random_bytes(0), '', 'zero length';
+};
+
+subtest 'an invalid length dies' => sub {
+    for my $case ([undef, 'undef'], [-1, 'negative'], [1.5, 'fractional'], ['ten', 'not a number']) {
+        my ($length, $label) = @$case;
+        like dies { secure_random_bytes($length) },
+            qr/secure_random_bytes length must be a non-negative integer/, $label;
+    }
+};
+
 done_testing;

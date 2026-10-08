@@ -188,6 +188,9 @@
   [Fixed]
   - PAGI::Middleware::XSendfile removes Content-Length when it hands a
     file to the proxy, since the body it sends is empty (#19).
+  - PAGI::Utils::Random's secure_random_bytes croaks unless its length is
+    a non-negative integer, where a bad length used to return an empty or
+    short string (#23).
   - GZip sent every compressed response as 200, whatever its status.
   - ETag, GZip and ContentLength corrupted file/fh bodies, worked from
     partial bodies, emitted a start without a status when the application
