@@ -435,6 +435,13 @@ sub content_type_try {
 
 sub cookie {
     my ($self, $name, $value, %options) = @_;
+    return $self->header('Set-Cookie', _set_cookie_value($name, $value, %options));
+}
+
+# The Set-Cookie field value for a cookie. PAGI::ResponseBuilder formats its
+# cookies with it too, so both send identical fields.
+sub _set_cookie_value {
+    my ($name, $value, %options) = @_;
     my %cookie = (value => $value, path => $options{path} // '/');
     $cookie{domain}    = $options{domain}  if defined $options{domain};
     $cookie{expires}   = $options{expires} if defined $options{expires};
@@ -442,7 +449,7 @@ sub cookie {
     $cookie{secure}    = $options{secure} if $options{secure};
     $cookie{httponly}  = $options{httponly} if $options{httponly};
     $cookie{samesite}  = $options{samesite} if defined $options{samesite};
-    return $self->header('Set-Cookie', Cookie::Baker::bake_cookie($name, \%cookie));
+    return Cookie::Baker::bake_cookie($name, \%cookie);
 }
 
 sub delete_cookie {

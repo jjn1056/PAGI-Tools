@@ -4,6 +4,7 @@ use Test2::V0;
 use Future;
 use Future::AsyncAwait;
 use PAGI::Response;
+use PAGI::Response::Text;
 
 sub http_scope { { type => 'http', method => 'GET', headers => [] } }
 sub receive { sub { Future->done({ type => 'http.request', body => '', more => 0 }) } }
@@ -258,6 +259,18 @@ subtest 'subclass hooks render bytes and default content type' => sub {
     my $res = T::RenderedResponse->new('value');
     is $res->body, 'rendered:value', 'render hook supplies byte body';
     is $res->content_type, 'application/x-rendered', 'default content type hook applies';
+};
+
+
+subtest 'cookie formatting is shared through _set_cookie_value' => sub {
+    my %options = (httponly => 1, samesite => 'Lax', max_age => 60);
+    my $response = PAGI::Response::Text->new('x')->cookie(session => 'abc', %options);
+    is PAGI::Response::_set_cookie_value(session => 'abc', %options),
+        $response->header('Set-Cookie'),
+        'the function returns exactly the field cookie() adds';
+    is PAGI::Response::_set_cookie_value(session => 'abc'),
+        'session=abc; path=/',
+        'path defaults to /';
 };
 
 done_testing;
