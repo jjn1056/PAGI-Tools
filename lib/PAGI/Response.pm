@@ -305,6 +305,11 @@ application.
 
 =cut
 
+# A response refused through PAGI::ResponseBuilder (the staged builder
+# frameworks extend) reports the handler's line, not the builder's: Carp skips frames in
+# trusted packages, and the response classes trust this one through @ISA.
+our @CARP_NOT = ('PAGI::ResponseBuilder');
+
 my %KNOWN_OPTIONS = map { $_ => 1 } qw(status content_type headers);
 our @EXPORT_OK = qw(response);
 our %EXPORT_TAGS = (all => \@EXPORT_OK);

@@ -411,6 +411,9 @@ Every value of a field, as an arrayref.
 
 =head2 has_header
 
+True when the field is present: on the current value if there is one, else
+in the collected headers.
+
 =head2 header_try
 
 Adds the field unless it is present.
@@ -431,7 +434,14 @@ C<; charset=utf-8>, except JSON types (C<application/json>, C<*+json>).
 
 =head2 content_type_try
 
+Sets the Content-Type unless one is present. After a body, the class's
+default counts as present, so C<< text('x')->content_type_try('text/csv') >>
+keeps C<text/plain; charset=utf-8>.
+
 =head2 has_content_type
+
+True when a Content-Type is present: on the current value if there is one,
+else collected.
 
 =head2 cookie
 
@@ -461,17 +471,23 @@ them.
 
 =head2 text
 
+    $builder->text($string);
+
+C<as('Text', $string)>. The string must be defined and not a reference; a
+framework that renders other values stringifies them first, in its own
+override.
+
 =head2 html
+
+    $builder->html($string);
+
+C<as('HTML', $string)>, with the same rule for the string as L</text>.
 
 =head2 json
 
-    $builder->text($string);
-    $builder->html($string);
     $builder->json($data);
 
-C<as('Text', ...)>, C<as('HTML', ...)>, C<as('JSON', ...)>. Text and HTML
-take a defined, non-reference string; a framework that renders other values
-stringifies them first, in its own override.
+C<as('JSON', $data)>. Data that cannot be encoded croaks here.
 
 =head2 redirect
 
@@ -483,12 +499,17 @@ rather than the collected state.
 
 =head2 file
 
+    $builder->file($path, filename => 'report.pdf');
+
+C<as('File', $path, @options)>. The file is checked when the response is
+sent, not here (see L</ERROR TIMING>).
+
 =head2 stream
 
-    $builder->file($path, filename => 'report.pdf');
     $builder->stream(async sub { my ($writer) = @_; await $writer->write($chunk) });
 
-C<as('File', ...)> and C<as('Stream', ...)>.
+C<as('Stream', $producer, @options)>. The producer runs after the response
+has started.
 
 =head2 empty
 
@@ -510,6 +531,47 @@ builds) each time it is called.
     await $builder->to_app->($scope, $receive, $send);
 
 The current value's application.
+
+=head1 SUBCLASSING
+
+Frameworks extend this class. A subclass may rely on the following.
+
+=over 4
+
+=item * Builder state lives under the C<_response_builder> key of the
+blessed hash, so a subclass's own keys, including Moo and Mooish attributes,
+do not collide with it. There is no C<BUILD> or C<DEMOLISH> logic, and the
+builder holds no scope, connection or sender.
+
+=item * L</new> takes no arguments; a Moo subclass's C<FOREIGNBUILDARGS>
+returns an empty list.
+
+=item * Every public method is an ordinary method that a subclass may
+override and call with C<SUPER::>. Coercing input before the builder sees it
+(a framework that renders exception objects stringifies them in its C<text>)
+is the intended pattern.
+
+=item * Some methods call others through C<$self>, so an override sees those
+calls too:
+
+=over 4
+
+=item * C<text>, C<html>, C<json>, C<file> and C<stream> call L</as>.
+C<redirect> and C<empty> build directly and do not.
+
+=item * C<cookie>, C<delete_cookie> and C<header_try> call L</header>.
+
+=item * C<header> and C<remove_header> with a C<Content-Type> name, and
+C<content_type_try>, call L</content_type>; C<status_try> calls L</status>.
+
+=item * C<to_app> calls L</response>.
+
+=back
+
+An override of L</as> must not call back into the shorthands (C<text> and
+the others): they call C<as>, so the two would recurse.
+
+=back
 
 =head1 SEE ALSO
 

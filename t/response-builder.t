@@ -242,4 +242,36 @@ subtest 'subclass keys do not collide' => sub {
     is sent($b)->status, 201;
 };
 
+subtest "errors name the caller's file, not the builder's" => sub {
+    my $file = quotemeta __FILE__;
+    like dies { builder()->status(204)->text('x') },
+        qr/forbidden for status 204 at $file line/, 'a body-time error';
+    like dies { builder()->text('x')->status(204) },
+        qr/forbidden for status 204 at $file line/, 'a setter refused by the value';
+    like dies { builder()->redirect('/x')->header(Location => '/y') },
+        qr/response-owned at $file line/, "a redirect's own header";
+    like dies { builder()->status('abc') },
+        qr/100-599 at $file line/, "the builder's own check";
+};
+
+# Pins the delegation documented under SUBCLASSING.
+BEGIN {
+    package My::Recording::Response;
+    our @ISA = ('PAGI::ResponseBuilder');
+    our @calls;
+    sub as     { my $self = shift; push @calls, "as:$_[0]"; $self->SUPER::as(@_) }
+    sub header { my $self = shift; push @calls, "header:$_[0]" if @_ > 1; $self->SUPER::header(@_) }
+}
+
+subtest 'documented delegation between methods' => sub {
+    @My::Recording::Response::calls = ();
+    my $b = My::Recording::Response->new;
+    $b->text('a')->html('b')->json({})->file(__FILE__)->stream(sub { Future->done });
+    $b->redirect('/x')->empty;
+    $b->cookie(a => 1)->delete_cookie('b')->header_try('X-T' => 1);
+    is \@My::Recording::Response::calls,
+        [qw(as:Text as:HTML as:JSON as:File as:Stream header:Set-Cookie header:Set-Cookie header:X-T)],
+        'shorthands call as(); redirect and empty do not; cookies and header_try call header()';
+};
+
 done_testing;
