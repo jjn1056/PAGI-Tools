@@ -5,6 +5,13 @@ use Test2::V0;
 
 use PAGI::Utils::Random qw(secure_random_bytes);
 
+subtest 'Crypt::URandom is the random source' => sub {
+    ok $INC{'Crypt/URandom.pm'}, 'loaded with the module';
+    no warnings 'redefine';
+    local *Crypt::URandom::urandom = sub { 'u' x $_[0] };
+    is secure_random_bytes(4), 'uuuu', 'the bytes come from Crypt::URandom';
+};
+
 subtest 'returns correct length' => sub {
     for my $len (1, 8, 16, 32, 64) {
         my $bytes = secure_random_bytes($len);

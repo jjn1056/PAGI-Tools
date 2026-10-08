@@ -4,6 +4,7 @@ use strict;
 use warnings;
 use Exporter 'import';
 use Carp qw(croak);
+use Crypt::URandom ();
 
 our @EXPORT_OK = qw(secure_random_bytes);
 
@@ -12,20 +13,7 @@ sub secure_random_bytes {
     croak 'secure_random_bytes length must be a non-negative integer'
         unless defined $length && !ref $length && $length =~ /\A[0-9]+\z/;
 
-    # Try /dev/urandom first (Unix)
-    if (open my $fh, '<:raw', '/dev/urandom') {
-        my $bytes;
-        read($fh, $bytes, $length);
-        close $fh;
-        return $bytes if defined $bytes && length($bytes) == $length;
-    }
-
-    # Fallback: use Crypt::URandom if available
-    if (eval { require Crypt::URandom; 1 }) {
-        return Crypt::URandom::urandom($length);
-    }
-
-    die "No secure random source available (need /dev/urandom or Crypt::URandom)\n";
+    return Crypt::URandom::urandom($length);
 }
 
 1;
@@ -49,14 +37,8 @@ PAGI::Utils::Random - Cryptographically secure random bytes
 Returns C<$length> cryptographically secure random bytes. Croaks unless
 C<$length> is a non-negative integer; C<0> returns an empty string.
 
-Tries C</dev/urandom> first, then falls back to L<Crypt::URandom>.
-Dies if no secure source is available.
-
-=head1 PLATFORM NOTES
-
-On Unix, Linux, and macOS, C</dev/urandom> is used directly and no
-additional modules are needed. On systems without C</dev/urandom>
-(notably Windows), install L<Crypt::URandom> to provide a secure
-random source.
+The bytes come from L<Crypt::URandom>, which uses the operating system's
+random source: a system call such as L<getrandom(2)> where one is
+available, otherwise C</dev/urandom>, and the system API on Windows.
 
 =cut
