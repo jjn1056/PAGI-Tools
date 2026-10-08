@@ -568,7 +568,7 @@ resolves a class name the way `middleware()` does (`+` for an exact class).
 | Before | After |
 | --- | --- |
 | `$request->response` | construct the desired concrete Response directly |
-| `PAGI::Response->new($scope)` as a mutable builder | construct a complete response; pass the Request to Session, Stash, State, CSRF, URL or Transport helpers |
+| `PAGI::Response->new($scope)` as a mutable builder | construct a complete response; pass the Request to Session, Stash, State, CSRF, URL or Transport helpers. A framework that extended it: `PAGI::ResponseBuilder` |
 | `PAGI::Response->text($s)` | `response('Text', $s)` |
 | `PAGI::Response->html($s)` | `response('HTML', $s)` |
 | `PAGI::Response->json($v)` | `response('JSON', $v)` |

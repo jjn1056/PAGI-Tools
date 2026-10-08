@@ -305,6 +305,11 @@ application.
 
 =cut
 
+# A response refused through PAGI::ResponseBuilder (the staged builder
+# frameworks extend) reports the handler's line, not the builder's: Carp skips frames in
+# trusted packages, and the response classes trust this one through @ISA.
+our @CARP_NOT = ('PAGI::ResponseBuilder');
+
 my %KNOWN_OPTIONS = map { $_ => 1 } qw(status content_type headers);
 our @EXPORT_OK = qw(response);
 our %EXPORT_TAGS = (all => \@EXPORT_OK);
@@ -435,6 +440,13 @@ sub content_type_try {
 
 sub cookie {
     my ($self, $name, $value, %options) = @_;
+    return $self->header('Set-Cookie', _set_cookie_value($name, $value, %options));
+}
+
+# The Set-Cookie field value for a cookie. PAGI::ResponseBuilder formats its
+# cookies with it too, so both send identical fields.
+sub _set_cookie_value {
+    my ($name, $value, %options) = @_;
     my %cookie = (value => $value, path => $options{path} // '/');
     $cookie{domain}    = $options{domain}  if defined $options{domain};
     $cookie{expires}   = $options{expires} if defined $options{expires};
@@ -442,7 +454,7 @@ sub cookie {
     $cookie{secure}    = $options{secure} if $options{secure};
     $cookie{httponly}  = $options{httponly} if $options{httponly};
     $cookie{samesite}  = $options{samesite} if defined $options{samesite};
-    return $self->header('Set-Cookie', Cookie::Baker::bake_cookie($name, \%cookie));
+    return Cookie::Baker::bake_cookie($name, \%cookie);
 }
 
 sub delete_cookie {
@@ -451,6 +463,17 @@ sub delete_cookie {
 }
 
 sub is_buffered { 1 }
+
+# A content type for a body sent as UTF-8 says so: one without a charset gets
+# "; charset=utf-8". JSON is UTF-8 by definition and takes no charset.
+sub _with_utf8_charset {
+    my ($type) = @_;
+    return $type if $type =~ /charset=/i;
+    my ($media) = $type =~ m{\A\s*([^;\s]+)};
+    return $type
+        if defined $media && (lc($media) eq 'application/json' || $media =~ m{\+json\z}i);
+    return "$type; charset=utf-8";
+}
 
 sub body {
     my ($self) = @_;

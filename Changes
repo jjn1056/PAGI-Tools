@@ -39,6 +39,13 @@
   - PAGI::WebSocket and PAGI::SSE: finished, which resolves once the
     scope has ended and the helper's own work (its close, best-effort sends
     and on_close callbacks) has settled.
+  - PAGI::ResponseBuilder: collects a response's status, headers and
+    cookies in stages and builds the body last, as an ordinary Response
+    value, for frameworks to extend. Applications keep using
+    response('Name', ...).
+  - Text and HTML responses declare the UTF-8 they always send: a custom
+    content type without a charset gets "; charset=utf-8" (JSON types
+    excepted), whether given to the constructor or set later.
 
   [Changed]
   - raw_path is the full requested path at every mount level; AccessLog

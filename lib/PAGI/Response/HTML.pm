@@ -28,9 +28,27 @@ C<text/html; charset=utf-8>. Common C<status>, flat C<headers>, and
 C<content_type> options are accepted. The class encodes markup but does not
 escape or sanitize it.
 
+
+=head2 Content type
+
+The body is always UTF-8, so a custom content type without a charset gets
+C<; charset=utf-8>, whether it is given to the constructor or set later:
+C<< response('HTML', $s, content_type => 'text/csv') >> sends
+C<text/csv; charset=utf-8>. A type that already names a charset is kept as
+given, and JSON types (C<application/json>, C<*+json>) get none, since JSON is
+UTF-8 by definition.
+
 =cut
 
 sub default_content_type { 'text/html; charset=utf-8' }
+
+# The body is always UTF-8, so a custom content type declares it.
+sub content_type {
+    my ($self, @type) = @_;
+    @type = (PAGI::Response::_with_utf8_charset($type[0]))
+        if @type && defined $type[0] && !ref $type[0];
+    return $self->SUPER::content_type(@type);
+}
 
 sub render {
     my ($self, $value) = @_;
