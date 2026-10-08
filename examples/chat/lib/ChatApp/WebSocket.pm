@@ -8,6 +8,7 @@ use strict;
 use warnings;
 
 use Future::AsyncAwait;
+use PAGI::Utils::Random ();
 
 use ChatApp::State qw(
     get_session create_session update_session
@@ -118,8 +119,8 @@ async sub chat {
 }
 
 sub _generate_session_id {
-    require Digest::SHA;
-    return Digest::SHA::sha256_hex(time() . $$ . rand());
+    # Clients resume a session with its id, so it must not be guessable.
+    return unpack('H*', PAGI::Utils::Random::secure_random_bytes(32));
 }
 
 async sub _handle_message {
