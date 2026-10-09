@@ -871,6 +871,7 @@ PAGI::SSE - Convenience wrapper for PAGI Server-Sent Events connections
 
     use Future;
     use Future::AsyncAwait;
+    use Scalar::Util qw(refaddr);
     use PAGI::Compose qw(compose);
     use PAGI::Routing qw(sse);
 
@@ -894,7 +895,7 @@ PAGI::SSE - Convenience wrapper for PAGI Server-Sent Events connections
 
             $sse->on_close(sub {
                 my ($sse, $reason) = @_;    # undef after an explicit close
-                delete $subscribers{"$sse"};
+                delete $subscribers{refaddr $sse};
             });
 
             # Replay what a reconnecting client missed, then go live. Sends go
@@ -903,7 +904,7 @@ PAGI::SSE - Convenience wrapper for PAGI Server-Sent Events connections
             # published meanwhile after the replay: nothing missed or reordered.
             my $seen = $sse->last_event_id // 0;
             my @replay = map { $sse->send_event(%$_) } @history[$seen .. $#history];
-            $subscribers{"$sse"} = $sse;
+            $subscribers{refaddr $sse} = $sse;
             await Future->needs_all(@replay);
 
             await $sse->run;    # until the client disconnects
