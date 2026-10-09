@@ -280,4 +280,17 @@ subtest 'a stream checks the connection methods it will use before sending' => s
     is($events[0]{type}, 'http.response.start', 'a complete connection streams normally');
 };
 
+subtest 'a producer that returns a failed Future fails the response after start' => sub {
+    my @events;
+    my $running = response('Stream', sub {
+        return Future->fail("producer Future failed\n");
+    })->to_app->(http_scope(), receive(), sub { push @events, $_[0]; Future->done });
+
+    like(dies { $running->get }, qr/producer Future failed/,
+        'the failure propagates to the caller');
+    is($events[0]{type}, 'http.response.start', 'the response had started');
+    is([grep { ($_->{type} // '') eq 'http.response.body' && !($_->{more} // 0) } @events],
+        [], 'no terminal body event pretends the stream completed');
+};
+
 done_testing;
