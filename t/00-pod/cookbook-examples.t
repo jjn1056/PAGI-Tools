@@ -281,15 +281,16 @@ subtest 'Bad request bodies recipe executes as published' => sub {
     );
 };
 
-subtest 'Streaming Response Extension NDJSON recipe executes as published' => sub {
+subtest 'Streaming Response Formats recipe executes as published' => sub {
     my $recipe = first_code_block($cookbook,
-        '=head2 Streaming Response Extension: NDJSON');
+        '=head2 Streaming Response Formats');
     perl_script_runs(
-        'streaming response extension NDJSON recipe',
+        'streaming response formats recipe',
         $recipe
             . "use PAGI::Test::Client;\n"
-            . "my \$captured = PAGI::Test::Client->new(app => \$response->to_app)->get('/');\n"
-            . "die 'expected two newline-terminated JSON records' unless \$captured->content eq qq|{\\\"id\\\":1}\\n{\\\"id\\\":2}\\n|;\n",
+            . "my \$res = PAGI::Test::Client->new(app => \$response->to_app)->get('/');\n"
+            . "die 'expected two TSV rows' unless \$res->content eq qq|id\\tname\\n1\\tAda\\n|;\n"
+            . "die 'expected the TSV type' unless \$res->header('Content-Type') eq 'text/tab-separated-values; charset=utf-8';\n",
     );
 };
 

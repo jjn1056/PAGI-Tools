@@ -250,8 +250,8 @@ unknown-, duplicate-, and malformed-option checks. Application subclasses
 must not call private Response parsing or emission methods. See
 L<PAGI::Tools::Cookbook/Company Collection JSON Response> for a complete
 class and Route example, built with C<response('+...')>.
-See L<PAGI::Tools::Cookbook/"Streaming Response Extension: NDJSON"> for the
-public Stream-extension proof.
+See L<PAGI::Tools::Cookbook/"Streaming Response Formats"> for writing a
+streaming format.
 
 Constructor dispatch through C<SUPER::new> preserves subclass identity. A
 class may combine construction-time normalization with a new C<render> method
