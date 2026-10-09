@@ -331,4 +331,37 @@ subtest 'write_item keeps write\'s byte rules' => sub {
     })) }, qr/encoded bytes/, 'a reference is refused, as by write');
 };
 
+{
+    package T::RefusingStream;
+    use parent 'PAGI::Response::Stream';
+    use Carp qw(croak);
+    sub format_item { croak 'refused item' }
+}
+
+subtest 'an error from format_item points at the producer, not the Writer' => sub {
+    my $error = dies { served_bodies(T::RefusingStream->new(async sub {
+        await $_[0]->write_item('x');
+    })) };
+    like($error, qr/refused item at \Q${\ __FILE__}\E line \d+/,
+        'the croak names the line that called write_item');
+};
+
+subtest 'write_item keeps write\'s backpressure and counts the formatted bytes' => sub {
+    my $body_send = Future->new;
+    my ($writer, $write);
+    my $running = T::UpperStream->new(sub {
+        ($writer) = @_;
+        $write = $writer->write_item('one');
+        return $write;
+    })->to_app->(http_scope(), receive(), sub {
+        return $_[0]{more} ? $body_send : Future->done;
+    });
+    ok(!$write->is_ready, 'write_item waits for the body send');
+    like(dies { $writer->write_item('two') }, qr/outstanding/,
+        'an overlapping write_item is refused');
+    $body_send->done;
+    $running->get;
+    is($writer->bytes_written, length("ONE\n"), 'the formatted bytes are counted');
+};
+
 done_testing;

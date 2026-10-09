@@ -44,6 +44,11 @@ response owns the format.
 # The connection methods a Writer calls. It checks for them before use, as a
 # capability check rather than a version check: a missing connection is
 # tolerated, an incomplete one is named.
+# Errors raised while a producer writes (by Writer, or by a response's
+# format_item called from write_item) are reported at the producer's line,
+# where the reader can act on them, not inside Writer.
+$Carp::Internal{'PAGI::Response::Writer'}++;
+
 my @CONNECTION_METHODS = qw(is_connected disconnect_reason disconnect_detail on_disconnect);
 
 sub _check_connection {

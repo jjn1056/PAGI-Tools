@@ -20,6 +20,7 @@ PAGI::Response::NDJSON - stream newline-delimited JSON, one record per item
 
     return response('NDJSON', async sub {
         my ($writer) = @_;
+        $writer->on_close(sub { return $cursor->close });   # also on disconnect or cancel
         while (defined(my $person = await $cursor->next_item)) {
             await $writer->write_item($person);
         }
