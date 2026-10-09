@@ -2,6 +2,7 @@ use strict;
 use warnings;
 
 use Future;
+use Future::AsyncAwait;
 use Test2::V0;
 
 use PAGI::Response qw(response);
@@ -291,6 +292,43 @@ subtest 'a producer that returns a failed Future fails the response after start'
     is($events[0]{type}, 'http.response.start', 'the response had started');
     is([grep { ($_->{type} // '') eq 'http.response.body' && !($_->{more} // 0) } @events],
         [], 'no terminal body event pretends the stream completed');
+};
+
+{
+    package T::UpperStream;
+    use parent 'PAGI::Response::Stream';
+    sub format_item { my ($self, $item) = @_; return uc($item) . "\n" }
+}
+
+sub served_bodies {
+    my ($response) = @_;
+    my @events;
+    $response->to_app->(http_scope(), receive(), sub { push @events, $_[0]; Future->done })->get;
+    return [map { $_->{body} } grep { $_->{more} } @events];
+}
+
+subtest 'write_item on a plain Stream writes the item as given' => sub {
+    is(served_bodies(response('Stream', async sub {
+        my ($writer) = @_;
+        await $writer->write_item('abc');
+    })), ['abc'], 'format_item passes the item through unchanged');
+};
+
+subtest 'a Stream subclass formats each item through format_item' => sub {
+    is(served_bodies(T::UpperStream->new(async sub {
+        my ($writer) = @_;
+        await $writer->write_item('one');
+        await $writer->write_item('two');
+    })), ["ONE\n", "TWO\n"], 'each write_item is shaped by the subclass');
+};
+
+subtest 'write_item keeps write\'s byte rules' => sub {
+    like(dies { served_bodies(response('Stream', async sub {
+        await $_[0]->write_item("caf\x{e9}\x{263a}");
+    })) }, qr/encoded bytes/, 'characters are refused, as by write');
+    like(dies { served_bodies(response('Stream', async sub {
+        await $_[0]->write_item({ not => 'bytes' });
+    })) }, qr/encoded bytes/, 'a reference is refused, as by write');
 };
 
 done_testing;

@@ -1031,4 +1031,13 @@ subtest 'genuine producer and terminal-send errors rethrow after cleanup' => sub
     is(terminal_events(\@successful_events), [], 'failed terminal send is not a success event');
 };
 
+subtest 'a Writer built without a response writes items unchanged' => sub {
+    my @events;
+    my $writer = PAGI::Response::Writer->_new(
+        send => sub { push @events, $_[0]; Future->done },
+    );
+    $writer->write_item('raw')->get;
+    is($events[0]{body}, 'raw', 'write_item is write when no response formats it');
+};
+
 done_testing;

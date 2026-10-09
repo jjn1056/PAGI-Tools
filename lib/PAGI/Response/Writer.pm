@@ -30,18 +30,14 @@ chunks.
 
     await $writer->write($bytes);       # primary backpressure boundary
     await $writer->write_text($chars);  # strict UTF-8, same boundary
+    await $writer->write_item($item);   # formatted by the response, same boundary
 
 B<Every write must be awaited before another starts.>
 
-The public writer families intentionally have different responsibilities:
-
-    $writer->write($bytes)       generic encoded-byte chunk
-    $writer->pipe_from($source)  generic next_chunk byte source
-    $writer->write_item($value)  NDJSON Writer: one encoded record
-
-C<write_item> belongs only to L<PAGI::Response::NDJSON::Writer>; generic Writer
-does not parse items or gain that method. Generic Writer owns byte delivery and
-backpressure.
+C<write_item> passes the item to the response's
+L<PAGI::Response::Stream/format_item> and writes the result; on a plain Stream
+that is the item itself. Writer owns byte delivery and backpressure; the
+response owns the format.
 
 =cut
 
@@ -78,6 +74,7 @@ sub _new {
         _send              => $send,
         _connection        => $connection,
         _transport         => $transport,
+        _response          => $args{response},
         _closed            => 0,
         _aborted           => 0,
         _disconnected      => 0,
@@ -169,6 +166,12 @@ sub write_text {
         unless defined($characters) && !ref($characters);
     my $bytes = encode('UTF-8', $characters, FB_CROAK | LEAVE_SRC);
     return $self->write($bytes);
+}
+
+sub write_item {
+    my ($self, $item) = @_;
+    my $response = $self->{_response};
+    return $self->write($response ? $response->format_item($item) : $item);
 }
 
 sub pipe_from {
@@ -437,10 +440,11 @@ sub _publish_disconnect {
 
 =head1 METHODS
 
-=head2 write, write_text
+=head2 write, write_text, write_item
 
     await $writer->write($encoded_bytes);
     await $writer->write_text($characters);
+    await $writer->write_item($item);
 
 C<write> sends one nonterminal body event and settles only when the PAGI send
 Future settles. Under PAGI 0.002007 that Future resolves after the server
@@ -449,7 +453,8 @@ resolution is not proof that the client received it. Writer then checks
 connection state and counts bytes only while still connected. A disconnect
 never manufactures a write failure. Genuine validation or resource failures
 from C<$send> still propagate.
-C<write_text> performs strict UTF-8 encoding first. Await each write before
+C<write_text> performs strict UTF-8 encoding first. C<write_item> writes what
+the response's C<format_item> returns for the item. Await each write before
 starting another.
 
 =head2 pipe_from
