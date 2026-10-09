@@ -282,10 +282,9 @@ backpressure.
         await $writer->write_item({ id => 1 });
     });
 
-Constructs a reusable L<PAGI::Response::NDJSON>. It streams each value through
-the specialized Writer as UTF-8 JSON followed by one LF. Buffered
-C<response('JSON', ...)> serializes one finite Perl value; it is not an incremental
-JSON sequence. See L<PAGI::Response::NDJSON> for framing and lifecycle details.
+Constructs a reusable L<PAGI::Response::NDJSON>. Each C<write_item> sends one
+value as UTF-8 JSON followed by one LF. Buffered C<response('JSON', ...)>
+serializes one finite Perl value; it is not an incremental JSON sequence.
 
 =head2 File
 
