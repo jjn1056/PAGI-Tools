@@ -409,4 +409,29 @@ subtest 'Empty owns zero bytes without a default content type' => sub {
     }
 };
 
+subtest 'Text and HTML declare the UTF-8 they send on a custom content type' => sub {
+    my %make = (
+        Text => sub { response('Text', @_) },
+        HTML => sub { response('HTML', @_) },
+    );
+    for my $class (sort keys %make) {
+        my $make = $make{$class};
+        is $make->('x', content_type => 'text/csv')->content_type,
+            'text/csv; charset=utf-8', "$class: a custom type gets the charset";
+        is $make->('x', content_type => 'text/csv; charset=latin1')->content_type,
+            'text/csv; charset=latin1', "$class: a named charset is kept";
+        is $make->('{}', content_type => 'application/json')->content_type,
+            'application/json', "$class: application/json gets none";
+        is $make->('{}', content_type => 'application/vnd.api+json')->content_type,
+            'application/vnd.api+json', "$class: +json gets none";
+        my $later = $make->('x');
+        $later->content_type('application/xml');
+        is $later->content_type, 'application/xml; charset=utf-8', "$class: set after construction";
+        $later->content_type(undef);
+        is $later->content_type, undef, "$class: clearing still clears";
+    }
+    is response('JSON', {}, content_type => 'application/xml')->content_type,
+        'application/xml', 'other classes are unchanged';
+};
+
 done_testing;

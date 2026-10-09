@@ -452,6 +452,17 @@ sub delete_cookie {
 
 sub is_buffered { 1 }
 
+# A content type for a body sent as UTF-8 says so: one without a charset gets
+# "; charset=utf-8". JSON is UTF-8 by definition and takes no charset.
+sub _with_utf8_charset {
+    my ($type) = @_;
+    return $type if $type =~ /charset=/i;
+    my ($media) = $type =~ m{\A\s*([^;\s]+)};
+    return $type
+        if defined $media && (lc($media) eq 'application/json' || $media =~ m{\+json\z}i);
+    return "$type; charset=utf-8";
+}
+
 sub body {
     my ($self) = @_;
     my $body = $self->{_body};
