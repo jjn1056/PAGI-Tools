@@ -290,7 +290,9 @@ subtest 'Streaming Response Formats recipe executes as published' => sub {
             . "use PAGI::Test::Client;\n"
             . "my \$res = PAGI::Test::Client->new(app => \$response->to_app)->get('/');\n"
             . "die 'expected two TSV rows' unless \$res->content eq qq|id\\tname\\n1\\tAda\\n|;\n"
-            . "die 'expected the TSV type' unless \$res->header('Content-Type') eq 'text/tab-separated-values; charset=utf-8';\n",
+            . "die 'expected the TSV type' unless \$res->header('Content-Type') eq 'text/tab-separated-values; charset=utf-8';\n"
+            . "local \$SIG{__WARN__} = sub { die \"warned: \$_[0]\" };\n"
+            . "die 'expected an undef field to be empty' unless \$response->format_item(['a', undef]) eq qq|a\\t\\n|;\n",
     );
 };
 

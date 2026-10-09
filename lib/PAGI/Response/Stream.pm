@@ -73,7 +73,7 @@ one item becomes bytes.
 
 sub new {
     my ($class, $producer, @pairs) = @_;
-    croak 'PAGI::Response::Stream->new requires a producer coderef'
+    croak "$class->new requires a producer coderef"
         unless @_ >= 2 && ref($producer) eq 'CODE';
 
     my $self = $class->SUPER::new('', @pairs);
@@ -337,8 +337,12 @@ each invocation's producer and is never represented by one buffered scalar.
 Turns one item given to L<PAGI::Response::Writer/write_item> into the bytes
 that are written. The default returns the item unchanged, so on a plain Stream
 C<write_item> is the same as C<write>. A format subclass overrides it (see
-L<PAGI::Response::NDJSON>). It must return encoded bytes, and must not change
-the response: one response value may serve several requests at once.
+L<PAGI::Response::NDJSON>). It must not change the response: one response
+value may serve several requests at once.
+
+It must return encoded bytes, as every PAGI body is. C<write> refuses a string
+holding wide characters, but it cannot tell a Latin-1 string from binary data,
+so encode text yourself (for example with C<Encode::encode('UTF-8', $text)>).
 
 =head1 DISCONNECTS AND FAILURES
 

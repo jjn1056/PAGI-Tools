@@ -325,7 +325,7 @@ subtest 'a Stream subclass formats each item through format_item' => sub {
 subtest 'write_item keeps write\'s byte rules' => sub {
     like(dies { served_bodies(response('Stream', async sub {
         await $_[0]->write_item("caf\x{e9}\x{263a}");
-    })) }, qr/encoded bytes/, 'characters are refused, as by write');
+    })) }, qr/encoded bytes/, 'wide characters are refused, as by write');
     like(dies { served_bodies(response('Stream', async sub {
         await $_[0]->write_item({ not => 'bytes' });
     })) }, qr/encoded bytes/, 'a reference is refused, as by write');
