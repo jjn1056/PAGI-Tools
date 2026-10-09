@@ -5,7 +5,7 @@ use Test2::V0;
 # Each Response class's SYNOPSIS runs as written, in a fresh perl that has
 # loaded nothing else: a SYNOPSIS that calls a class it never loads dies for
 # the reader who copies it.
-# NDJSON's SYNOPSIS is a handler body (it returns, and reads $database), so
+# NDJSON's SYNOPSIS is a handler body (it returns, and reads $cursor), so
 # it is not a standalone program.
 for my $name (qw(Text HTML JSON Problem Redirect Empty File Stream)) {
     my $file = "lib/PAGI/Response/$name.pm";

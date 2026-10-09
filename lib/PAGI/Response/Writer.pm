@@ -36,8 +36,9 @@ B<Every write must be awaited before another starts.>
 
 C<write_item> passes the item to the response's
 L<PAGI::Response::Stream/format_item> and writes the result; on a plain Stream
-that is the item itself. Writer owns byte delivery and backpressure; the
-response owns the format.
+that is the item itself. Only C<write_item> goes through the response's format:
+C<write>, C<write_text> and C<pipe_from> send bytes as given. Writer owns byte
+delivery and backpressure; the response owns the format.
 
 =cut
 
@@ -445,11 +446,10 @@ sub _publish_disconnect {
 
 =head1 METHODS
 
-=head2 write, write_text, write_item
+=head2 write, write_text
 
     await $writer->write($encoded_bytes);
     await $writer->write_text($characters);
-    await $writer->write_item($item);
 
 C<write> sends one nonterminal body event and settles only when the PAGI send
 Future settles. Under PAGI 0.002007 that Future resolves after the server
@@ -458,9 +458,16 @@ resolution is not proof that the client received it. Writer then checks
 connection state and counts bytes only while still connected. A disconnect
 never manufactures a write failure. Genuine validation or resource failures
 from C<$send> still propagate.
-C<write_text> performs strict UTF-8 encoding first. C<write_item> writes what
-the response's C<format_item> returns for the item. Await each write before
+C<write_text> performs strict UTF-8 encoding first. Await each write before
 starting another.
+
+=head2 write_item
+
+    await $writer->write_item($item);
+
+Writes what the response's L<PAGI::Response::Stream/format_item> returns for
+C<$item>, with the same backpressure and byte rules as C<write>. On a plain
+Stream the item is written unchanged.
 
 =head2 pipe_from
 

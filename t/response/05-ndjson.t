@@ -20,6 +20,11 @@ subtest 'format_item turns one value into one line of JSON' => sub {
     is($ndjson->format_item(undef), "null\n", 'undef is null, not end of stream');
     is($ndjson->format_item("line\nbreak"), qq|"line\\nbreak"\n|,
         'a newline inside a string is escaped, so a record is always one line');
+    is($ndjson->format_item("a\r\nb"), qq|"a\\r\\nb"\n|, 'so is a carriage return');
+    is($ndjson->format_item(4.5), "4.5\n", 'a number');
+    is($ndjson->format_item(\1), "true\n", 'a boolean');
+    is($ndjson->format_item({ active => \0 }), qq|{"active":false}\n|,
+        'a boolean inside an object');
 };
 
 subtest 'format_item returns UTF-8 bytes' => sub {
@@ -60,14 +65,20 @@ subtest 'a producer that writes nothing sends an empty body' => sub {
     is(serve(response('NDJSON', sub { }))->content, '');
 };
 
-subtest 'a value that cannot be encoded fails the response' => sub {
+subtest 'a value that cannot be encoded mid-stream fails the response' => sub {
     my $client = PAGI::Test::Client->new(
         app => response('NDJSON', async sub {
+            await $_[0]->write_item({ id => 1 });
             await $_[0]->write_item(bless {}, 'Unencodable');
         })->to_app,
         raise_app_exceptions => 1,
     );
     like(dies { $client->get('/') }, qr/NDJSON item encoding failed/);
+};
+
+subtest 'a producer that is not a coderef is an error naming NDJSON' => sub {
+    like(dies { response('NDJSON', 'not a producer') },
+        qr/^PAGI::Response::NDJSON->new requires a producer coderef/);
 };
 
 done_testing;

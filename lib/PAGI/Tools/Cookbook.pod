@@ -3123,10 +3123,11 @@ tab-separated values:
 
   sub format_item {
       my ($self, $row) = @_;
-      for my $field (@$row) {
+      my @fields = map { $_ // '' } @$row;    # undef is an empty field
+      for my $field (@fields) {
           croak 'TSV fields cannot contain tabs or newlines' if $field =~ /[\t\r\n]/;
       }
-      return encode('UTF-8', join("\t", @$row) . "\n");
+      return encode('UTF-8', join("\t", @fields) . "\n");
   }
 
   package main;
@@ -3138,7 +3139,8 @@ tab-separated values:
   });
 
 C<format_item> must return encoded bytes, and must not change the response:
-one response value can serve many requests at once. Status, headers and
+one response value can serve many requests at once. Here fields are character
+strings, encoded once as UTF-8; an undefined field is written empty. Status, headers and
 content type are the usual response options. Anything a format needs between
 items, such as whether a header row was sent, belongs in the producer.
 
