@@ -63,11 +63,11 @@ A request-body source can be relayed without raw PAGI:
         die 'upload was truncated' if $input->truncated;
     });
 
-A semantic format subclass may wrap its producer and the public generic Writer
-before delegating to C<SUPER::new>. That wrapper may narrow or translate the
-producer API, as L<PAGI::Response::NDJSON> does, but must not override Stream's
-private lifecycle methods. Stream owns lifecycle, disconnect handling, terminal
-delivery, and cleanup; a semantic format owns only its producer adaptation.
+A format subclass sets C<default_content_type> and overrides L</format_item>;
+its producers then call C<< $writer->write_item($item) >> for each item.
+L<PAGI::Response::NDJSON> is the shipped example. Stream owns lifecycle,
+disconnect handling, terminal delivery, and cleanup; a format owns only how
+one item becomes bytes.
 
 =cut
 
@@ -87,6 +87,8 @@ sub is_buffered { return 0 }
 sub body {
     croak 'Stream response has no buffered body';
 }
+
+sub format_item { return $_[1] }
 
 sub _stream_wire_headers {
     my ($self) = @_;
@@ -150,6 +152,7 @@ async sub _run_lifecycle {
     }));
 
     my $writer = PAGI::Response::Writer->_new(
+        response   => $self,
         send       => $send,
         connection => $scope->{'pagi.connection'},
         transport  => $scope->{'pagi.transport'},
@@ -326,6 +329,16 @@ Returns false.
 
 Croaks with C<Stream response has no buffered body>. Stream output belongs to
 each invocation's producer and is never represented by one buffered scalar.
+
+=head2 format_item
+
+    sub format_item { my ($self, $item) = @_; ...; return $bytes }
+
+Turns one item given to L<PAGI::Response::Writer/write_item> into the bytes
+that are written. The default returns the item unchanged, so on a plain Stream
+C<write_item> is the same as C<write>. A format subclass overrides it (see
+L<PAGI::Response::NDJSON>). It must return encoded bytes, and must not change
+the response: one response value may serve several requests at once.
 
 =head1 DISCONNECTS AND FAILURES
 

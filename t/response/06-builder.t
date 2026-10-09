@@ -67,4 +67,9 @@ subtest 'errors name the problem' => sub {
         "a missing body is the constructor's own error");
 };
 
+subtest ':all exports response' => sub {
+    package T::ResponseAllImport { PAGI::Response->import(':all') }
+    ok(T::ResponseAllImport->can('response'), 'response is part of :all');
+};
+
 done_testing;

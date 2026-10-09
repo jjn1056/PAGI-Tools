@@ -4,82 +4,68 @@ use strict;
 use warnings;
 
 use Carp qw(croak);
+use JSON::MaybeXS ();
 use parent 'PAGI::Response::Stream';
-use PAGI::Response::NDJSON::Writer ();
 
 =encoding UTF-8
 
 =head1 NAME
 
-PAGI::Response::NDJSON - reusable backpressured newline-delimited JSON response
+PAGI::Response::NDJSON - stream newline-delimited JSON, one record per item
 
 =head1 SYNOPSIS
 
     use Future::AsyncAwait;
     use PAGI::Response qw(response);
 
-    return response('NDJSON', async sub ($writer) {
-        my $cursor = await $database->people_cursor;
-        $writer->on_close(sub { return $cursor->close });
-
-        while (!$writer->is_disconnected) {
-            my $person = await $cursor->next_item;
-            last unless defined $person;
+    return response('NDJSON', async sub {
+        my ($writer) = @_;
+        $writer->on_close(sub { return $cursor->close });   # also on disconnect or cancel
+        while (defined(my $person = await $cursor->next_item)) {
             await $writer->write_item($person);
         }
     });
 
 =head1 DESCRIPTION
 
-NDJSON is a L<PAGI::Response::Stream> specialization with Content-Type
-C<application/x-ndjson>. Each awaited C<write_item> encodes one Perl value as
-UTF-8 JSON and appends one LF, producing exactly one record. Embedded CR and
-LF in JSON strings are escaped; object key order is not a byte-level contract.
-C<write_item(undef)> emits the JSON value C<null>. In the synopsis, the
-cursor's C<undef> means EOF, while C<write_item(undef)> means JSON null.
+A L<PAGI::Response::Stream> for newline-delimited JSON. Each
+C<< $writer->write_item($value) >> sends one record: the value as UTF-8 JSON,
+then a newline. C<undef> is sent as C<null>. Content-Type defaults to
+C<application/x-ndjson>. Backpressure, disconnects, cancellation and cleanup
+are Stream's.
 
-The response does not parse input items, construct cursors, or buffer a whole
-sequence. An encoding failure after response start follows the inherited
-producer-failure path and cannot replace the started response. The Future from
-C<write_item> is the generic Writer's delivery Future, so awaiting it preserves
-real send-Future backpressure.
-
-Each invocation receives a fresh specialized Writer and runs a fresh producer.
-Connection and transport observation, disconnect handling, terminal delivery,
-and cleanup remain owned by Stream and its generic Writer. The response is
-reusable. HEAD requests still run the producer,
-so use an explicit lightweight HEAD route when that work is too expensive.
+You could stream NDJSON from a plain Stream by writing
+C<encode_json($value) . "\n"> yourself. This class packages that so producers
+only write items, and is the example of a Stream format: a default content
+type plus L</format_item>.
 
 =head1 METHODS
 
-=head2 new
+=head2 format_item
 
-    PAGI::Response::NDJSON->new($producer, %common_response_options)
+    my $line = $response->format_item($value);
 
-Constructs the response. The producer must be a coderef. Common C<status>,
-C<content_type>, and flat C<headers> options use the Response contract; the
-default content type is C<application/x-ndjson>.
+Returns C<$value> as UTF-8 JSON followed by a newline. Newlines inside strings
+are escaped by JSON, so every record is one line. Object key order is not
+guaranteed. Croaks C<NDJSON item encoding failed: ...> for a value JSON cannot
+represent, such as a blessed object.
 
 Also built by name: C<< response('NDJSON', $producer, %options) >> (see
-L<PAGI::Response/response>).
+L<PAGI::Response/response>); C<status>, C<content_type> and C<headers> are the
+usual options.
 
 =cut
 
+my $JSON = JSON::MaybeXS->new(utf8 => 1);
+
 sub default_content_type { 'application/x-ndjson' }
 
-sub new {
-    my ($class, $producer, @response_options) = @_;
-    croak 'PAGI::Response::NDJSON->new requires a producer coderef'
-        unless @_ >= 2 && ref($producer) eq 'CODE';
-
-    my $adapted = sub {
-        my ($writer) = @_;
-        return $producer->(
-            PAGI::Response::NDJSON::Writer->_new($writer)
-        );
-    };
-
-    return $class->SUPER::new($adapted, @response_options);
+sub format_item {
+    my ($self, $value) = @_;
+    my $json;
+    eval { $json = $JSON->encode($value); 1 }
+        or croak "NDJSON item encoding failed: $@";
+    return "$json\n";
 }
 
 1;

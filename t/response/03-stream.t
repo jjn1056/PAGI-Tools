@@ -2,6 +2,7 @@ use strict;
 use warnings;
 
 use Future;
+use Future::AsyncAwait;
 use Test2::V0;
 
 use PAGI::Response qw(response);
@@ -278,6 +279,89 @@ subtest 'a stream checks the connection methods it will use before sending' => s
         sub { push @events, $_[0]; Future->done },
     )->get;
     is($events[0]{type}, 'http.response.start', 'a complete connection streams normally');
+};
+
+subtest 'a producer that returns a failed Future fails the response after start' => sub {
+    my @events;
+    my $running = response('Stream', sub {
+        return Future->fail("producer Future failed\n");
+    })->to_app->(http_scope(), receive(), sub { push @events, $_[0]; Future->done });
+
+    like(dies { $running->get }, qr/producer Future failed/,
+        'the failure propagates to the caller');
+    is($events[0]{type}, 'http.response.start', 'the response had started');
+    is([grep { ($_->{type} // '') eq 'http.response.body' && !($_->{more} // 0) } @events],
+        [], 'no terminal body event pretends the stream completed');
+};
+
+{
+    package T::UpperStream;
+    use parent 'PAGI::Response::Stream';
+    sub format_item { my ($self, $item) = @_; return uc($item) . "\n" }
+}
+
+sub served_bodies {
+    my ($response) = @_;
+    my @events;
+    $response->to_app->(http_scope(), receive(), sub { push @events, $_[0]; Future->done })->get;
+    return [map { $_->{body} } grep { $_->{more} } @events];
+}
+
+subtest 'write_item on a plain Stream writes the item as given' => sub {
+    is(served_bodies(response('Stream', async sub {
+        my ($writer) = @_;
+        await $writer->write_item('abc');
+    })), ['abc'], 'format_item passes the item through unchanged');
+};
+
+subtest 'a Stream subclass formats each item through format_item' => sub {
+    is(served_bodies(T::UpperStream->new(async sub {
+        my ($writer) = @_;
+        await $writer->write_item('one');
+        await $writer->write_item('two');
+    })), ["ONE\n", "TWO\n"], 'each write_item is shaped by the subclass');
+};
+
+subtest 'write_item keeps write\'s byte rules' => sub {
+    like(dies { served_bodies(response('Stream', async sub {
+        await $_[0]->write_item("caf\x{e9}\x{263a}");
+    })) }, qr/encoded bytes/, 'characters are refused, as by write');
+    like(dies { served_bodies(response('Stream', async sub {
+        await $_[0]->write_item({ not => 'bytes' });
+    })) }, qr/encoded bytes/, 'a reference is refused, as by write');
+};
+
+{
+    package T::RefusingStream;
+    use parent 'PAGI::Response::Stream';
+    use Carp qw(croak);
+    sub format_item { croak 'refused item' }
+}
+
+subtest 'an error from format_item points at the producer, not the Writer' => sub {
+    my $error = dies { served_bodies(T::RefusingStream->new(async sub {
+        await $_[0]->write_item('x');
+    })) };
+    like($error, qr/refused item at \Q${\ __FILE__}\E line \d+/,
+        'the croak names the line that called write_item');
+};
+
+subtest 'write_item keeps write\'s backpressure and counts the formatted bytes' => sub {
+    my $body_send = Future->new;
+    my ($writer, $write);
+    my $running = T::UpperStream->new(sub {
+        ($writer) = @_;
+        $write = $writer->write_item('one');
+        return $write;
+    })->to_app->(http_scope(), receive(), sub {
+        return $_[0]{more} ? $body_send : Future->done;
+    });
+    ok(!$write->is_ready, 'write_item waits for the body send');
+    like(dies { $writer->write_item('two') }, qr/outstanding/,
+        'an overlapping write_item is refused');
+    $body_send->done;
+    $running->get;
+    is($writer->bytes_written, length("ONE\n"), 'the formatted bytes are counted');
 };
 
 done_testing;

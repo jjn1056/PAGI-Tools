@@ -13,6 +13,9 @@
   - Response classes: Text, HTML, JSON, Problem, Redirect, Empty, File,
     Stream and NDJSON, built by name with response('Name', ...) -- resolved
     like middleware(), '+' for a Response class from another distribution.
+  - Stream's format_item and Writer's write_item: a Stream subclass decides
+    how each item is written (NDJSON is one), and on a plain Stream
+    write_item is write.
   - PAGI::Pages: negotiated welcome, error and redirect responses.
   - PAGI::ErrorContext (error_context): the error an ErrorHandler handler
     answers. PAGI::Request::BodyError gains client_message.

@@ -250,8 +250,8 @@ unknown-, duplicate-, and malformed-option checks. Application subclasses
 must not call private Response parsing or emission methods. See
 L<PAGI::Tools::Cookbook/Company Collection JSON Response> for a complete
 class and Route example, built with C<response('+...')>.
-See L<PAGI::Tools::Cookbook/"Streaming Response Extension: NDJSON"> for the
-public Stream-extension proof.
+See L<PAGI::Tools::Cookbook/"Streaming Response Formats"> for writing a
+streaming format.
 
 Constructor dispatch through C<SUPER::new> preserves subclass identity. A
 class may combine construction-time normalization with a new C<render> method
@@ -282,10 +282,9 @@ backpressure.
         await $writer->write_item({ id => 1 });
     });
 
-Constructs a reusable L<PAGI::Response::NDJSON>. It streams each value through
-the specialized Writer as UTF-8 JSON followed by one LF. Buffered
-C<response('JSON', ...)> serializes one finite Perl value; it is not an incremental
-JSON sequence. See L<PAGI::Response::NDJSON> for framing and lifecycle details.
+Constructs a reusable L<PAGI::Response::NDJSON>. Each C<write_item> sends one
+value as UTF-8 JSON followed by one LF. Buffered C<response('JSON', ...)>
+serializes one finite Perl value; it is not an incremental JSON sequence.
 
 =head2 File
 
