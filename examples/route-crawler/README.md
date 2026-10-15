@@ -31,6 +31,15 @@ Commands: `look`, `go <path>`, `take`, `inventory`, `read map`, `help`, and
 the room's actions. You win by seeing every room you can reach and opening
 every lock.
 
+## The game speaks first
+
+The intro is sent as soon as the WebSocket is accepted, before the player
+types anything, so it arrives in the same read as the `101 Switching
+Protocols` response. A browser handles that. Net::Async::WebSocket::Client did
+not deliver that first frame until something else was read: a script that
+waits for the intro before sending its first command waits forever. Send a
+command first (`look`), and the intro and its answer arrive together.
+
 ## Files
 
 ```
