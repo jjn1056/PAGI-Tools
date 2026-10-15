@@ -52,7 +52,8 @@ subtest 'sealed doors for separate applications' => sub {
 };
 
 subtest 'a scripted WebSocket playthrough that wins' => sub {
-    my $client = PAGI::Test::Client->new(app => RouteCrawler->new(seed => 1)->to_app);
+    my $client = PAGI::Test::Client->new(app => RouteCrawler->new(seed => 1)->to_app, lifespan => 'auto');
+    $client->start;
     like($client->get('/')->text, qr/Route Crawler/, 'the page is served');
 
     my @transcript;
@@ -70,6 +71,21 @@ subtest 'a scripted WebSocket playthrough that wins' => sub {
         like($say->('post'), qr/you win/i, 'the last lock wins the game');
     });
     note join "\n", @transcript;
+    ok($client->state->{dungeon}->built, 'the dungeon is a singleton in application state, built at startup');
+
+    # Each connection is a request, so its per_request game is its own.
+    $client->websocket('/play', sub {
+        my ($first) = @_;
+        $first->receive_text;
+        $first->send_text('go /notes');
+        like($first->receive_text, qr{\A/notes: an open archway}, 'one player walks into /notes');
+        $client->websocket('/play', sub {
+            my ($second) = @_;
+            like($second->receive_text, qr{^/: the entrance hall}m, 'a second player starts in the hall');
+        });
+        $first->send_text('look');
+        like($first->receive_text, qr{\A/notes:}, 'and the first is still where they were');
+    });
 };
 
 subtest 'without the key, a lock holds' => sub {
