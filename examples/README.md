@@ -17,7 +17,7 @@ Router object; servers accept anything with `to_app`.
 
 - Perl 5.18+ with `Future::AsyncAwait` for the distribution and most examples;
   `large-application`, `starlette-apples`, `gut-check`, `content-negotiation`, `upload-streaming`, `process-streaming`,
-  `webhook-receiver`, `signed-requests`, `framework-on-tools`, `request-class`, `starlette-endpoint`, `endpoint-lifecycle`, `escape-hatches`, `internal-tool`, `auth-cookie-login`, `auth-extensions`, `auth-notes`, `auth-jwt-sandbox`, and `openapi-notes`
+  `webhook-receiver`, `signed-requests`, `framework-on-tools`, `request-class`, `starlette-endpoint`, `endpoint-lifecycle`, `escape-hatches`, `internal-tool`, `auth-cookie-login`, `auth-extensions`, `auth-notes`, `auth-jwt-sandbox`, `openapi-notes`, and `route-crawler`
   require Perl 5.40+
 - A PAGI server to run examples against:
   ```
@@ -77,6 +77,7 @@ Structuring applications:
 - `endpoint-lifecycle` - Perl 5.40 one `endpoint()` spelling for three lifecycles: plain and WebSocket classes built fresh for each request or connection (state on `$self`), a Moo HTTP endpoint whose builder fills a required per-request attribute next to shared route config, and one object shared on purpose with `BUILD_APP`
 - `framework-on-tools` - Perl 5.40 small Sinatra/FastAPI-shaped framework (`lib/Tiny.pm`) built on Tools, and a notes app on it: a Request subclass, plain-value returns, `before` and `around` (call_next) hooks, startup services, typed path parameters, exception mapping, a plugin, a raw escape hatch and an OpenAPI document from the Router; the README lists each seam and its cost
 - `openapi-notes` - Perl 5.40 a notes API whose `/openapi.json` comes from `openapi(...)`: typed path parameters, operationIds, security from `Requires` and bodies from route `meta`; a Router part under one PAGI::App::Compose, a mounted static application left out, and generated Python clients driving it end to end
+- `route-crawler` - Perl 5.40 a just-for-fun text adventure over a WebSocket whose dungeon is another application's `route_table`: routes are rooms, `Requires` scopes are keys, mounted applications are sealed doors
 - `request-class` - Perl 5.40 an application's own Request subclass with two helpers, set once by `middleware('RequestClass')` and received by a plain route, an Endpoint::HTTP method and a route inside a mount, with no handler wrapped
 - `escape-hatches` - Perl 5.40 the easy way, then each step down to raw PAGI in one app: a handler returning a response, one reading the raw scope and connection, one answering with a hand-written application mid-request, a raw application mounted at a route, and raw middleware editing events
 - `large-application` - Perl 5.40+ Compose-rooted modular HTML application with named Person/Blogs Router application mounts, cross-component links, boundary-specific Router defaults, an opaque static-file mount, lifespan data, and a deferred-work ledger
