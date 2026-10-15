@@ -13,6 +13,7 @@ use PAGI::Test::Client;
 BEGIN { plan skip_all => 'examples/route-crawler requires Perl 5.40' if $] < 5.040 }
 
 require NotesApp;
+require RouteCrawler;
 require RouteCrawler::Dungeon;
 
 my $notes   = NotesApp->new;
@@ -48,6 +49,27 @@ subtest 'sealed doors for separate applications' => sub {
     my $game = $dungeon->new_game;
     like($game->command('go /static'), qr/sealed/i, 'it cannot be opened');
     is($game->where, '/', 'and the player stays put');
+};
+
+subtest 'a scripted WebSocket playthrough that wins' => sub {
+    my $client = PAGI::Test::Client->new(app => RouteCrawler->new(seed => 1)->to_app);
+    like($client->get('/')->text, qr/Route Crawler/, 'the page is served');
+
+    my @transcript;
+    $client->websocket('/play', sub {
+        my ($ws) = @_;
+        push @transcript, $ws->receive_text;
+        my $say = sub { $ws->send_text($_[0]); push @transcript, "> $_[0]", $ws->receive_text; return $transcript[-1] };
+
+        # Visit every room, taking whatever lies there, then open the locks.
+        $say->($_) for 'look', 'take', 'go /openapi.json', 'take', 'read map', 'go /', 'go /static',
+            'go /notes', 'take', 'go /notes/', 'take', 'get', 'go /notes', 'go /notes/{id}', 'take', 'get';
+        like($say->('inventory'), qr/notes:write/, 'the key was found');
+        like($say->('delete'), qr/chain falls away/i, 'the first lock opens');
+        $say->($_) for 'go /notes', 'go /notes/';
+        like($say->('post'), qr/you win/i, 'the last lock wins the game');
+    });
+    note join "\n", @transcript;
 };
 
 subtest 'without the key, a lock holds' => sub {

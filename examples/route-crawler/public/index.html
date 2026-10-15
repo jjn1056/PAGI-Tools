@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Route Crawler</title>
+<style>
+  body { background: #111; color: #9f9; font: 15px/1.4 ui-monospace, Menlo, monospace; margin: 0; padding: 1em; }
+  #log { white-space: pre-wrap; max-width: 80ch; }
+  #log .you { color: #ccc; }
+  form { display: flex; gap: .5em; max-width: 80ch; margin-top: .5em; }
+  input { flex: 1; background: #000; color: #9f9; border: 1px solid #353; font: inherit; padding: .3em; }
+</style>
+</head>
+<body>
+<h1>Route Crawler</h1>
+<div id="log"></div>
+<form id="say"><span>&gt;</span><input id="line" autocomplete="off" autofocus></form>
+<script>
+  const log = document.getElementById('log');
+  const show = (text, cls) => {
+    const p = document.createElement('div');
+    if (cls) p.className = cls;
+    p.textContent = text + '\n';
+    log.appendChild(p);
+    window.scrollTo(0, document.body.scrollHeight);
+  };
+  const ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/play');
+  ws.onmessage = (event) => show(event.data);
+  ws.onclose = () => show('[the dungeon fades]');
+  document.getElementById('say').onsubmit = (event) => {
+    event.preventDefault();
+    const line = document.getElementById('line');
+    if (!line.value) return;
+    show('> ' + line.value, 'you');
+    ws.send(line.value);
+    line.value = '';
+  };
+</script>
+</body>
+</html>
