@@ -42,7 +42,7 @@ on 'test' => sub {
     requires 'Moo';
     requires 'Type::Tiny';
     # In-process tests drive apps under a real event loop
-    requires 'IO::Async', '0.802';
+    requires 'IO::Async', '0.805';
     # examples/upload-streaming parses CSV with it (pure Perl via Text::CSV_PP)
     requires 'Text::CSV', '2.00';
     # tutorial.t exercises Future::IO patterns (self-skips when absent,
