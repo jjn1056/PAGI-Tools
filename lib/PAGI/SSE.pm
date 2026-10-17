@@ -2,6 +2,7 @@ package PAGI::SSE;
 use strict;
 use warnings;
 use Carp qw(croak);
+use PAGI::Utils ();
 use PAGI::Utils::Scope ();
 use Hash::MultiValue;
 use Future::AsyncAwait;
@@ -419,6 +420,8 @@ async sub send {
 
     return $self if $self->_response_claimed_before_start;
     croak "Cannot send on closed SSE connection" if $self->is_closed || $self->connection_state eq 'closing';
+    defined($data = PAGI::Utils::_string_value($data))
+        or croak 'send requires a string or an object that overloads stringification';
 
     # Auto-start if not started
     await $self->start unless $self->is_started;
@@ -458,22 +461,8 @@ async sub send_event {
     croak "Cannot send on closed SSE connection" if $self->is_closed || $self->connection_state eq 'closing';
     croak "send_event requires 'data' parameter" unless exists $opts{data};
 
+    my $event = _send_event_for(%opts);
     await $self->start unless $self->is_started;
-
-    # Auto-encode hashref/arrayref data as JSON
-    my $data = $opts{data};
-    if (ref $data) {
-        $data = JSON::MaybeXS::encode_json($data);
-    }
-
-    my $event = {
-        type => 'sse.send',
-        data => $data,
-    };
-
-    $event->{event} = $opts{event} if defined $opts{event};
-    $event->{id}    = "$opts{id}"  if defined $opts{id};
-    $event->{retry} = int($opts{retry}) if defined $opts{retry};
 
     await PAGI::Common::send_in_order($self, $event);
 
@@ -492,6 +481,8 @@ async sub _try_send {
     return 0 if $self->_response_claimed_before_start || $self->is_closed || $self->connection_state eq 'closing';
 
     eval {
+        defined($data = PAGI::Utils::_string_value($data))
+            or croak 'send requires a string or an object that overloads stringification';
         await $self->start unless $self->is_started;
         await PAGI::Common::send_in_order($self, {
             type => 'sse.send',
@@ -532,6 +523,8 @@ async sub send_comment {
 
     return $self if $self->_response_claimed_before_start;
     croak "Cannot send on closed SSE connection" if $self->is_closed || $self->connection_state eq 'closing';
+    defined($comment = PAGI::Utils::_string_value($comment))
+        or croak 'send_comment requires a string or an object that overloads stringification';
 
     await $self->start unless $self->is_started;
 
@@ -550,6 +543,8 @@ async sub _try_send_comment {
     return 0 if $self->_response_claimed_before_start || $self->is_closed || $self->connection_state eq 'closing';
 
     eval {
+        defined($comment = PAGI::Utils::_string_value($comment))
+            or croak 'send_comment requires a string or an object that overloads stringification';
         await $self->start unless $self->is_started;
         await PAGI::Common::send_in_order($self, {
             type    => 'sse.comment',
@@ -570,20 +565,8 @@ async sub _try_send_event {
     return 0 if $self->_response_claimed_before_start || $self->is_closed || $self->connection_state eq 'closing';
 
     eval {
+        my $event = _send_event_for(%opts);
         await $self->start unless $self->is_started;
-
-        my $data = $opts{data} // '';
-        if (ref $data) {
-            $data = JSON::MaybeXS::encode_json($data);
-        }
-
-        my $event = {
-            type => 'sse.send',
-            data => $data,
-        };
-        $event->{event} = $opts{event} if defined $opts{event};
-        $event->{id}    = "$opts{id}"  if defined $opts{id};
-        $event->{retry} = int($opts{retry}) if defined $opts{retry};
 
         await PAGI::Common::send_in_order($self, $event);
     };
@@ -592,6 +575,31 @@ async sub _try_send_event {
         return 0;
     }
     return 1;
+}
+
+# The sse.send event for send_event and try_send_event. An object that
+# overloads "" is text; other data references are encoded as JSON; undef
+# data is an empty event. event and id are strings, never HASH(0x...).
+sub _send_event_for {
+    my (%opts) = @_;
+    my $data = $opts{data} // '';
+    if (ref $data) {
+        my $string = PAGI::Utils::_stringified($data);
+        if (ref $string) {
+            $data = JSON::MaybeXS::encode_json($data);
+        } else {
+            defined($data = $string)
+                or croak 'send_event data must be a string, a reference to encode as JSON, or an object that overloads stringification';
+        }
+    }
+    my $event = { type => 'sse.send', data => $data };
+    for my $field (qw(event id)) {
+        next unless defined $opts{$field};
+        defined($event->{$field} = PAGI::Utils::_string_value($opts{$field}))
+            or croak "send_event $field must be a string or an object that overloads stringification";
+    }
+    $event->{retry} = int($opts{retry}) if defined $opts{retry};
+    return $event;
 }
 
 # Internal: trigger error callbacks
@@ -1330,6 +1338,12 @@ methods), the callbacks are quiet no-ops and C<is_writable> is true.
 
 =head1 SEND METHODS
 
+Data, comments and an event's C<event> and C<id> may be given as an object
+that stringifies (L<PAGI::Response/VALUES FROM OTHER CODE>). A value that is
+neither a string nor such an object makes the sending method fail, and the
+C<try_send*> methods return false without sending; C<send_json> encodes data
+as JSON and does not stringify.
+
 =head2 send
 
     await $sse->send("Hello world");
@@ -1360,7 +1374,9 @@ JSON-encodes data before sending.
         retry => 5000,               # Optional reconnect hint (ms)
     );
 
-Sends a full SSE event with all fields.
+Sends a full SSE event with all fields. C<data> that is an object that
+stringifies is sent as its string; any other reference is encoded as JSON;
+undef data is an empty event.
 
 =head2 send_comment
 

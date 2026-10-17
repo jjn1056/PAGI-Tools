@@ -209,4 +209,89 @@ for my $kind (sort keys %kinds) {
         "$kind: one that does not stringify is refused, naming the header");
 }
 
+# WebSocket and SSE text.
+
+use PAGI::WebSocket;
+use PAGI::SSE;
+use PAGITest::Connected qw(ws_scope sse_scope);
+
+sub connected_ws {
+    my @sent;
+    my $ws = PAGI::WebSocket->new(ws_scope(), sub { Future->done({ type => 'websocket.connect' }) },
+        sub { push @sent, $_[0]; Future->done });
+    $ws->accept->get;
+    return ($ws, \@sent);
+}
+sub started_sse {
+    my @sent;
+    my $sse = PAGI::SSE->new(sse_scope(), sub { Future->new }, sub { push @sent, $_[0]; Future->done });
+    $sse->start->get;
+    return ($sse, \@sent);
+}
+my $stringify_error = 'must be a string or an object that overloads stringification';
+
+for my $site (
+    [ 'WebSocket send_text',  sub { my ($ws, $sent) = connected_ws(); $ws->send_text($_[0])->get; $sent->[-1]{text} },
+        qr/send_text requires a string or an object that overloads stringification/ ],
+    [ 'WebSocket send_bytes', sub { my ($ws, $sent) = connected_ws(); $ws->send_bytes($_[0])->get; $sent->[-1]{bytes} },
+        qr/send_bytes requires a string or an object that overloads stringification/ ],
+    [ 'SSE send',             sub { my ($sse, $sent) = started_sse(); $sse->send($_[0])->get; $sent->[-1]{data} },
+        qr/send requires a string or an object that overloads stringification/ ],
+    [ 'SSE send_comment',     sub { my ($sse, $sent) = started_sse(); $sse->send_comment($_[0])->get; $sent->[-1]{comment} },
+        qr/send_comment requires a string or an object that overloads stringification/ ],
+) {
+    my ($name, $run, $refused) = @$site;
+    PAGITest::Stringy::check_site(name => $name, run => $run, refused => $refused);
+}
+
+{
+    my ($ws, $sent) = connected_ws();
+    $ws->close(1000, PAGITest::Stringy::Overloaded->new('bye'))->get;
+    is($sent->[-1]{reason}, 'bye', 'a WebSocket close reason object is sent as its string');
+    my ($ws2) = connected_ws();
+    like(dies { $ws2->close(1000, PAGITest::Stringy::Plain->new)->get },
+        qr/close reason $stringify_error/, 'one that does not stringify is refused');
+    my ($ws3, $sent3) = connected_ws();
+    $ws3->close(1000)->get;
+    is($sent3->[-1]{reason}, '', 'no reason is still an empty one');
+}
+
+for my $method (qw(send_event try_send_event)) { subtest "$method data, event and id" => sub {
+    my $try = $method =~ /\Atry/;
+    my $send = sub {
+        my ($sse, $sent) = started_sse();
+        my $result = $sse->$method(@_)->get;
+        return ($result, $sent->[-1]);
+    };
+    my (undef, $event) = $send->(data => PAGITest::Stringy::Overloaded->new('text'),
+        event => PAGITest::Stringy::Overloaded->new('update'), id => PAGITest::Stringy::Overloaded->new('7'));
+    is([ @$event{qw(data event id)} ], [qw(text update 7)], "$method: data, event and id objects are sent as their strings");
+    (undef, $event) = $send->(data => { a => 1 });
+    is($event->{data}, '{"a":1}', "$method: other data references are still JSON");
+    (undef, $event) = $send->(data => undef);
+    is($event->{data}, '', "$method: undef data is an empty event");
+    for my $field (qw(event id)) {
+        if ($try) {
+            my ($ok) = $send->(data => 'x', $field => PAGITest::Stringy::Plain->new);
+            is($ok, 0, "$method: a $field that does not stringify is not sent");
+        } else {
+            like(dies { $send->(data => 'x', $field => PAGITest::Stringy::Plain->new) },
+                qr/send_event $field $stringify_error/, "$method: a $field that does not stringify is refused, not sent as HASH(0x...)");
+        }
+    }
+} }
+
+for my $try (
+    [ 'WebSocket try_send_text',  sub { my ($ws, $sent) = connected_ws(); ($ws->try_send_text($_[0])->get, $sent->[-1]{text}) } ],
+    [ 'WebSocket try_send_bytes', sub { my ($ws, $sent) = connected_ws(); ($ws->try_send_bytes($_[0])->get, $sent->[-1]{bytes}) } ],
+    [ 'SSE try_send',             sub { my ($sse, $sent) = started_sse(); ($sse->try_send($_[0])->get, $sent->[-1]{data}) } ],
+    [ 'SSE try_send_comment',     sub { my ($sse, $sent) = started_sse(); ($sse->try_send_comment($_[0])->get, $sent->[-1]{comment}) } ],
+) {
+    my ($name, $run) = @$try;
+    my ($ok, $sent) = $run->(PAGITest::Stringy::Overloaded->new('ok'));
+    is([$ok, $sent], [1, 'ok'], "$name: an object is sent as its string");
+    ($ok) = $run->(PAGITest::Stringy::Plain->new);
+    is($ok, 0, "$name: one that does not stringify is not sent");
+}
+
 done_testing;

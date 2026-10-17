@@ -364,6 +364,14 @@ sub _stringified {
     return $method->($value, undef, '');
 }
 
+# $value as a plain string, stringifying an object that overloads "", or
+# undef when it is not one. Callers croak with their own message, so the
+# error names the caller's line.
+sub _string_value {
+    my $value = _stringified($_[0]);
+    return defined($value) && !ref($value) ? $value : undef;
+}
+
 sub _resolve_class {
     my ($namespace, $name, $what) = @_;
     croak "invalid $what class name; use leading '+' for an exact package"

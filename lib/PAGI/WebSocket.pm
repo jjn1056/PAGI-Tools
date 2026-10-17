@@ -2,6 +2,7 @@ package PAGI::WebSocket;
 use strict;
 use warnings;
 use Carp qw(croak);
+use PAGI::Utils ();
 use PAGI::Utils::Scope ();
 use Encode qw(decode FB_CROAK FB_DEFAULT LEAVE_SRC);
 use Hash::MultiValue;
@@ -486,11 +487,15 @@ sub close {
         if $self->{_state} eq 'connecting';
     croak "WebSocket close requires an active accepted/started connection"
         unless $self->is_connected;
+    my ($code, $reason) = @args;
+    if (defined $reason) {
+        defined($reason = PAGI::Utils::_string_value($reason))
+            or croak 'close reason must be a string or an object that overloads stringification';
+    }
     $self->{_state} = 'closing';
     my $settled = $self->{_close_send} = Future->new;
     my $send;
     my $ok = eval {
-        my ($code, $reason) = @args;
         $send = Future->wrap(PAGI::Common::send_in_order($self, {type => 'websocket.close', code => $code // 1000, reason => $reason // ''}));
         1;
     };
@@ -541,6 +546,8 @@ async sub send_text {
     my ($self, $text) = @_;
 
     croak "Cannot send on closed WebSocket" if $self->_response_claimed_before_start || $self->is_closed || $self->connection_state eq 'closing';
+    defined($text = PAGI::Utils::_string_value($text))
+        or croak 'send_text requires a string or an object that overloads stringification';
 
     await PAGI::Common::send_in_order($self, {
         type => 'websocket.send',
@@ -555,6 +562,8 @@ async sub send_bytes {
     my ($self, $bytes) = @_;
 
     croak "Cannot send on closed WebSocket" if $self->_response_claimed_before_start || $self->is_closed || $self->connection_state eq 'closing';
+    defined($bytes = PAGI::Utils::_string_value($bytes))
+        or croak 'send_bytes requires a string or an object that overloads stringification';
 
     await PAGI::Common::send_in_order($self, {
         type  => 'websocket.send',
@@ -591,6 +600,10 @@ sub try_send_text { my $self = shift; return $self->_keep($self->_try_send_text(
 async sub _try_send_text {
     my ($self, $text) = @_;
     return 0 if $self->_response_claimed_before_start || !$self->is_connected;
+    # Best-effort: a value that is not a string is not sent, even when the
+    # object's own stringification dies.
+    $text = eval { PAGI::Utils::_string_value($text) };
+    return 0 unless defined $text;
 
     eval {
         await PAGI::Common::send_in_order($self, {
@@ -614,6 +627,10 @@ sub try_send_bytes { my $self = shift; return $self->_keep($self->_try_send_byte
 async sub _try_send_bytes {
     my ($self, $bytes) = @_;
     return 0 if $self->_response_claimed_before_start || !$self->is_connected;
+    # Best-effort: a value that is not a string is not sent, even when the
+    # object's own stringification dies.
+    $bytes = eval { PAGI::Utils::_string_value($bytes) };
+    return 0 unless defined $bytes;
 
     eval {
         await PAGI::Common::send_in_order($self, {
@@ -1148,7 +1165,9 @@ ordering either.
     await $ws->close(1000, 'Normal closure');
     await $ws->close(4000, 'Custom reason');
 
-Requests closing with code 1000 by default. Concurrent and repeated calls join
+Requests closing with code 1000 by default. The reason may be an object that
+stringifies (L<PAGI::Response/VALUES FROM OTHER CODE>); another non-string
+reason croaks before anything changes. Concurrent and repeated calls join
 one close-send operation and return when that send settles. They do not await
 the peer's Close or terminal cleanup. State is C<closing> until the connection
 records its terminal outcome; further data sends are rejected. Cancelling a
@@ -1317,6 +1336,12 @@ high mark. When the server provides no transport handle (or only the read
 methods), the callbacks are quiet no-ops and C<is_writable> is true.
 
 =head1 SEND METHODS
+
+Text and bytes may be given as an object that stringifies
+(L<PAGI::Response/VALUES FROM OTHER CODE>). A value that is neither a string
+nor such an object makes C<send_text> and C<send_bytes> fail, and the
+C<try_send_*> methods return false without sending. C<send_json> encodes
+data as JSON and does not stringify.
 
 =head2 send_text, send_bytes, send_json
 
