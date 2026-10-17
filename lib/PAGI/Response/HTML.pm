@@ -3,6 +3,8 @@ package PAGI::Response::HTML;
 use strict;
 use warnings;
 
+use Carp ();
+
 use Encode qw(encode FB_CROAK);
 use parent 'PAGI::Response';
 
@@ -46,7 +48,12 @@ sub default_content_type { 'text/html; charset=utf-8' }
 # The body is always UTF-8, so a custom content type declares it.
 sub content_type {
     my ($self, @type) = @_;
-    $type[0] = PAGI::Utils::_stringified($type[0]) if @type;
+    # Stringified before the charset is added; the caller's own undef still
+    # means the default type, but an object that gives no string croaks.
+    if (@type && defined $type[0]) {
+        defined($type[0] = PAGI::Utils::_string_value($type[0]))
+            or Carp::croak('Content-Type must be a scalar');
+    }
     @type = (PAGI::Response::_with_utf8_charset($type[0]))
         if @type && defined $type[0] && !ref $type[0];
     return $self->SUPER::content_type(@type);

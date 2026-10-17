@@ -56,7 +56,9 @@ sub body_of {
 # run => sub { my ($value) = @_; ... return the string the site sent },
 # refused => the site's own error for a value that is not a string, and
 # string => the string the objects give (default 'ok'), for sites that need
-# a particular form, such as an absolute URI.
+# a particular form, such as an absolute URI, and skip_undef => 1 for sites
+# where a plain undef means absent or remove, which they test themselves, and
+# skip_ref => 1 where an unblessed reference is data, encoded as JSON.
 sub check_site {
     my (%args) = @_;
     my ($name, $run, $refused) = @args{qw(name run refused)};
@@ -73,8 +75,8 @@ sub check_site {
             [ 'a number-only overload', PAGITest::Stringy::NumberOnly->new ],
             [ 'a bool-only overload',   PAGITest::Stringy::BoolOnly->new ],
             [ 'a plain object',         PAGITest::Stringy::Plain->new ],
-            [ 'a hash reference',       {} ],
-            [ 'undef',                  undef ],
+            ($args{skip_ref} ? () : [ 'a hash reference', {} ]),
+            ($args{skip_undef} ? () : [ 'undef', undef ]),
         ) {
             my ($label, $value) = @$refusal;
             like(dies { $run->($value) }, $refused, "$label is refused");

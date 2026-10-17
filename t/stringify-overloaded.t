@@ -294,4 +294,62 @@ for my $try (
     is($ok, 0, "$name: one that does not stringify is not sent");
 }
 
+# Every case at the sites where a plain undef means absent or remove.
+
+subtest 'the full table where undef has its own meaning' => sub {
+    PAGITest::Stringy::check_site(
+        name => 'base content_type', skip_undef => 1, string => 'text/csv',
+        run => sub { sent_response(PAGI::Response->new('x')->content_type($_[0]))->header('content-type') },
+        refused => qr/Content-Type must be a scalar/,
+    );
+    PAGITest::Stringy::check_site(
+        name => 'Text content_type', skip_undef => 1, string => 'text/csv; charset=utf-8',
+        run => sub { sent_response(response('Text', 'x')->content_type($_[0]))->header('content-type') },
+        refused => qr/Content-Type must be a scalar/,
+    );
+    PAGITest::Stringy::check_site(
+        name => 'HTML content_type', skip_undef => 1, string => 'text/csv; charset=utf-8',
+        run => sub { sent_response(response('HTML', 'x')->content_type($_[0]))->header('content-type') },
+        refused => qr/Content-Type must be a scalar/,
+    );
+    is(sent_response(response('Text', 'x')->content_type('text/plain')->content_type(undef))->header('content-type'),
+        undef, "the caller's own content_type(undef) still removes the type, as before");
+    for my $part (qw(domain path)) {
+        PAGITest::Stringy::check_site(
+            name => "cookie $part", skip_undef => 1,
+            run => sub { (set_cookie(response('Text', 'x')->cookie(c => 'v', $part => $_[0])) =~ /\b$part=([^;]*)/i)[0] },
+            refused => qr/cookie $part must be a string or an object that overloads stringification/,
+        );
+    }
+    PAGITest::Stringy::check_site(
+        name => 'WebSocket close reason', skip_undef => 1,
+        run => sub { my ($ws, $sent) = connected_ws(); $ws->close(1000, $_[0])->get; $sent->[-1]{reason} },
+        refused => qr/close reason must be a string or an object that overloads stringification/,
+    );
+    for my $field (qw(event id)) {
+        PAGITest::Stringy::check_site(
+            name => "SSE send_event $field", skip_undef => 1,
+            run => sub { my ($sse, $sent) = started_sse(); $sse->send_event(data => 'x', $field => $_[0])->get; $sent->[-1]{$field} },
+            refused => qr/send_event $field must be a string or an object that overloads stringification/,
+        );
+    }
+    PAGITest::Stringy::check_site(
+        name => 'SSE send_event data', skip_undef => 1, skip_ref => 1,
+        run => sub { my ($sse, $sent) = started_sse(); $sse->send_event(data => $_[0])->get; $sent->[-1]{data} },
+        refused => qr/send_event data must be a string|encountered object/,
+    );
+    for my $kind (sort keys %kinds) {
+        PAGITest::Stringy::check_site(
+            name => "$kind wire header", skip_undef => 1,
+            run => sub {
+                my $r = $kinds{$kind}->();
+                $r->headers->add('X-Obj' => $_[0]);
+                my ($start) = grep { $_->{type} eq 'http.response.start' } @{ PAGITest::Stringy::events_of($r) };
+                return (map { $_->[1] } grep { lc $_->[0] eq 'x-obj' } @{ $start->{headers} })[0];
+            },
+            refused => qr/header 'X-Obj' value must be a string or an object that overloads stringification/,
+        );
+    }
+};
+
 done_testing;

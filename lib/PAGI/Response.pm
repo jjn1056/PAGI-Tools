@@ -440,9 +440,11 @@ sub remove_header {
 sub content_type {
     my ($self, $value) = @_;
     return $self->header('content-type') if @_ == 1;
-    $value = PAGI::Utils::_stringified($value);
+    # The caller's own undef removes the type; an object that gives undef
+    # is not a type, and croaks.
     if (defined $value) {
-        croak 'Content-Type must be a scalar' if ref $value;
+        defined($value = PAGI::Utils::_string_value($value))
+            or croak 'Content-Type must be a scalar';
         $self->{_headers}->set('Content-Type', $value);
     } else {
         $self->{_headers}->remove('content-type');
