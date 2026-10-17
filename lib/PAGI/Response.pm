@@ -230,7 +230,9 @@ memory strategy, independently of protocol adaptation.
 
 Header values, the Content-Type, and a cookie's value, domain and path may be
 objects that stringify (L</VALUES FROM OTHER CODE>); a cookie part that is
-not a string croaks rather than being sent as C<HASH(0x...)>. A header added
+not a string croaks rather than being sent as C<HASH(0x...)>. That includes an
+undef value: C<< cookie(name => undef) >> does not remove a cookie, and
+C<delete_cookie> is what does. A header added
 straight to the container returned by C<headers> is checked as the response
 is sent: a value that is neither a string nor an object that stringifies
 croaks then, naming the header, before anything is sent.
