@@ -28,4 +28,16 @@ PAGITest::Stringy::check_site(
     refused => qr/response body must be a defined unblessed scalar of encoded bytes/,
 );
 
+PAGITest::Stringy::check_site(
+    name    => 'Stream write_text',
+    run     => sub { my ($value) = @_; PAGITest::Stringy::body_of(response('Stream', sub { $_[0]->write_text($value) })) },
+    refused => qr/stream text must be a defined unblessed character scalar/,
+);
+
+PAGITest::Stringy::check_site(
+    name    => 'Stream write',
+    run     => sub { my ($value) = @_; PAGITest::Stringy::body_of(response('Stream', sub { $_[0]->write($value) })) },
+    refused => qr/stream chunk must be a defined unblessed scalar of encoded bytes/,
+);
+
 done_testing;

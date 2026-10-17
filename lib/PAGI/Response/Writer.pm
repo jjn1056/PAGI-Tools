@@ -111,7 +111,7 @@ sub _new {
 
 sub write {
     my ($self, $bytes) = @_;
-    PAGI::Response::_require_bytes('stream chunk', $bytes);
+    $bytes = PAGI::Response::_require_bytes('stream chunk', $bytes);
     croak 'A write is already outstanding; await write before writing again'
         if $self->{_active_write};
     return Future->fail("Writer already closed\n") if $self->{_closed};
@@ -168,6 +168,7 @@ sub write {
 
 sub write_text {
     my ($self, $characters) = @_;
+    $characters = PAGI::Utils::_stringified($characters);
     croak 'stream text must be a defined unblessed character scalar'
         unless defined($characters) && !ref($characters);
     my $bytes = encode('UTF-8', $characters, FB_CROAK | LEAVE_SRC);
@@ -458,8 +459,9 @@ resolution is not proof that the client received it. Writer then checks
 connection state and counts bytes only while still connected. A disconnect
 never manufactures a write failure. Genuine validation or resource failures
 from C<$send> still propagate.
-C<write_text> performs strict UTF-8 encoding first. Await each write before
-starting another.
+C<write_text> performs strict UTF-8 encoding first. Either may be given an
+object that stringifies (L<PAGI::Response/VALUES FROM OTHER CODE>). Await
+each write before starting another.
 
 =head2 write_item
 
