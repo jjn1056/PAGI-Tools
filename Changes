@@ -180,7 +180,7 @@
     write_text; the Redirect location; Problem type, instance, title and
     detail (the document passed in is not changed); and PAGI::Pages' detail,
     title, type, instance, redirect targets, blocked_by, login_url and
-    favicon_href.
+    favicon_href; and File's path and filename.
   - One way to load a class given by name, shared by middleware(),
     Builder's enable, response(), session_store/session_state, endpoint()
     and RequestClass: a class already defined (declared in app.pl, or

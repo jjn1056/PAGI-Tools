@@ -34,6 +34,12 @@ trusted, already selected filesystem path. It never maps C<< $scope->{path} >>
 to disk. Use L<PAGI::App::File> when untrusted URL paths must be resolved under
 a root with traversal, hidden-file, index, missing, and forbidden policy.
 
+The path and C<filename> may be objects that stringify, such as
+L<Path::Tiny> (L<PAGI::Response/VALUES FROM OTHER CODE>). The path is taken
+as a string when the response is built, so a L<File::Temp> object, which
+removes its file when it goes away, must be kept alive until the response
+has been sent.
+
 Construction validates configuration only. Existence, readability, metadata,
 logical-window bounds, conditionals, and client ranges are evaluated before
 response start for each invocation. The application opens no filehandle. Each
@@ -65,6 +71,7 @@ sub new {
     my ($class, $path, @pairs) = @_;
     croak 'PAGI::Response::File->new requires a selected file path'
         unless @_ >= 2;
+    $path = PAGI::Utils::_stringified($path);
     croak 'File response path must be a defined nonempty scalar string'
         unless defined($path) && !ref($path) && length($path);
     croak 'File response path must not contain a NUL byte'
@@ -81,7 +88,7 @@ sub new {
         if exists $options->{inline};
 
     if (exists $options->{filename}) {
-        my $filename = $options->{filename};
+        my $filename = $options->{filename} = PAGI::Utils::_stringified($options->{filename});
         croak 'File response filename must be a defined scalar'
             unless defined($filename) && !ref($filename);
         croak 'File response filename must not contain control bytes'

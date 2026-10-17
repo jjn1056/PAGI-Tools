@@ -132,4 +132,26 @@ PAGITest::Stringy::check_site(
     is($html->(PAGITest::Stringy::Plain->new)->status, 500, 'a favicon_href object that does not stringify is refused');
 }
 
+# File: its path, and the filename it is sent as.
+
+use File::Temp qw(tempdir);
+use Path::Tiny ();
+
+my $files = tempdir(CLEANUP => 1);
+my $file = "$files/report.txt";
+{ open my $fh, '>', $file or die "$file: $!"; print {$fh} $file; close $fh }    # the file's body is its own path
+
+PAGITest::Stringy::check_site(
+    name    => 'File path',
+    string  => $file,
+    run     => sub { sent_response(response('File', $_[0]))->content },
+    refused => qr/File response path must be a defined nonempty scalar string/,
+);
+PAGITest::Stringy::check_site(
+    name    => 'File filename',
+    run     => sub { (sent_response(response('File', $file, filename => $_[0]))->header('content-disposition') =~ /filename="([^"]*)"/)[0] },
+    refused => qr/File response filename must be a defined scalar/,
+);
+is(sent_response(response('File', Path::Tiny::path($file)))->content, $file, 'a Path::Tiny path sends the file');
+
 done_testing;
