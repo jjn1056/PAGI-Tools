@@ -571,6 +571,7 @@ sub _allows_body_forbidden_status { 0 }
 
 sub _validate_uri_reference {
     my ($label, $value) = @_;
+    $value = PAGI::Utils::_stringified($value);
     croak "$label must be a URI-reference scalar"
         unless defined($value) && !ref($value) && _is_uri_reference($value);
     return $value;

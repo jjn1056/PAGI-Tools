@@ -54,15 +54,18 @@ sub body_of {
 }
 
 # run => sub { my ($value) = @_; ... return the string the site sent },
-# refused => the site's own error for a value that is not a string.
+# refused => the site's own error for a value that is not a string, and
+# string => the string the objects give (default 'ok'), for sites that need
+# a particular form, such as an absolute URI.
 sub check_site {
     my (%args) = @_;
     my ($name, $run, $refused) = @args{qw(name run refused)};
+    my $string = $args{string} // 'ok';
     subtest "$name follows the stringification rule" => sub {
-        is($run->(PAGITest::Stringy::Overloaded->new('ok')), 'ok', 'an overloading object');
-        is($run->(PAGITest::Stringy::Inherited->new('ok')), 'ok', 'an inherited overload');
+        is($run->(PAGITest::Stringy::Overloaded->new($string)), $string, 'an overloading object');
+        is($run->(PAGITest::Stringy::Inherited->new($string)), $string, 'an inherited overload');
 
-        my $counting = PAGITest::Stringy::Counting->new('ok');
+        my $counting = PAGITest::Stringy::Counting->new($string);
         $run->($counting);
         is($counting->{calls}, 1, 'stringified once');
 

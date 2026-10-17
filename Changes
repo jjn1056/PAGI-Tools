@@ -176,8 +176,11 @@
     that overload only numeric or boolean conversion. 0.002's Text and HTML
     handed any value to Encode, so a reference went out as HASH(0x...) and
     undef as an empty string: a side effect, not a feature, and it is not
-    kept. Applies to Text, HTML and byte bodies, and Stream write and
-    write_text.
+    kept. Applies to Text, HTML and byte bodies; Stream write and
+    write_text; the Redirect location; Problem type, instance, title and
+    detail (the document passed in is not changed); and PAGI::Pages' detail,
+    title, type, instance, redirect targets, blocked_by, login_url and
+    favicon_href.
   - One way to load a class given by name, shared by middleware(),
     Builder's enable, response(), session_store/session_state, endpoint()
     and RequestClass: a class already defined (declared in app.pl, or

@@ -34,8 +34,10 @@ PAGI::Response::Problem - buffered RFC 9457 problem response
 
 Validates an unblessed RFC 9457 problem hashref before buffering it as UTF-8
 JSON with C<application/problem+json>. C<type>, C<title>, C<status>, C<detail>,
-and C<instance> are optional and validated when present; other JSON-encodable
-members are extensions. Missing C<type> has the effective RFC value
+and C<instance> are optional and validated when present, and each may be an
+object that stringifies (L<PAGI::Response/VALUES FROM OTHER CODE>); the
+document passed in is not changed. Other JSON-encodable members are
+extensions. Missing C<type> has the effective RFC value
 C<about:blank> without inserting that member. A document C<status> supplies
 the HTTP status unless an equal constructor status is given; mismatches croak.
 When the document contains C<status>, that agreement remains response-owned:
@@ -50,6 +52,7 @@ sub new {
         unless ref($problem) eq 'HASH' && !blessed($problem);
 
     my $options = PAGI::Response::_parse_options(@pairs);
+    $problem = _stringified_members($problem);
     _validate_problem($problem);
 
     if (exists $problem->{status}) {
@@ -93,6 +96,17 @@ sub _validate_problem_status_invariant {
     croak 'Problem document and HTTP statuses must agree'
         unless $self->status == $self->{_problem_document_status};
     return;
+}
+
+# A copy of the document with its string members stringified, so the JSON
+# encoder sees strings and the caller's hashref is left as it was.
+sub _stringified_members {
+    my ($problem) = @_;
+    my %copy = %$problem;
+    for my $member (qw(type instance title detail)) {
+        $copy{$member} = PAGI::Utils::_stringified($copy{$member}) if exists $copy{$member};
+    }
+    return \%copy;
 }
 
 sub _validate_problem {

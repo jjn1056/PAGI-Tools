@@ -232,13 +232,14 @@ sub _normalize_options {
 
     for my $key (qw(detail title)) {
         next unless exists $opts->{$key};
+        $opts->{$key} = PAGI::Utils::_stringified($opts->{$key});
         croak "PAGI::Pages $key must be a Unicode scalar"
             unless defined($opts->{$key}) && !ref($opts->{$key});
     }
 
-    _validate_absolute_problem_type($opts->{type})
+    $opts->{type} = _validate_absolute_problem_type($opts->{type})
         if exists $opts->{type};
-    _validate_uri_reference('instance', $opts->{instance})
+    $opts->{instance} = _validate_uri_reference('instance', $opts->{instance})
         if exists $opts->{instance};
 
     if (exists $opts->{extensions}) {
@@ -295,6 +296,7 @@ sub _validate_field_value {
 
 sub _validate_absolute_problem_type {
     my ($value) = @_;
+    $value = PAGI::Utils::_stringified($value);
     croak 'PAGI::Pages type must be an absolute URI'
         unless defined($value) && !ref($value)
             && $value =~ /\A[A-Za-z][A-Za-z0-9+.-]*:[\x21-\x7E]*\z/;
@@ -305,6 +307,7 @@ sub _validate_absolute_problem_type {
 
 sub _validate_uri_reference {
     my ($label, $value) = @_;
+    $value = PAGI::Utils::_stringified($value);
     croak "PAGI::Pages $label must be a URI-reference scalar"
         unless defined($value) && !ref($value)
             && $value =~ /\A[\x21-\x7E]*\z/;
@@ -887,7 +890,7 @@ sub render_html {
     _reject_future($favicon);
     my $favicon_link = '';
     if (defined $favicon) {
-        _validate_uri_reference('favicon_href', $favicon);
+        $favicon = _validate_uri_reference('favicon_href', $favicon);
         $favicon_link = '<link rel="icon" type="image/svg+xml" href="'
             . _html_escape($favicon) . '">' . "\n";
     }
@@ -1811,6 +1814,10 @@ This method is not exportable. Its complete option set and defaults are in
 L</"REDIRECT OPTIONS">.
 
 =head1 OPTION REFERENCE
+
+Every option, redirect target and hook result below that takes a string or a
+URI also takes an object whose class overloads stringification, such as
+L<URI> (L<PAGI::Response/VALUES FROM OTHER CODE>).
 
 All factory options are flat key/value lists. An odd list, an empty or
 reference-valued option name, or an unknown option croaks at factory time.
