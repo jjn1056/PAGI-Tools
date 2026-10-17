@@ -170,6 +170,13 @@
   - PAGI::Test::Client has a query method for the QUERY verb.
 
   [Changed]
+  - Wherever a response takes a string it also takes an object whose class
+    overloads "" (URI, Path::Tiny, DateTime, exception objects), stringified
+    once; every other value that is not a string croaks, including objects
+    that overload only numeric or boolean conversion. 0.002's Text and HTML
+    handed any value to Encode, so a reference went out as HASH(0x...) and
+    undef as an empty string: a side effect, not a feature, and it is not
+    kept. Applies to Text, HTML and byte bodies.
   - One way to load a class given by name, shared by middleware(),
     Builder's enable, response(), session_store/session_state, endpoint()
     and RequestClass: a class already defined (declared in app.pl, or

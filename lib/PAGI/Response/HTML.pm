@@ -23,7 +23,8 @@ PAGI::Response::HTML - buffered UTF-8 HTML response
 
 =head1 DESCRIPTION
 
-Buffers one defined character scalar as strict UTF-8 bytes with
+Buffers one defined character scalar, or an object that stringifies to one
+(L<PAGI::Response/VALUES FROM OTHER CODE>), as strict UTF-8 bytes with
 C<text/html; charset=utf-8>. Common C<status>, flat C<headers>, and
 C<content_type> options are accepted. The class encodes markup but does not
 escape or sanitize it.
@@ -52,6 +53,7 @@ sub content_type {
 
 sub render {
     my ($self, $value) = @_;
+    $value = PAGI::Utils::_stringified($value);
     die 'HTML response body must be a defined Unicode scalar'
         unless defined $value && !ref($value);
     return encode('UTF-8', $value, FB_CROAK);

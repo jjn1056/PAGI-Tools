@@ -9,6 +9,7 @@ use Exporter qw(import);
 use Future;
 use Future::AsyncAwait;
 use PAGI::Headers ();
+use PAGI::Utils ();
 use Scalar::Util qw(blessed);
 use Socket ();
 
@@ -141,6 +142,23 @@ helper cleanup. A mapped start send resolves when the server accepts and owns
 the response slot (or finishes discarding it after disconnect), not when the
 client receives bytes.
 
+=head1 VALUES FROM OTHER CODE
+
+Wherever a response takes a string, such as a body, it also takes a blessed
+object whose class overloads stringification (C<""> directly, or through a
+parent class), such as L<URI>, L<Path::Tiny>, L<DateTime> or an exception
+object. The overload is called once and its string is used.
+
+Every other value that is not a plain string croaks: an unblessed
+reference, an object that does not overload C<"">, an object that overloads
+only numeric or boolean conversion (Perl would otherwise invent a string
+such as C<42> or C<1> for it), and an object whose C<""> returns undef. An
+exception thrown by the object's own C<""> propagates unchanged.
+
+JSON data is not stringified: L<PAGI::Response::JSON> and
+L<PAGI::Response::NDJSON> encode their data as JSON, and their encoder
+refuses every blessed object.
+
 =head1 METHODS
 
 =head2 response
@@ -172,7 +190,9 @@ C<< PAGI::Response->new($bytes, %options) >>.
 
     PAGI::Response->new($bytes, %options)
 
-Creates a complete buffered response.  The supported options are C<status>,
+Creates a complete buffered response. C<$bytes> is a string of encoded bytes,
+or an object that stringifies to one (L</VALUES FROM OTHER CODE>). The
+supported options are C<status>,
 C<content_type>, and C<headers>, where C<headers> is an even-length flat
 arrayref of name/value pairs. Unknown, duplicate, odd, or malformed options
 croak synchronously. Status defaults to 200 and body-bearing construction
@@ -333,9 +353,7 @@ sub new {
     my $options = _parse_options(@pairs);
 
     my $self = bless { _headers => PAGI::Headers->new }, $class;
-    my $body = $self->render($value);
-    _require_bytes('response body', $body);
-    $self->{_body} = $body;
+    $self->{_body} = _require_bytes('response body', $self->render($value));
 
     $self->status($options->{status}) if exists $options->{status};
     if (exists $options->{headers}) {
@@ -528,11 +546,13 @@ sub _parse_options {
     return \%options;
 }
 
+# The encoded bytes $value stands for, or croak naming it.
 sub _require_bytes {
     my ($name, $value) = @_;
+    $value = PAGI::Utils::_stringified($value);
     croak "$name must be a defined unblessed scalar of encoded bytes"
         unless defined $value && !ref($value) && !utf8::is_utf8($value);
-    return;
+    return $value;
 }
 
 sub _validate_status {

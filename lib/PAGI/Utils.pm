@@ -9,6 +9,7 @@ use Carp qw(croak);
 use File::Basename qw(basename dirname);
 use File::Spec;
 use Scalar::Util qw(blessed);
+use overload ();
 use PAGI::Lifespan;
 use PAGI::Utils::AppObject;
 
@@ -351,6 +352,18 @@ async sub invoke_app {
 # Resolve a short class name the way middleware() does: a leading '+' names
 # an exact package, a name already under $namespace is kept, and anything else
 # is prefixed with "$namespace::". $what names the kind of class in errors.
+# The string a blessed object gives when its class overloads stringification,
+# or the value unchanged. The overload is called directly, once: it may return
+# undef, which callers refuse, and "$value" would warn about that. Objects that
+# overload only numeric or boolean conversion are not strings and pass through
+# unchanged, to be refused by the caller.
+sub _stringified {
+    my ($value) = @_;
+    return $value unless blessed($value);
+    my $method = overload::Method($value, '""') or return $value;
+    return $method->($value, undef, '');
+}
+
 sub _resolve_class {
     my ($namespace, $name, $what) = @_;
     croak "invalid $what class name; use leading '+' for an exact package"
