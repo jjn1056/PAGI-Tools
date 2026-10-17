@@ -268,8 +268,12 @@ for my $method (qw(send_event try_send_event)) { subtest "$method data, event an
     is([ @$event{qw(data event id)} ], [qw(text update 7)], "$method: data, event and id objects are sent as their strings");
     (undef, $event) = $send->(data => { a => 1 });
     is($event->{data}, '{"a":1}', "$method: other data references are still JSON");
-    (undef, $event) = $send->(data => undef);
-    is($event->{data}, '', "$method: undef data is an empty event");
+    if ($try) {
+        my ($ok) = $send->(data => undef);
+        is($ok, 0, "$method: undef data is not sent");
+    } else {
+        like(dies { $send->(data => undef) }, qr/send_event data must be a string/, "$method: undef data is refused");
+    }
     for my $field (qw(event id)) {
         if ($try) {
             my ($ok) = $send->(data => 'x', $field => PAGITest::Stringy::Plain->new);
@@ -313,7 +317,7 @@ subtest 'the full table where undef has its own meaning' => sub {
         refused => qr/Content-Type must be a scalar/,
     );
     is(sent_response(response('Text', 'x')->content_type('text/plain')->content_type(undef))->header('content-type'),
-        undef, "the caller's own content_type(undef) still removes the type, as before");
+        'text/plain; charset=utf-8', "the caller's own content_type(undef) gives the class default");
     for my $part (qw(domain path)) {
         PAGITest::Stringy::check_site(
             name => "cookie $part", skip_undef => 1,

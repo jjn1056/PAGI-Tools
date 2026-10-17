@@ -223,7 +223,10 @@ public Response-specific emission method.
     is_buffered / body
 
 C<header($name, $value)> appends and preserves repeated-field order;
-C<content_type> replaces Content-Type. The C<*_try> setters are chainable and
+C<content_type> replaces Content-Type, and C<content_type(undef)> gives back the
+class's default type (Text's C<text/plain; charset=utf-8>, for one), so a typed
+body always says what it is; Empty and File have none, File's coming from the
+file name. The C<*_try> setters are chainable and
 do not overwrite an explicit value. C<body> is read-only encoded bytes for
 buffered responses and croaks for File and Stream. C<is_buffered> reports the
 memory strategy, independently of protocol adaptation.
@@ -448,6 +451,10 @@ sub content_type {
         defined($value = PAGI::Utils::_string_value($value))
             or croak 'Content-Type must be a scalar';
         $self->{_headers}->set('Content-Type', $value);
+    } elsif (defined(my $default = $self->default_content_type)) {
+        # Clearing a typed body gives back its default, so it always says
+        # what it is; a class with no default (Empty, File) sends none.
+        $self->{_headers}->set('Content-Type', $default);
     } else {
         $self->{_headers}->remove('content-type');
     }

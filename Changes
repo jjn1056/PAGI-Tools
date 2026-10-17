@@ -189,8 +189,15 @@
     send_bytes and close reason, and PAGI::SSE's send, send_comment and
     send_event (data, event, id), with their try_send variants, follow the
     same rule; send_event's id no longer goes out as HASH(0x...) for an
-    object, and undef data is an empty event for send_event as it was for
-    try_send_event.
+    object, and undef data is refused by both send_event and
+    try_send_event (it went to the server, which refused it, or out as an
+    empty event).
+  - content_type(undef) gives back the class's default type instead of
+    removing Content-Type, so a Text, HTML, JSON or other typed response
+    always says what it is; Empty and File, which have no default, send none.
+  - PAGI::WebSocket's try_send_text, try_send_bytes and try_send_json report
+    a failure to on_error, as PAGI::SSE's try_send* already did; they still
+    return false and never throw.
   - One way to load a class given by name, shared by middleware(),
     Builder's enable, response(), session_store/session_state, endpoint()
     and RequestClass: a class already defined (declared in app.pl, or

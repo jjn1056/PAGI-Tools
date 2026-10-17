@@ -600,12 +600,10 @@ sub try_send_text { my $self = shift; return $self->_keep($self->_try_send_text(
 async sub _try_send_text {
     my ($self, $text) = @_;
     return 0 if $self->_response_claimed_before_start || !$self->is_connected;
-    # Best-effort: a value that is not a string is not sent, even when the
-    # object's own stringification dies.
-    $text = eval { PAGI::Utils::_string_value($text) };
-    return 0 unless defined $text;
 
     eval {
+        defined($text = PAGI::Utils::_string_value($text))
+            or croak 'send_text requires a string or an object that overloads stringification';
         await PAGI::Common::send_in_order($self, {
             type => 'websocket.send',
             text => $text,
@@ -617,8 +615,12 @@ async sub _try_send_text {
     # not fail the Future), so neither case reaches here as an error. This
     # eval only catches a genuine send failure, which per the try_* contract
     # still returns false without fabricating a 1006 close or mutating
-    # connection state.
-    return 0 if $@;
+    # connection state, and is reported to on_error, as PAGI::SSE's try_send*
+    # report theirs.
+    if (my $err = $@) {
+        await $self->_trigger_error($err);
+        return 0;
+    }
     return 1;
 }
 
@@ -627,12 +629,10 @@ sub try_send_bytes { my $self = shift; return $self->_keep($self->_try_send_byte
 async sub _try_send_bytes {
     my ($self, $bytes) = @_;
     return 0 if $self->_response_claimed_before_start || !$self->is_connected;
-    # Best-effort: a value that is not a string is not sent, even when the
-    # object's own stringification dies.
-    $bytes = eval { PAGI::Utils::_string_value($bytes) };
-    return 0 unless defined $bytes;
 
     eval {
+        defined($bytes = PAGI::Utils::_string_value($bytes))
+            or croak 'send_bytes requires a string or an object that overloads stringification';
         await PAGI::Common::send_in_order($self, {
             type => 'websocket.send',
             bytes => $bytes,
@@ -644,8 +644,12 @@ async sub _try_send_bytes {
     # not fail the Future), so neither case reaches here as an error. This
     # eval only catches a genuine send failure, which per the try_* contract
     # still returns false without fabricating a 1006 close or mutating
-    # connection state.
-    return 0 if $@;
+    # connection state, and is reported to on_error, as PAGI::SSE's try_send*
+    # report theirs.
+    if (my $err = $@) {
+        await $self->_trigger_error($err);
+        return 0;
+    }
     return 1;
 }
 
@@ -668,8 +672,12 @@ async sub _try_send_json {
     # not fail the Future), so neither case reaches here as an error. This
     # eval only catches a genuine send failure, which per the try_* contract
     # still returns false without fabricating a 1006 close or mutating
-    # connection state.
-    return 0 if $@;
+    # connection state, and is reported to on_error, as PAGI::SSE's try_send*
+    # report theirs.
+    if (my $err = $@) {
+        await $self->_trigger_error($err);
+        return 0;
+    }
     return 1;
 }
 
@@ -1340,7 +1348,8 @@ methods), the callbacks are quiet no-ops and C<is_writable> is true.
 Text and bytes may be given as an object that stringifies
 (L<PAGI::Response/VALUES FROM OTHER CODE>). A value that is neither a string
 nor such an object makes C<send_text> and C<send_bytes> fail, and the
-C<try_send_*> methods return false without sending. C<send_json> encodes
+C<try_send_*> methods return false without sending and report it to
+L</on_error>. C<send_json> encodes
 data as JSON and does not stringify.
 
 =head2 send_text, send_bytes, send_json
@@ -1379,8 +1388,10 @@ B<The boolean is a weak signal; do not treat it as a delivery receipt:>
 =item *
 
 A B<false> return means the send definitely did not happen -- the socket is
-not connected (not yet accepted, closing or closed), or the underlying send
-raised. It tells you I<that> it failed, not I<why>. A false before C<accept>
+not connected (not yet accepted, closing or closed), or the value or the
+underlying send raised. The return tells you I<that> it failed; the error
+itself goes to L</on_error>, as PAGI::SSE's C<try_send*> report theirs. A
+false before C<accept>
 is as quiet as any other, so while developing use C<send_*>: a send before
 C<accept> fails loudly there.
 
@@ -1603,7 +1614,7 @@ run, but outside the call, so a server shutting down does not wait for them.
     });
 
 Registers error callback. Called when exceptions occur in message
-handlers during C<run()>. Callbacks can be regular subs or async
+handlers during C<run()>, and with the error when a C<try_send_*> fails. Callbacks can be regular subs or async
 subs — async results are automatically awaited. Multiple callbacks
 run in registration order. Exceptions in callbacks are caught and
 warned but do not prevent other callbacks.
@@ -1611,6 +1622,9 @@ warned but do not prevent other callbacks.
 After the callbacks run, C<run()> re-raises the error, so the server reports
 it as an application error. With no error handlers registered, nothing else
 is printed.
+
+A C<try_send_*> failure is not re-raised: after the callbacks run, the method
+returns false.
 
 Returns C<$self> for chaining.
 

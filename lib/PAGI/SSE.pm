@@ -579,19 +579,16 @@ async sub _try_send_event {
 
 # The sse.send event for send_event and try_send_event. An object that
 # overloads "" is text; other data references are encoded as JSON; undef
-# data is an empty event. event and id are strings, never HASH(0x...).
+# data is refused. event and id are strings, never HASH(0x...).
 sub _send_event_for {
     my (%opts) = @_;
-    my $data = $opts{data} // '';
+    my $data = $opts{data};
     if (ref $data) {
         my $string = PAGI::Utils::_stringified($data);
-        if (ref $string) {
-            $data = JSON::MaybeXS::encode_json($data);
-        } else {
-            defined($data = $string)
-                or croak 'send_event data must be a string, a reference to encode as JSON, or an object that overloads stringification';
-        }
+        $data = ref($string) ? JSON::MaybeXS::encode_json($data) : $string;
     }
+    defined $data
+        or croak 'send_event data must be a string, a reference to encode as JSON, or an object that overloads stringification';
     my $event = { type => 'sse.send', data => $data };
     for my $field (qw(event id)) {
         next unless defined $opts{$field};
@@ -1376,7 +1373,7 @@ JSON-encodes data before sending.
 
 Sends a full SSE event with all fields. C<data> that is an object that
 stringifies is sent as its string; any other reference is encoded as JSON;
-undef data is an empty event.
+undef data is refused.
 
 =head2 send_comment
 

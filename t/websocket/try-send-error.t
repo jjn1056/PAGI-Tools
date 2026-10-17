@@ -59,4 +59,31 @@ subtest 'try_send on an already-closed socket still short-circuits to 0' => sub 
     is \@sent, [], 'nothing reaches the transport';
 };
 
+# A failure is reported to on_error, as PAGI::SSE's try_send* report theirs,
+# and the method still returns false without throwing.
+subtest 'try_send_* failures reach on_error' => sub {
+    for my $m (qw(try_send_text try_send_bytes try_send_json)) {
+        my $ws = connected_ws_that_dies();
+        my @errors;
+        $ws->on_error(sub { push @errors, $_[0] });
+        is($ws->$m($m eq 'try_send_json' ? { a => 1 } : 'x')->get, 0, "$m: a send error returns 0");
+        is(scalar @errors, 1, "$m: and is reported once");
+        like($errors[0], qr/real send error/, "$m: with the error itself");
+    }
+
+    my @errors;
+    my $ws = PAGI::WebSocket->new(ws_scope(path => '/ws'), sub { Future->done }, sub { Future->done });
+    $ws->accept->get;
+    $ws->on_error(sub { push @errors, $_[0] });
+    is($ws->try_send_text(bless {}, 'PAGITest::NotAString')->get, 0, 'a value that is not a string returns 0');
+    like($errors[-1], qr/send_text requires a string or an object that overloads stringification/,
+        'and the refusal is reported');
+    {
+        package PAGITest::DiesStringifying;
+        use overload '""' => sub { die "stringify refused\n" };
+    }
+    is($ws->try_send_bytes(bless {}, 'PAGITest::DiesStringifying')->get, 0, 'an object whose "" dies returns 0');
+    like($errors[-1], qr/\Astringify refused/, "and the object's own exception is reported");
+};
+
 done_testing;
