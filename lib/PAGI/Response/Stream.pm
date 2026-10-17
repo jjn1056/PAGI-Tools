@@ -92,7 +92,7 @@ sub format_item { return $_[1] }
 
 sub _stream_wire_headers {
     my ($self) = @_;
-    return $self->{_headers}->to_pairs;
+    return $self->_sendable_header_pairs;
 }
 
 sub _stream_delivery_plan {

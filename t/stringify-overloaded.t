@@ -154,4 +154,59 @@ PAGITest::Stringy::check_site(
 );
 is(sent_response(response('File', Path::Tiny::path($file)))->content, $file, 'a Path::Tiny path sends the file');
 
+# Header values, Content-Type, cookies, and every header a response sends.
+
+PAGITest::Stringy::check_site(
+    name    => 'header value',
+    run     => sub { sent_response(response('Text', 'x')->header('X-A' => $_[0]))->header('x-a') },
+    refused => qr/Header value is required/,
+);
+PAGITest::Stringy::check_site(
+    name    => 'headers option value',
+    run     => sub { sent_response(response('Text', 'x', headers => ['X-A' => $_[0]]))->header('x-a') },
+    refused => qr/Header value is required/,
+);
+like(dies { response('Text', 'x', headers => [['X-A', 1]]) },
+    qr/headers must be flat name\/value pairs, not nested pairs/, 'a nested pair is still refused as one');
+
+is(sent_response(PAGI::Response->new('x')->content_type(PAGITest::Stringy::Overloaded->new('text/csv')))
+    ->header('content-type'), 'text/csv', 'content_type takes an object that stringifies');
+is(sent_response(response('Text', 'x')->content_type(PAGITest::Stringy::Overloaded->new('text/csv')))
+    ->header('content-type'), 'text/csv; charset=utf-8', "Text's content_type stringifies before adding its charset");
+like(dies { PAGI::Response->new('x')->content_type(PAGITest::Stringy::Plain->new) },
+    qr/Content-Type must be a scalar/, 'content_type refuses an object that does not stringify');
+
+sub set_cookie { sent_response($_[0])->header('set-cookie') }
+PAGITest::Stringy::check_site(
+    name    => 'cookie value',
+    run     => sub { (set_cookie(response('Text', 'x')->cookie(c => $_[0])) =~ /\Ac=([^;]*)/)[0] },
+    refused => qr/cookie value must be a string or an object that overloads stringification/,
+);
+like(set_cookie(response('Text', 'x')->cookie(c => 'v', domain => PAGITest::Stringy::Overloaded->new('example.com'),
+    path => PAGITest::Stringy::Overloaded->new('/app'))), qr/domain=example\.com; path=\/app/, 'cookie domain and path take objects');
+like(dies { response('Text', 'x')->cookie(c => 'v', domain => PAGITest::Stringy::Plain->new) },
+    qr/cookie domain must be a string or an object that overloads stringification/,
+    'a cookie domain that does not stringify is refused, not sent as HASH(0x...)');
+like(set_cookie(response('Text', 'x')->delete_cookie('c', path => PAGITest::Stringy::Overloaded->new('/app'))),
+    qr/\Ac=; .*path=\/app/i, 'delete_cookie takes them too');
+
+# Headers added straight to the container are checked as they are sent, on
+# every kind of response.
+my %kinds = (
+    buffered => sub { response('Text', 'x') },
+    stream   => sub { response('Stream', sub { $_[0]->write('x') }) },
+    file     => sub { response('File', $file) },
+);
+for my $kind (sort keys %kinds) {
+    my $added = $kinds{$kind}->();
+    $added->headers->add('X-Obj' => PAGITest::Stringy::Overloaded->new('ok'));
+    is(sent_response($added)->header('x-obj'), 'ok', "$kind: a header object added to the container is sent as its string");
+
+    my $plain = $kinds{$kind}->();
+    $plain->headers->add('X-Obj' => PAGITest::Stringy::Plain->new);
+    like(dies { PAGITest::Stringy::events_of($plain) },
+        qr/header 'X-Obj' value must be a string or an object that overloads stringification/,
+        "$kind: one that does not stringify is refused, naming the header");
+}
+
 done_testing;

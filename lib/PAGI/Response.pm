@@ -194,7 +194,8 @@ Creates a complete buffered response. C<$bytes> is a string of encoded bytes,
 or an object that stringifies to one (L</VALUES FROM OTHER CODE>). The
 supported options are C<status>,
 C<content_type>, and C<headers>, where C<headers> is an even-length flat
-arrayref of name/value pairs. Unknown, duplicate, odd, or malformed options
+arrayref of name/value pairs whose values follow C<header> (L</metadata>).
+Unknown, duplicate, odd, or malformed options
 croak synchronously. Status defaults to 200 and body-bearing construction
 rejects 1xx, 204, 205, and 304. Default Content-Type is
 C<application/octet-stream>.
@@ -226,6 +227,13 @@ C<content_type> replaces Content-Type. The C<*_try> setters are chainable and
 do not overwrite an explicit value. C<body> is read-only encoded bytes for
 buffered responses and croaks for File and Stream. C<is_buffered> reports the
 memory strategy, independently of protocol adaptation.
+
+Header values, the Content-Type, and a cookie's value, domain and path may be
+objects that stringify (L</VALUES FROM OTHER CODE>); a cookie part that is
+not a string croaks rather than being sent as C<HASH(0x...)>. A header added
+straight to the container returned by C<headers> is checked as the response
+is sent: a value that is neither a string nor an object that stringifies
+croaks then, naming the header, before anything is sent.
 
 =head1 SUBCLASSING
 
@@ -361,7 +369,7 @@ sub new {
         croak 'headers must be an arrayref of flat name/value pairs'
             unless ref($headers) eq 'ARRAY';
         croak 'headers must be flat name/value pairs, not nested pairs'
-            if grep { ref } @$headers;
+            if grep { ref $headers->[$_] } grep { $_ % 2 == 0 } 0 .. $#$headers;
         croak 'headers must be an even-length flat arrayref [ name => value, ... ]'
             if @$headers % 2;
         for (my $index = 0; $index < @$headers; $index += 2) {
@@ -402,6 +410,7 @@ sub header {
     my ($self, $name, $value) = @_;
     croak 'Header name is required' unless defined $name && !ref($name) && length $name;
     return $self->{_headers}->get($name) if @_ == 2;
+    $value = PAGI::Utils::_stringified($value);
     croak 'Header value is required' unless defined $value && !ref($value);
     $self->{_headers}->add($name, $value);
     return $self;
@@ -431,6 +440,7 @@ sub remove_header {
 sub content_type {
     my ($self, $value) = @_;
     return $self->header('content-type') if @_ == 1;
+    $value = PAGI::Utils::_stringified($value);
     if (defined $value) {
         croak 'Content-Type must be a scalar' if ref $value;
         $self->{_headers}->set('Content-Type', $value);
@@ -450,6 +460,10 @@ sub content_type_try {
 
 sub cookie {
     my ($self, $name, $value, %options) = @_;
+    $value = _cookie_string('value', $value);
+    for my $option (qw(domain path)) {
+        $options{$option} = _cookie_string($option, $options{$option}) if defined $options{$option};
+    }
     my %cookie = (value => $value, path => $options{path} // '/');
     $cookie{domain}    = $options{domain}  if defined $options{domain};
     $cookie{expires}   = $options{expires} if defined $options{expires};
@@ -458,6 +472,16 @@ sub cookie {
     $cookie{httponly}  = $options{httponly} if $options{httponly};
     $cookie{samesite}  = $options{samesite} if defined $options{samesite};
     return $self->header('Set-Cookie', Cookie::Baker::bake_cookie($name, \%cookie));
+}
+
+# A cookie's value, domain or path as a string, or croak: Cookie::Baker
+# would otherwise send a reference as HASH(0x...).
+sub _cookie_string {
+    my ($what, $value) = @_;
+    $value = PAGI::Utils::_stringified($value);
+    croak "cookie $what must be a string or an object that overloads stringification"
+        unless defined $value && !ref($value);
+    return $value;
 }
 
 sub delete_cookie {
@@ -494,9 +518,26 @@ sub _emission_plan {
     };
 }
 
+# The header pairs to send, each value a string. A value reaches the
+# container unchecked through $response->headers, so an object that
+# stringifies is sent as its string and any other non-string croaks here,
+# naming the header, before anything is sent.
+sub _sendable_header_pairs {
+    my ($self) = @_;
+    my @pairs;
+    for my $pair (@{ $self->{_headers}->to_pairs }) {
+        my ($name, $value) = @$pair;
+        $value = PAGI::Utils::_stringified($value);
+        croak "header '$name' value must be a string or an object that overloads stringification"
+            unless defined $value && !ref($value);
+        push @pairs, [$name, $value];
+    }
+    return \@pairs;
+}
+
 sub _wire_headers {
     my ($self, $length) = @_;
-    my $headers = $self->{_headers}->to_pairs;
+    my $headers = $self->_sendable_header_pairs;
     @$headers = grep {
         my $name = $_->[0];
         $name =~ tr/A-Z/a-z/;

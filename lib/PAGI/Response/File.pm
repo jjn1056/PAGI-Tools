@@ -178,7 +178,7 @@ sub _plan_for_scope {
 sub _wire_headers_for_plan {
     my ($self, $plan) = @_;
     my $planned = $plan->headers;
-    my $configured = $self->{_headers}->to_pairs;
+    my $configured = $self->_sendable_header_pairs;
     @$configured = grep { lc($_->[0]) ne 'transfer-encoding' } @$configured;
 
     my %configured_names = map { lc($_->[0]) => 1 } @$configured;
