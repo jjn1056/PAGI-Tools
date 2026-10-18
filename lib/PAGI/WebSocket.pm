@@ -564,6 +564,8 @@ async sub send_bytes {
     croak "Cannot send on closed WebSocket" if $self->_response_claimed_before_start || $self->is_closed || $self->connection_state eq 'closing';
     defined($bytes = PAGI::Utils::_string_value($bytes))
         or croak 'send_bytes requires a string or an object that overloads stringification';
+    defined($bytes = PAGI::Utils::_byte_string($bytes))
+        or croak 'send_bytes must be encoded bytes: it contains a character above 0xFF; encode text first, or use send_text';
 
     await PAGI::Common::send_in_order($self, {
         type  => 'websocket.send',
@@ -633,6 +635,8 @@ async sub _try_send_bytes {
     eval {
         defined($bytes = PAGI::Utils::_string_value($bytes))
             or croak 'send_bytes requires a string or an object that overloads stringification';
+        defined($bytes = PAGI::Utils::_byte_string($bytes))
+            or croak 'send_bytes must be encoded bytes: it contains a character above 0xFF; encode text first, or use send_text';
         await PAGI::Common::send_in_order($self, {
             type => 'websocket.send',
             bytes => $bytes,
@@ -1346,7 +1350,9 @@ methods), the callbacks are quiet no-ops and C<is_writable> is true.
 =head1 SEND METHODS
 
 Text and bytes may be given as an object that stringifies
-(L<PAGI::Response/VALUES FROM OTHER CODE>). A value that is neither a string
+(L<PAGI::Response/VALUES FROM OTHER CODE>). C<send_bytes> takes bytes as
+L<PAGI::Response/BYTES AND CHARACTERS> defines them: Perl's UTF-8 flag does
+not matter, and a character above 0xFF is refused. A value that is neither a string
 nor such an object makes C<send_text> and C<send_bytes> fail, and the
 C<try_send_*> methods return false without sending and report it to
 L</on_error>. C<send_json> encodes

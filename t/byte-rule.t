@@ -75,4 +75,28 @@ subtest 'an explicit File ETag' => sub {
         'a wide character is not an entity-tag');
 };
 
+subtest 'WebSocket bytes' => sub {
+    require PAGI::WebSocket;
+    require PAGITest::Connected;
+    my $connected = sub {
+        my @sent;
+        my $ws = PAGI::WebSocket->new(PAGITest::Connected::ws_scope(), sub { Future->done({ type => 'websocket.connect' }) },
+            sub { push @sent, $_[0]; Future->done });
+        $ws->accept->get;
+        return ($ws, \@sent);
+    };
+    my ($ws, $sent) = $connected->();
+    $ws->send_bytes(flagged("caf\xC3\xA9"))->get;
+    is(hex_of($sent->[-1]{bytes}), '63 61 66 C3 A9', 'send_bytes sends flagged bytes as the same octets');
+    ok(!utf8::is_utf8($sent->[-1]{bytes}), 'as plain bytes');
+
+    my $wide_bytes = qr/send_bytes must be encoded bytes: it contains a character above 0xFF; encode text first, or use send_text/;
+    like(dies { $ws->send_bytes("wide \x{263a}")->get }, $wide_bytes, 'send_bytes refuses a wide character');
+
+    my @errors;
+    $ws->on_error(sub { push @errors, $_[0] });
+    is($ws->try_send_bytes("wide \x{263a}")->get, 0, 'try_send_bytes does not send it');
+    like($errors[-1], $wide_bytes, 'and reports why');
+};
+
 done_testing;
