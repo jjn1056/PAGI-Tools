@@ -107,7 +107,7 @@ sub new {
         } else {
             croak 'File response ETag must be a valid entity-tag'
                 unless PAGI::Response::File::Plan::_valid_entity_tag($etag);
-            $etag_policy = $etag;
+            $etag_policy = PAGI::Utils::_byte_string($etag);
         }
     }
 
@@ -366,8 +366,9 @@ the planned C<Accept-Ranges: bytes> field. HEAD does not parse Range.
 
 Defaults to automatic generation from file metadata plus the logical window.
 A false scalar (C<0> or the empty string) disables ETag. Exact C<1> requests
-automatic generation. Every other value must be an unflagged valid strong or
-weak quoted entity-tag; references, C<undef>, other true scalars, and malformed
+automatic generation. Every other value must be a valid strong or weak quoted
+entity-tag, as bytes (L<PAGI::Response/BYTES AND CHARACTERS>: Perl's UTF-8
+flag does not matter); references, C<undef>, other true scalars, and malformed
 tags croak.
 
 =back

@@ -173,7 +173,8 @@
   - Byte APIs (PAGI::Response->new, a Stream writer's write) take any string
     whose characters are all at most 0xFF, whatever Perl's internal UTF-8
     flag: ASCII from Encode::decode, or built with a decoded string, was
-    refused as "not encoded bytes" (#57). A character above 0xFF croaks,
+    refused as "not encoded bytes" (#57); an explicit File etag likewise. A
+    character above 0xFF croaks,
     naming the fix. Decoded text through a byte API is sent as ISO-8859-1;
     send text with Text or HTML. See BYTES AND CHARACTERS in PAGI::Response.
   - Wherever a response takes a string it also takes an object whose class

@@ -56,4 +56,23 @@ subtest "bbrtj's case: text from decoded request parameters" => sub {
         '66 6F 6F 3A 20 63 61 66 C3 A9', 'Text sends it as UTF-8');
 };
 
+subtest 'an explicit File ETag' => sub {
+    require File::Temp;
+    my ($fh, $file) = File::Temp::tempfile(UNLINK => 1);
+    print {$fh} 'x';
+    close $fh;
+    my $etag_sent = sub {
+        my ($start) = grep { $_->{type} eq 'http.response.start' }
+            @{ PAGITest::Stringy::events_of(response('File', $file, etag => $_[0])) };
+        return (map { $_->[1] } grep { lc $_->[0] eq 'etag' } @{ $start->{headers} })[0];
+    };
+    my $sent = $etag_sent->(Encode::decode('UTF-8', '"v1"'));
+    is($sent, '"v1"', 'a flagged ASCII entity-tag is valid');
+    ok(!utf8::is_utf8($sent), 'and sent as plain bytes');
+    is(hex_of($etag_sent->(flagged(qq{W/"caf\xE9"}))), '57 2F 22 63 61 66 E9 22',
+        'a flagged entity-tag with obs-text (RFC 9110) is sent as its bytes');
+    like(dies { response('File', $file, etag => qq{"\x{263a}"}) }, qr/File response ETag must be a valid entity-tag/,
+        'a wide character is not an entity-tag');
+};
+
 done_testing;

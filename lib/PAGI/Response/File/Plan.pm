@@ -6,6 +6,7 @@ use warnings;
 use Carp qw(croak);
 use Digest::MD5 qw(md5_hex);
 use Fcntl qw(S_ISREG);
+use PAGI::Utils ();
 use PAGI::Utils::Headers qw(format_etag parse_etag);
 use PAGI::Headers ();
 
@@ -132,7 +133,7 @@ sub new {
         } else {
             croak 'File plan explicit ETag must be a valid entity-tag'
                 unless _valid_entity_tag($etag_policy);
-            $etag = $etag_policy;
+            $etag = PAGI::Utils::_byte_string($etag_policy);
         }
     }
 
@@ -248,7 +249,10 @@ sub _nonnegative_integer {
 
 sub _valid_entity_tag {
     my ($value) = @_;
-    return 0 unless defined($value) && !ref($value) && !utf8::is_utf8($value);
+    return 0 unless defined($value) && !ref($value);
+    # Bytes by code point (PAGI::Response, BYTES AND CHARACTERS); the
+    # grammar below then admits obs-text, 0x80-0xFF, and nothing wider.
+    defined($value = PAGI::Utils::_byte_string($value)) or return 0;
     my $parsed = parse_etag($value);
     return defined($parsed) && format_etag($parsed->{value},
         weak => $parsed->{weak}) eq $value ? 1 : 0;
