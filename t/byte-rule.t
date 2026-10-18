@@ -99,4 +99,39 @@ subtest 'WebSocket bytes' => sub {
     like($errors[-1], $wide_bytes, 'and reports why');
 };
 
+subtest 'header values and cookies' => sub {
+    my $start_of = sub { (grep { $_->{type} eq 'http.response.start' } @{ PAGITest::Stringy::events_of($_[0]) })[0] };
+    my $header_of = sub { my ($start, $name) = @_; (map { $_->[1] } grep { lc $_->[0] eq lc $name } @{ $start->{headers} })[0] };
+    my $wide_header = qr/header 'X-Note' value contains a character above 0xFF: encode it first/;
+
+    like(dies { response('Text', 'x')->header('X-Note' => "smile \x{263a}") }, $wide_header, 'header() refuses a wide character');
+    like(dies { response('Text', 'x', headers => ['X-Note' => "smile \x{263a}"]) }, $wide_header, 'so does the headers option');
+    like(dies { response('Text', 'x')->content_type("text/\x{263a}") },
+        qr/header 'Content-Type' value contains a character above 0xFF: encode it first/, 'and content_type()');
+
+    require File::Temp;
+    my ($fh, $file) = File::Temp::tempfile(UNLINK => 1);
+    print {$fh} 'x';
+    close $fh;
+    for my $kind ([buffered => sub { response('Text', 'x') }], [stream => sub { response('Stream', sub { $_[0]->write('x') }) }],
+                  [file => sub { response('File', $file) }]) {
+        my ($name, $make) = @$kind;
+        my $response = $make->();
+        $response->headers->add('X-Note' => "smile \x{263a}");
+        like(dies { PAGITest::Stringy::events_of($response) }, $wide_header, "$name: the wire guard refuses one added to the container");
+    }
+
+    my $sent = $header_of->($start_of->(response('Text', 'x')->header('X-Note' => Encode::decode('UTF-8', 'plain'))), 'X-Note');
+    is($sent, 'plain', 'a flagged ASCII header value is sent');
+    ok(!utf8::is_utf8($sent), 'as plain bytes');
+
+    for my $part (qw(value domain path)) {
+        my @args = $part eq 'value' ? (c => "smile \x{263a}") : (c => 'v', $part => "\x{263a}");
+        like(dies { response('Text', 'x')->cookie(@args) },
+            qr/cookie $part contains a character above 0xFF: encode it first/, "a wide cookie $part is refused in Tools' words");
+    }
+    like($header_of->($start_of->(response('Text', 'x')->cookie(c => Encode::decode('UTF-8', 'v1'))), 'Set-Cookie'),
+        qr/\Ac=v1;/, 'a flagged ASCII cookie value is sent normally');
+};
+
 done_testing;

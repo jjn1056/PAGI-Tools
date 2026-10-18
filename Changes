@@ -175,7 +175,10 @@
     string whose characters are all at most 0xFF, whatever Perl's internal
     UTF-8 flag: ASCII from Encode::decode, or built with a decoded string,
     was refused as "not encoded bytes" (#57), and send_bytes did not check
-    at all. A character above 0xFF croaks, naming the fix. Decoded text
+    at all. Header values (header(), the headers option, content_type(), and
+    every header as it is sent) and cookie parts follow the same rule; a wide
+    character there used to pass Tools, or die inside Cookie::Baker. A
+    character above 0xFF croaks, naming the fix. Decoded text
     through a byte API is sent as ISO-8859-1; send text with Text or HTML.
     See BYTES AND CHARACTERS in PAGI::Response.
   - Wherever a response takes a string it also takes an object whose class

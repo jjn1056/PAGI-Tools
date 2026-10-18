@@ -266,6 +266,11 @@ straight to the container returned by C<headers> is checked as the response
 is sent: a value that is neither a string nor an object that stringifies
 croaks then, naming the header, before anything is sent.
 
+Header values and cookie parts are bytes (L</BYTES AND CHARACTERS>), as
+HTTP field values are octets: a character above 0xFF croaks, naming the
+header or cookie part, and text with one is encoded first (a non-ASCII
+download name is: File encodes C<filename> itself, following RFC 8187).
+
 =head1 SUBCLASSING
 
 Buffered application subclasses have two supported extension seams.
@@ -443,7 +448,9 @@ sub header {
     return $self->{_headers}->get($name) if @_ == 2;
     $value = PAGI::Utils::_stringified($value);
     croak 'Header value is required' unless defined $value && !ref($value);
-    $self->{_headers}->add($name, $value);
+    defined(my $bytes = PAGI::Utils::_byte_string($value))
+        or croak "header '$name' value contains a character above 0xFF: encode it first";
+    $self->{_headers}->add($name, $bytes);
     return $self;
 }
 
@@ -476,6 +483,8 @@ sub content_type {
     if (defined $value) {
         defined($value = PAGI::Utils::_string_value($value))
             or croak 'Content-Type must be a scalar';
+        defined($value = PAGI::Utils::_byte_string($value))
+            or croak "header 'Content-Type' value contains a character above 0xFF: encode it first";
         $self->{_headers}->set('Content-Type', $value);
     } elsif (defined(my $default = $self->default_content_type)) {
         # Clearing a typed body gives back its default, so it always says
@@ -518,7 +527,9 @@ sub _cookie_string {
     $value = PAGI::Utils::_stringified($value);
     croak "cookie $what must be a string or an object that overloads stringification"
         unless defined $value && !ref($value);
-    return $value;
+    defined(my $bytes = PAGI::Utils::_byte_string($value))
+        or croak "cookie $what contains a character above 0xFF: encode it first";
+    return $bytes;
 }
 
 sub delete_cookie {
@@ -567,6 +578,8 @@ sub _sendable_header_pairs {
         $value = PAGI::Utils::_stringified($value);
         croak "header '$name' value must be a string or an object that overloads stringification"
             unless defined $value && !ref($value);
+        defined($value = PAGI::Utils::_byte_string($value))
+            or croak "header '$name' value contains a character above 0xFF: encode it first";
         push @pairs, [$name, $value];
     }
     return \@pairs;
