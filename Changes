@@ -197,8 +197,9 @@
     kept. Applies to Text, HTML and byte bodies; Stream write and
     write_text; the Redirect location; Problem type, instance, title and
     detail (the document passed in is not changed); and PAGI::Pages' detail,
-    title, type, instance, redirect targets, blocked_by, login_url and
-    favicon_href; File's path and filename; and header values, the
+    title, type, instance, redirect targets, blocked_by, login_url,
+    favicon_href, header values, cache_control, challenge and retry_after;
+    File's path and filename; and header values, the
     Content-Type and a cookie's value, domain and path. A cookie part that
     is not a string, an undef value included, now croaks instead of going
     out as HASH(0x...) or "c="; and every header a response sends (headers

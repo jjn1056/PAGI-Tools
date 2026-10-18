@@ -103,6 +103,35 @@ PAGITest::Stringy::check_site(
     run     => sub { sent(PAGI::Pages->not_found(instance => $_[0], as => 'json'))->json->{instance} },
     refused => qr/PAGI::Pages instance must be a URI-reference scalar/,
 );
+# Pages' header field options: headers, cache_control, challenge (also in a
+# list) and retry_after.
+PAGITest::Stringy::check_site(
+    name    => 'Pages header value',
+    run     => sub { sent(PAGI::Pages->not_found(headers => ['X-A' => $_[0]]))->header('x-a') },
+    refused => qr/PAGI::Pages header 'X-A' must be a field-value scalar/,
+);
+PAGITest::Stringy::check_site(
+    name    => 'Pages cache_control',
+    string  => 'private',
+    run     => sub { sent(PAGI::Pages->not_found(cache_control => $_[0]))->header('cache-control') },
+    refused => qr/PAGI::Pages cache_control must be a field-value scalar/,
+);
+for my $listed (0, 1) {
+    PAGITest::Stringy::check_site(
+        name    => 'Pages challenge' . ($listed ? ' in a list' : ''),
+        string  => 'Basic realm="x"',
+        run     => sub { sent(PAGI::Pages->unauthorized(challenge => $listed ? [$_[0]] : $_[0]))->header('www-authenticate') },
+        refused => qr/PAGI::Pages challenge must be/,
+    );
+}
+for my $when ('120', 'Sun, 06 Nov 1994 08:49:37 GMT') {
+    PAGITest::Stringy::check_site(
+        name    => "Pages retry_after $when",
+        string  => $when,
+        run     => sub { sent(PAGI::Pages->service_unavailable(retry_after => $_[0]))->header('retry-after') },
+        refused => qr/PAGI::Pages retry_after must be/,
+    );
+}
 PAGITest::Stringy::check_site(
     name    => 'Pages redirect target',
     run     => sub { sent(PAGI::Pages->redirect($_[0]))->header('location') },

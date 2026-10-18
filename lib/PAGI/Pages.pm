@@ -262,7 +262,7 @@ sub _normalize_options {
     }
 
     if (exists $opts->{cache_control}) {
-        _validate_field_value('cache_control', $opts->{cache_control});
+        $opts->{cache_control} = _validate_field_value('cache_control', $opts->{cache_control});
     }
 
     return $opts;
@@ -279,7 +279,7 @@ sub _validate_headers {
         croak 'PAGI::Pages header name must be an HTTP token'
             unless defined($name) && !ref($name)
                 && $name =~ /\A[!#\$%&'\*\+\-\.\^_\x60\|~0-9A-Za-z]+\z/;
-        _validate_field_value("header '$name'", $value);
+        $value = _validate_field_value("header '$name'", $value);
         my $lower = lc $name;
         croak "PAGI::Pages caller header '$name' is response-owned"
             if $RESPONSE_OWNED_FIELD{$lower};
@@ -290,6 +290,7 @@ sub _validate_headers {
 
 sub _validate_field_value {
     my ($label, $value) = @_;
+    $value = PAGI::Utils::_stringified($value);
     croak "PAGI::Pages $label must be a field-value scalar"
         unless defined($value) && !ref($value)
             && $value =~ /\A[\x20-\x7E]*\z/;
@@ -588,11 +589,12 @@ sub _prepare_error_options {
 
 sub _normalize_challenges {
     my ($value) = @_;
+    $value = PAGI::Utils::_stringified($value);
     my @values = ref($value) eq 'ARRAY' ? @$value : ($value);
     croak 'PAGI::Pages challenge must be a nonempty scalar or arrayref of challenges'
         unless (ref($value) eq 'ARRAY' || !ref($value)) && @values;
     for my $challenge (@values) {
-        _validate_field_value('challenge', $challenge);
+        $challenge = _validate_field_value('challenge', $challenge);
         croak 'PAGI::Pages challenge must be a nonempty scalar or arrayref of challenges'
             unless $challenge =~ /\S/;
     }
@@ -646,6 +648,7 @@ sub _normalize_nonnegative_integer {
 
 sub _normalize_retry_after {
     my ($value) = @_;
+    $value = PAGI::Utils::_stringified($value);
     return _normalize_nonnegative_integer('retry_after', $value)
         if defined($value) && !ref($value) && $value =~ /\A[0-9]+\z/;
     _validate_field_value('retry_after', $value);
@@ -1994,10 +1997,11 @@ C<Retry-After> and conflicts with a raw field of that name.
 
 C<headers> is a flat
 C<[name =E<gt> value, ...]> list, C<[[name, value], ...]> pairs as the PAGI
-spec writes headers, or a L<PAGI::Headers> object (copied).
-Any other shape croaks. Names are ASCII HTTP tokens. Values are ASCII field-value scalars containing
-only bytes C<0x20> through C<0x7e>; controls, wide characters, and references
-are rejected. Repeated names are allowed where their HTTP field permits them.
+spec writes headers, or a L<PAGI::Headers> object (copied). Any other shape
+croaks. Names are ASCII HTTP tokens. Values are ASCII field-value scalars
+containing only bytes C<0x20> through C<0x7e>, or objects that stringify to
+one; controls, wide characters, and other references are rejected. The same
+holds for C<cache_control>, C<challenge> and C<retry_after>. Repeated names are allowed where their HTTP field permits them.
 
 Pages reserves C<Content-Type>, C<Content-Length>, C<Transfer-Encoding>,
 C<Location>, C<Cache-Control>, and C<Connection>, case-insensitively. Supply
