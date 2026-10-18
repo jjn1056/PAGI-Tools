@@ -91,6 +91,7 @@ for my $label (sort keys %site) {
             [ 'a pair that is not two elements', [['X-A']] ],
             [ 'pairs mixed with flat',           [['X-A', 1], 'Y', 2] ],
             [ 'a reference as a name',           ['X-A', 1, {}, 2] ],
+            [ 'an undefined name',               ['X-A', 1, undef, 2] ],
             [ 'a pair with a reference name',    [[[], 1]] ],
             [ 'a hash',                          { 'X-A' => 1 } ],
             [ 'another object',                  PAGITest::Stringy::Plain->new ],

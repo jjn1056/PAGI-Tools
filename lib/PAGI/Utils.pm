@@ -412,7 +412,7 @@ sub _header_pairs {
         return ([ map { [@$_] } @$headers ]);
     }
     my @names = map { $headers->[$_] } grep { $_ % 2 == 0 } 0 .. $#$headers;
-    return (undef, $refused) if @$headers % 2 || grep { ref } @names;
+    return (undef, $refused) if @$headers % 2 || grep { !defined($_) || ref($_) } @names;
     return ([ map { [ @{$headers}[$_, $_ + 1] ] } grep { $_ % 2 == 0 } 0 .. $#$headers ]);
 }
 
