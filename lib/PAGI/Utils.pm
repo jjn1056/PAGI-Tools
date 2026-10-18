@@ -384,6 +384,18 @@ sub _byte_string {
     return utf8::downgrade($bytes, 1) ? $bytes : undef;
 }
 
+# A header value as Tools may send it: an object whose class overloads ""
+# stands for its string, and the value must be bytes. Returns the bytes, or
+# (undef, 'not a string') or (undef, 'wide'), so each caller croaks with its
+# own message at its caller's line. PAGI::Headers itself stays a plain
+# container, as request headers live in it too.
+sub _sendable_header_value {
+    my $value = _stringified($_[0]);
+    return (undef, 'not a string') unless defined $value && !ref($value);
+    my $bytes = _byte_string($value);
+    return defined($bytes) ? ($bytes) : (undef, 'wide');
+}
+
 sub _resolve_class {
     my ($namespace, $name, $what) = @_;
     croak "invalid $what class name; use leading '+' for an exact package"

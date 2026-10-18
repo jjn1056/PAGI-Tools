@@ -446,10 +446,9 @@ sub header {
     my ($self, $name, $value) = @_;
     croak 'Header name is required' unless defined $name && !ref($name) && length $name;
     return $self->{_headers}->get($name) if @_ == 2;
-    $value = PAGI::Utils::_stringified($value);
-    croak 'Header value is required' unless defined $value && !ref($value);
-    defined(my $bytes = PAGI::Utils::_byte_string($value))
-        or croak "header '$name' value contains a character above 0xFF: encode it first";
+    my ($bytes, $not) = PAGI::Utils::_sendable_header_value($value);
+    croak 'Header value is required' if ($not // '') eq 'not a string';
+    croak "header '$name' value contains a character above 0xFF: encode it first" if $not;
     $self->{_headers}->add($name, $bytes);
     return $self;
 }
@@ -481,10 +480,10 @@ sub content_type {
     # The caller's own undef removes the type; an object that gives undef
     # is not a type, and croaks.
     if (defined $value) {
-        defined($value = PAGI::Utils::_string_value($value))
-            or croak 'Content-Type must be a scalar';
-        defined($value = PAGI::Utils::_byte_string($value))
-            or croak "header 'Content-Type' value contains a character above 0xFF: encode it first";
+        my ($bytes, $not) = PAGI::Utils::_sendable_header_value($value);
+        croak 'Content-Type must be a scalar' if ($not // '') eq 'not a string';
+        croak "header 'Content-Type' value contains a character above 0xFF: encode it first" if $not;
+        $value = $bytes;
         $self->{_headers}->set('Content-Type', $value);
     } elsif (defined(my $default = $self->default_content_type)) {
         # Clearing a typed body gives back its default, so it always says
@@ -580,12 +579,11 @@ sub _sendable_header_pairs {
     my @pairs;
     for my $pair (@{ $self->{_headers}->to_pairs }) {
         my ($name, $value) = @$pair;
-        $value = PAGI::Utils::_stringified($value);
+        my ($bytes, $not) = PAGI::Utils::_sendable_header_value($value);
         croak "header '$name' value must be a string or an object that overloads stringification"
-            unless defined $value && !ref($value);
-        defined($value = PAGI::Utils::_byte_string($value))
-            or croak "header '$name' value contains a character above 0xFF: encode it first";
-        push @pairs, [$name, $value];
+            if ($not // '') eq 'not a string';
+        croak "header '$name' value contains a character above 0xFF: encode it first" if $not;
+        push @pairs, [$name, $bytes];
     }
     return \@pairs;
 }
