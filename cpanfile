@@ -49,6 +49,9 @@ on 'test' => sub {
     # but CI should run it)
     requires 'Future::IO', '0.23';
     requires 'Time::HiRes', '1.9764';
+    # t/stringify-overloaded.t checks real objects that overload ""
+    requires 'URI';
+    requires 'Path::Tiny';
 };
 
 # Development

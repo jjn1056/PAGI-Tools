@@ -2,6 +2,7 @@ package PAGI::WebSocket;
 use strict;
 use warnings;
 use Carp qw(croak);
+use PAGI::Utils ();
 use PAGI::Utils::Scope ();
 use Encode qw(decode FB_CROAK FB_DEFAULT LEAVE_SRC);
 use Hash::MultiValue;
@@ -453,7 +454,11 @@ async sub accept {
         type => 'websocket.accept',
     };
     $event->{subprotocol} = $opts{subprotocol} if exists $opts{subprotocol};
-    $event->{headers} = $opts{headers} if exists $opts{headers};
+    if (exists $opts{headers}) {
+        my ($headers, $refused) = PAGI::Utils::_sendable_headers('PAGI::WebSocket accept', $opts{headers});
+        croak $refused if $refused;
+        $event->{headers} = $headers;
+    }
 
     await PAGI::Common::send_in_order($self, $event);
     $self->_set_state('connected') unless $self->is_closed;
@@ -486,11 +491,15 @@ sub close {
         if $self->{_state} eq 'connecting';
     croak "WebSocket close requires an active accepted/started connection"
         unless $self->is_connected;
+    my ($code, $reason) = @args;
+    if (defined $reason) {
+        defined($reason = PAGI::Utils::_string_value($reason))
+            or croak 'close reason must be a string or an object that overloads stringification';
+    }
     $self->{_state} = 'closing';
     my $settled = $self->{_close_send} = Future->new;
     my $send;
     my $ok = eval {
-        my ($code, $reason) = @args;
         $send = Future->wrap(PAGI::Common::send_in_order($self, {type => 'websocket.close', code => $code // 1000, reason => $reason // ''}));
         1;
     };
@@ -541,6 +550,8 @@ async sub send_text {
     my ($self, $text) = @_;
 
     croak "Cannot send on closed WebSocket" if $self->_response_claimed_before_start || $self->is_closed || $self->connection_state eq 'closing';
+    defined($text = PAGI::Utils::_string_value($text))
+        or croak 'send_text requires a string or an object that overloads stringification';
 
     await PAGI::Common::send_in_order($self, {
         type => 'websocket.send',
@@ -555,6 +566,10 @@ async sub send_bytes {
     my ($self, $bytes) = @_;
 
     croak "Cannot send on closed WebSocket" if $self->_response_claimed_before_start || $self->is_closed || $self->connection_state eq 'closing';
+    defined($bytes = PAGI::Utils::_string_value($bytes))
+        or croak 'send_bytes requires a string or an object that overloads stringification';
+    defined($bytes = PAGI::Utils::_byte_string($bytes))
+        or croak 'send_bytes must be encoded bytes: it contains a character above 0xFF; encode text first, or use send_text';
 
     await PAGI::Common::send_in_order($self, {
         type  => 'websocket.send',
@@ -593,6 +608,8 @@ async sub _try_send_text {
     return 0 if $self->_response_claimed_before_start || !$self->is_connected;
 
     eval {
+        defined($text = PAGI::Utils::_string_value($text))
+            or croak 'send_text requires a string or an object that overloads stringification';
         await PAGI::Common::send_in_order($self, {
             type => 'websocket.send',
             text => $text,
@@ -604,8 +621,12 @@ async sub _try_send_text {
     # not fail the Future), so neither case reaches here as an error. This
     # eval only catches a genuine send failure, which per the try_* contract
     # still returns false without fabricating a 1006 close or mutating
-    # connection state.
-    return 0 if $@;
+    # connection state, and is reported to on_error, as PAGI::SSE's try_send*
+    # report theirs.
+    if (my $err = $@) {
+        await $self->_trigger_error($err);
+        return 0;
+    }
     return 1;
 }
 
@@ -616,6 +637,10 @@ async sub _try_send_bytes {
     return 0 if $self->_response_claimed_before_start || !$self->is_connected;
 
     eval {
+        defined($bytes = PAGI::Utils::_string_value($bytes))
+            or croak 'send_bytes requires a string or an object that overloads stringification';
+        defined($bytes = PAGI::Utils::_byte_string($bytes))
+            or croak 'send_bytes must be encoded bytes: it contains a character above 0xFF; encode text first, or use send_text';
         await PAGI::Common::send_in_order($self, {
             type => 'websocket.send',
             bytes => $bytes,
@@ -627,8 +652,12 @@ async sub _try_send_bytes {
     # not fail the Future), so neither case reaches here as an error. This
     # eval only catches a genuine send failure, which per the try_* contract
     # still returns false without fabricating a 1006 close or mutating
-    # connection state.
-    return 0 if $@;
+    # connection state, and is reported to on_error, as PAGI::SSE's try_send*
+    # report theirs.
+    if (my $err = $@) {
+        await $self->_trigger_error($err);
+        return 0;
+    }
     return 1;
 }
 
@@ -651,8 +680,12 @@ async sub _try_send_json {
     # not fail the Future), so neither case reaches here as an error. This
     # eval only catches a genuine send failure, which per the try_* contract
     # still returns false without fabricating a 1006 close or mutating
-    # connection state.
-    return 0 if $@;
+    # connection state, and is reported to on_error, as PAGI::SSE's try_send*
+    # report theirs.
+    if (my $err = $@) {
+        await $self->_trigger_error($err);
+        return 0;
+    }
     return 1;
 }
 
@@ -1127,9 +1160,16 @@ C<< $ws->query_param($name, raw => 1) >>.
     await $ws->accept;
     await $ws->accept(subprotocol => 'chat');
     await $ws->accept(headers => [['x-custom', 'value']]);
+    await $ws->accept(headers => ['x-custom' => 'value']);
 
 Accepts the WebSocket connection. Optionally specify a subprotocol
-to use and additional response headers.
+to use and additional response headers. C<headers> is a flat
+C<[name =E<gt> value, ...]> list, C<[[name, value], ...]> pairs as the PAGI
+spec writes headers, or a L<PAGI::Headers> object (copied); it is sent as
+C<[[name, value], ...]> pairs. Names and values follow L<PAGI::Response/metadata>:
+a name is an HTTP token; an object that overloads stringification is sent as
+its string, and a value must be bytes; anything else croaks, naming the
+header. Any other shape croaks.
 
 B<Handshake contract.> The server sends a C<websocket.connect> event and waits
 for the application's reply before completing the handshake; the reply is
@@ -1148,7 +1188,9 @@ ordering either.
     await $ws->close(1000, 'Normal closure');
     await $ws->close(4000, 'Custom reason');
 
-Requests closing with code 1000 by default. Concurrent and repeated calls join
+Requests closing with code 1000 by default. The reason may be an object that
+stringifies (L<PAGI::Response/VALUES FROM OTHER CODE>); another non-string
+reason croaks before anything changes. Concurrent and repeated calls join
 one close-send operation and return when that send settles. They do not await
 the peer's Close or terminal cleanup. State is C<closing> until the connection
 records its terminal outcome; further data sends are rejected. Cancelling a
@@ -1318,6 +1360,15 @@ methods), the callbacks are quiet no-ops and C<is_writable> is true.
 
 =head1 SEND METHODS
 
+Text and bytes may be given as an object that stringifies
+(L<PAGI::Response/VALUES FROM OTHER CODE>). C<send_bytes> takes bytes as
+L<PAGI::Response/BYTES AND CHARACTERS> defines them: Perl's UTF-8 flag does
+not matter, and a character above 0xFF is refused. A value that is neither a string
+nor such an object makes C<send_text> and C<send_bytes> fail, and the
+C<try_send_*> methods return false without sending and report it to
+L</on_error>. C<send_json> encodes
+data as JSON and does not stringify.
+
 =head2 send_text, send_bytes, send_json
 
     await $ws->send_text("Hello!");
@@ -1354,8 +1405,10 @@ B<The boolean is a weak signal; do not treat it as a delivery receipt:>
 =item *
 
 A B<false> return means the send definitely did not happen -- the socket is
-not connected (not yet accepted, closing or closed), or the underlying send
-raised. It tells you I<that> it failed, not I<why>. A false before C<accept>
+not connected (not yet accepted, closing or closed), or the value or the
+underlying send raised. The return tells you I<that> it failed; the error
+itself goes to L</on_error>, as PAGI::SSE's C<try_send*> report theirs. A
+false before C<accept>
 is as quiet as any other, so while developing use C<send_*>: a send before
 C<accept> fails loudly there.
 
@@ -1578,7 +1631,7 @@ run, but outside the call, so a server shutting down does not wait for them.
     });
 
 Registers error callback. Called when exceptions occur in message
-handlers during C<run()>. Callbacks can be regular subs or async
+handlers during C<run()>, and with the error when a C<try_send_*> fails. Callbacks can be regular subs or async
 subs — async results are automatically awaited. Multiple callbacks
 run in registration order. Exceptions in callbacks are caught and
 warned but do not prevent other callbacks.
@@ -1586,6 +1639,9 @@ warned but do not prevent other callbacks.
 After the callbacks run, C<run()> re-raises the error, so the server reports
 it as an application error. With no error handlers registered, nothing else
 is printed.
+
+A C<try_send_*> failure is not re-raised: after the callbacks run, the method
+returns false.
 
 Returns C<$self> for chaining.
 

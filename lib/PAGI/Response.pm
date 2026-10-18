@@ -9,6 +9,7 @@ use Exporter qw(import);
 use Future;
 use Future::AsyncAwait;
 use PAGI::Headers ();
+use PAGI::Utils ();
 use Scalar::Util qw(blessed);
 use Socket ();
 
@@ -141,6 +142,48 @@ helper cleanup. A mapped start send resolves when the server accepts and owns
 the response slot (or finishes discarding it after disconnect), not when the
 client receives bytes.
 
+=head1 VALUES FROM OTHER CODE
+
+Wherever a response takes a string, such as a body, it also takes a blessed
+object whose class overloads stringification (C<""> directly, or through a
+parent class), such as L<URI>, L<Path::Tiny>, L<DateTime> or an exception
+object. The overload is called once and its string is used.
+
+Every other value that is not a plain string croaks: an unblessed
+reference, an object that does not overload C<"">, an object that overloads
+only numeric or boolean conversion (Perl would otherwise invent a string
+such as C<42> or C<1> for it), and an object whose C<""> returns undef. An
+exception thrown by the object's own C<""> propagates unchanged.
+
+JSON data is not stringified: L<PAGI::Response::JSON> and
+L<PAGI::Response::NDJSON> encode their data as JSON, and their encoder
+refuses every blessed object.
+
+=head1 BYTES AND CHARACTERS
+
+A byte API (C<new>, a Stream writer's C<write>, an explicit File C<etag>)
+takes bytes: a string whose characters are all at most 0xFF. Perl's internal
+UTF-8 flag only records how a string is stored, so it does not matter: a
+string Perl happens to have flagged, such as ASCII from C<Encode::decode> or
+built with a decoded string, is accepted, and is sent as plain bytes. A
+character above 0xFF cannot be a byte and croaks, naming the fix.
+
+Two mistakes look alike and cannot be told apart at runtime, so they are
+documented instead:
+
+=over 4
+
+=item * Text through a byte API. Decoded text whose characters are all at
+most 0xFF is sent as one byte per character, which is ISO-8859-1, not UTF-8:
+C<"caf\x{e9}"> goes out as C<63 61 66 E9>. Send text with
+L<PAGI::Response::Text> or L<PAGI::Response::HTML>, which encode it as UTF-8,
+or encode it yourself.
+
+=item * Bytes through a text API. Already-encoded bytes given to Text or HTML
+are encoded again.
+
+=back
+
 =head1 METHODS
 
 =head2 response
@@ -172,9 +215,16 @@ C<< PAGI::Response->new($bytes, %options) >>.
 
     PAGI::Response->new($bytes, %options)
 
-Creates a complete buffered response.  The supported options are C<status>,
-C<content_type>, and C<headers>, where C<headers> is an even-length flat
-arrayref of name/value pairs. Unknown, duplicate, odd, or malformed options
+Creates a complete buffered response. C<$bytes> is a string of encoded bytes
+(L</BYTES AND CHARACTERS>), or an object that stringifies to one
+(L</VALUES FROM OTHER CODE>). The
+supported options are C<status>,
+C<content_type>, and C<headers>, where C<headers> is a flat
+C<[name =E<gt> value, ...]> list, C<[[name, value], ...]> pairs as the PAGI
+spec writes headers, or a L<PAGI::Headers> object (copied; later changes to
+it do not reach the response), whose values follow C<header> (L</metadata>). Every
+C<headers> argument in PAGI-Tools takes these three shapes.
+Unknown, duplicate, odd, or malformed options
 croak synchronously. Status defaults to 200 and body-bearing construction
 rejects 1xx, 204, 205, and 304. Default Content-Type is
 C<application/octet-stream>.
@@ -202,10 +252,32 @@ public Response-specific emission method.
     is_buffered / body
 
 C<header($name, $value)> appends and preserves repeated-field order;
-C<content_type> replaces Content-Type. The C<*_try> setters are chainable and
+C<content_type> replaces Content-Type, and C<content_type(undef)> gives back the
+class's default type (Text's C<text/plain; charset=utf-8>, for one), so a typed
+body always says what it is; Empty and File have none, File's coming from the
+file name. The C<*_try> setters are chainable and
 do not overwrite an explicit value. C<body> is read-only encoded bytes for
 buffered responses and croaks for File and Stream. C<is_buffered> reports the
 memory strategy, independently of protocol adaptation.
+
+Header values, the Content-Type, and a cookie's value, domain and path may be
+objects that stringify (L</VALUES FROM OTHER CODE>); a cookie part that is
+not a string croaks rather than being sent as C<HASH(0x...)>. That includes an
+undef value: C<< cookie(name => undef) >> does not remove a cookie, and
+C<delete_cookie> is what does. A header added
+straight to the container returned by C<headers> is checked as the response
+is sent: a value that is neither a string nor an object that stringifies
+croaks then, naming the header, before anything is sent.
+
+Header values and cookie parts are bytes (L</BYTES AND CHARACTERS>), as
+HTTP field values are octets: a character above 0xFF croaks, naming the
+header or cookie part, and text with one is encoded first (a non-ASCII
+download name is: File encodes C<filename> itself, following RFC 8187).
+
+Header names are HTTP tokens (RFC 9110): letters, digits and
+C<!#$%&'*+-.^_`|~>. A name with anything else (a space, a colon, a
+character above 0x7E) croaks, naming it; one added straight to the
+container croaks as the response is sent.
 
 =head1 SUBCLASSING
 
@@ -333,23 +405,13 @@ sub new {
     my $options = _parse_options(@pairs);
 
     my $self = bless { _headers => PAGI::Headers->new }, $class;
-    my $body = $self->render($value);
-    _require_bytes('response body', $body);
-    $self->{_body} = $body;
+    $self->{_body} = _require_bytes('response body', $self->render($value));
 
     $self->status($options->{status}) if exists $options->{status};
     if (exists $options->{headers}) {
-        my $headers = $options->{headers};
-        croak 'headers must be an arrayref of flat name/value pairs'
-            unless ref($headers) eq 'ARRAY';
-        croak 'headers must be flat name/value pairs, not nested pairs'
-            if grep { ref } @$headers;
-        croak 'headers must be an even-length flat arrayref [ name => value, ... ]'
-            if @$headers % 2;
-        for (my $index = 0; $index < @$headers; $index += 2) {
-            my ($name, $header_value) = @{$headers}[$index, $index + 1];
-            $self->header($name, $header_value);
-        }
+        my ($pairs, $refused) = PAGI::Utils::_header_pairs('PAGI::Response', $options->{headers});
+        croak $refused if $refused;
+        $self->header(@$_) for @$pairs;
     }
     $self->content_type($options->{content_type})
         if exists $options->{content_type};
@@ -384,8 +446,13 @@ sub header {
     my ($self, $name, $value) = @_;
     croak 'Header name is required' unless defined $name && !ref($name) && length $name;
     return $self->{_headers}->get($name) if @_ == 2;
-    croak 'Header value is required' unless defined $value && !ref($value);
-    $self->{_headers}->add($name, $value);
+    if (defined(my $refused = PAGI::Utils::_header_name_refusal($name))) {
+        croak $refused;
+    }
+    my ($bytes, $not) = PAGI::Utils::_sendable_header_value($value);
+    croak 'Header value is required' if ($not // '') eq 'not a string';
+    croak "header '$name' value contains a character above 0xFF: encode it first" if $not;
+    $self->{_headers}->add($name, $bytes);
     return $self;
 }
 
@@ -413,9 +480,18 @@ sub remove_header {
 sub content_type {
     my ($self, $value) = @_;
     return $self->header('content-type') if @_ == 1;
+    # The caller's own undef removes the type; an object that gives undef
+    # is not a type, and croaks.
     if (defined $value) {
-        croak 'Content-Type must be a scalar' if ref $value;
+        my ($bytes, $not) = PAGI::Utils::_sendable_header_value($value);
+        croak 'Content-Type must be a scalar' if ($not // '') eq 'not a string';
+        croak "header 'Content-Type' value contains a character above 0xFF: encode it first" if $not;
+        $value = $bytes;
         $self->{_headers}->set('Content-Type', $value);
+    } elsif (defined(my $default = $self->default_content_type)) {
+        # Clearing a typed body gives back its default, so it always says
+        # what it is; a class with no default (Empty, File) sends none.
+        $self->{_headers}->set('Content-Type', $default);
     } else {
         $self->{_headers}->remove('content-type');
     }
@@ -432,6 +508,15 @@ sub content_type_try {
 
 sub cookie {
     my ($self, $name, $value, %options) = @_;
+    # The name is an identifier, so it is not stringified; it is bytes.
+    if (defined $name && !ref $name) {
+        defined($name = PAGI::Utils::_byte_string($name))
+            or croak 'cookie name contains a character above 0xFF: encode it first';
+    }
+    $value = _cookie_string('value', $value);
+    for my $option (qw(domain path)) {
+        $options{$option} = _cookie_string($option, $options{$option}) if defined $options{$option};
+    }
     my %cookie = (value => $value, path => $options{path} // '/');
     $cookie{domain}    = $options{domain}  if defined $options{domain};
     $cookie{expires}   = $options{expires} if defined $options{expires};
@@ -440,6 +525,18 @@ sub cookie {
     $cookie{httponly}  = $options{httponly} if $options{httponly};
     $cookie{samesite}  = $options{samesite} if defined $options{samesite};
     return $self->header('Set-Cookie', Cookie::Baker::bake_cookie($name, \%cookie));
+}
+
+# A cookie's value, domain or path as a string, or croak: Cookie::Baker
+# would otherwise send a reference as HASH(0x...).
+sub _cookie_string {
+    my ($what, $value) = @_;
+    $value = PAGI::Utils::_stringified($value);
+    croak "cookie $what must be a string or an object that overloads stringification"
+        unless defined $value && !ref($value);
+    defined(my $bytes = PAGI::Utils::_byte_string($value))
+        or croak "cookie $what contains a character above 0xFF: encode it first";
+    return $bytes;
 }
 
 sub delete_cookie {
@@ -476,9 +573,20 @@ sub _emission_plan {
     };
 }
 
+# The header pairs to send, each value a string. A value reaches the
+# container unchecked through $response->headers, so an object that
+# stringifies is sent as its string and any other non-string croaks here,
+# naming the header, before anything is sent.
+sub _sendable_header_pairs {
+    my ($self) = @_;
+    my ($pairs, $refused) = PAGI::Utils::_sendable_headers('PAGI::Response', $self->{_headers});
+    croak $refused if $refused;
+    return $pairs;
+}
+
 sub _wire_headers {
     my ($self, $length) = @_;
-    my $headers = $self->{_headers}->to_pairs;
+    my $headers = $self->_sendable_header_pairs;
     @$headers = grep {
         my $name = $_->[0];
         $name =~ tr/A-Z/a-z/;
@@ -528,11 +636,15 @@ sub _parse_options {
     return \%options;
 }
 
+# The encoded bytes $value stands for, or croak naming it.
 sub _require_bytes {
     my ($name, $value) = @_;
+    $value = PAGI::Utils::_stringified($value);
     croak "$name must be a defined unblessed scalar of encoded bytes"
-        unless defined $value && !ref($value) && !utf8::is_utf8($value);
-    return;
+        unless defined $value && !ref($value);
+    defined(my $bytes = PAGI::Utils::_byte_string($value))
+        or croak "$name must be encoded bytes: it contains a character above 0xFF; encode text first, or use Text or HTML";
+    return $bytes;
 }
 
 sub _validate_status {
@@ -551,6 +663,7 @@ sub _allows_body_forbidden_status { 0 }
 
 sub _validate_uri_reference {
     my ($label, $value) = @_;
+    $value = PAGI::Utils::_stringified($value);
     croak "$label must be a URI-reference scalar"
         unless defined($value) && !ref($value) && _is_uri_reference($value);
     return $value;

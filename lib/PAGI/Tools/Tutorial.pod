@@ -568,7 +568,9 @@ does not promise object member order. For another charset, encode explicitly:
       content_type => 'text/plain; charset=iso-8859-1',
   );
 
-Common options are C<status>, C<content_type>, and flat C<headers>. Metadata
+Common options are C<status>, C<content_type>, and C<headers>: a flat
+C<[name =E<gt> value]> list, C<[[name, value]]> pairs, or a L<PAGI::Headers>
+object. Metadata
 methods such as C<status>, C<header>, C<content_type>, C<cookie>, and their
 C<*_try>/inspection forms remain available before emission. C<to_app> retains
 the exact configured Response object; it does not clone or freeze it. Each

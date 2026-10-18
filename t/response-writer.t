@@ -209,10 +209,9 @@ subtest 'Writer is invocation support, validates bytes/text, and closes locally 
     is($writer->is_disconnected, undef, 'missing connection capability is tri-state undef');
     is($writer->disconnect_reason, undef, 'missing connection has no disconnect reason');
 
-    my $flagged = 'ascii';
-    utf8::upgrade($flagged);
-    like(dies { $writer->write($flagged) }, qr/encoded bytes|byte scalar/i,
-        'write rejects a UTF-8-flagged character scalar');
+    my $wide = "wide \x{263a}";
+    like(dies { $writer->write($wide) }, qr/encoded bytes/i,
+        'write rejects a character above 0xFF');
     like(dies { $writer->write(undef) }, qr/encoded bytes|defined/i,
         'write rejects undef');
     like(dies { $writer->write([]) }, qr/encoded bytes|scalar/i,

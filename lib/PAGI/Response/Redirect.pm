@@ -25,8 +25,10 @@ PAGI::Response::Redirect - buffered HTTP redirect response
 =head1 DESCRIPTION
 
 Buffers a small escaped HTML document and owns its validated URI-reference
-Location. Status defaults to 302 and must be 301, 302, 303, 307, or 308.
-Common flat C<headers> and C<content_type> are accepted, but callers cannot
+Location, which may be given as an object that stringifies, such as L<URI>
+(L<PAGI::Response/VALUES FROM OTHER CODE>). Status defaults to 302 and must be 301, 302, 303, 307, or 308.
+Common C<headers> (any shape L<PAGI::Response/new> takes) and C<content_type>
+are accepted, but callers cannot
 compete with the response-owned Location field. The chosen status and exact
 single Location remain tied to the buffered HTML body. Mutations that would
 stale those semantics are rejected directly or, for the mutable header
@@ -50,7 +52,6 @@ sub new {
     my $options = PAGI::Response::_parse_options(@pairs);
     my $status = exists($options->{status}) ? $options->{status} : 302;
     $status = _validate_redirect_status($status);
-    _reject_location_header($options->{headers}) if exists $options->{headers};
 
     push @pairs, status => 302 unless exists $options->{status};
     my $title = $REDIRECT_TITLE{0 + $status};
@@ -116,17 +117,6 @@ sub _validate_redirect_status {
         unless defined($status) && !ref($status) && $status =~ /\A\d+\z/
             && $REDIRECT_STATUS{0 + $status};
     return 0 + $status;
-}
-
-sub _reject_location_header {
-    my ($headers) = @_;
-    return unless ref($headers) eq 'ARRAY' && @$headers % 2 == 0;
-    for (my $index = 0; $index < @$headers; $index += 2) {
-        my $name = $headers->[$index];
-        croak 'Redirect Location is response-owned'
-            if defined($name) && !ref($name) && lc($name) eq 'location';
-    }
-    return;
 }
 
 sub _escape_html {

@@ -9,8 +9,10 @@ use Carp qw(croak);
 use File::Basename qw(basename dirname);
 use File::Spec;
 use Scalar::Util qw(blessed);
+use overload ();
 use PAGI::Lifespan;
 use PAGI::Utils::AppObject;
+use PAGI::Utils::Headers ();
 
 my @PAGI_ENVIRONMENTS = qw(development test staging production);
 my %VALID_PAGI_ENV = map { $_ => 1 } @PAGI_ENVIRONMENTS;
@@ -351,6 +353,99 @@ async sub invoke_app {
 # Resolve a short class name the way middleware() does: a leading '+' names
 # an exact package, a name already under $namespace is kept, and anything else
 # is prefixed with "$namespace::". $what names the kind of class in errors.
+# The string a blessed object gives when its class overloads stringification,
+# or the value unchanged. The overload is called directly, once: it may return
+# undef, which callers refuse, and "$value" would warn about that. Objects that
+# overload only numeric or boolean conversion are not strings and pass through
+# unchanged, to be refused by the caller.
+sub _stringified {
+    my ($value) = @_;
+    return $value unless blessed($value);
+    my $method = overload::Method($value, '""') or return $value;
+    return $method->($value, undef, '');
+}
+
+# $value as a plain string, stringifying an object that overloads "", or
+# undef when it is not one. Callers croak with their own message, so the
+# error names the caller's line.
+sub _string_value {
+    my $value = _stringified($_[0]);
+    return defined($value) && !ref($value) ? $value : undef;
+}
+
+# $value as plain bytes, or undef when it holds a character above 0xFF.
+# Bytes are every character <= 0xFF: Perl's internal UTF-8 flag says how a
+# string is stored, not whether it is text, so it is not consulted. The copy
+# is downgraded (a no-op for a string that is not flagged), so what is sent
+# is one representation. Never a bare utf8::downgrade, which dies on a wide
+# character.
+sub _byte_string {
+    my ($value) = @_;
+    my $bytes = $value;
+    return utf8::downgrade($bytes, 1) ? $bytes : undef;
+}
+
+# A header value as Tools may send it: an object whose class overloads ""
+# stands for its string, and the value must be bytes. Returns the bytes, or
+# (undef, 'not a string') or (undef, 'wide'), so each caller croaks with its
+# own message at its caller's line. PAGI::Headers itself stays a plain
+# container, as request headers live in it too.
+sub _sendable_header_value {
+    my $value = _stringified($_[0]);
+    return (undef, 'not a string') unless defined $value && !ref($value);
+    my $bytes = _byte_string($value);
+    return defined($bytes) ? ($bytes) : (undef, 'wide');
+}
+
+# Undef for a header name Tools may send (an HTTP token, RFC 9110), or why
+# not, with unprintable characters escaped so the message itself is safe.
+sub _header_name_refusal {
+    my ($name) = @_;
+    return undef if PAGI::Utils::Headers::_is_http_token($name);
+    (my $shown = $name // '') =~ s/([^\x20-\x7E])/sprintf '\\x{%X}', ord $1/ge;
+    return "header name '$shown' must be an HTTP token";
+}
+
+# A headers argument in any of its three shapes -- a flat [name => value]
+# list, [[name, value]] pairs as the PAGI spec writes headers, or a
+# PAGI::Headers object -- as a new list of [name, value] pairs. Returns the
+# pairs, or (undef, $message) for anything else, so the site croaks at its
+# caller's line. Values are not checked here.
+sub _header_pairs {
+    my ($label, $headers) = @_;
+    my $refused = "$label headers must be a flat [name => value] list, [[name, value]] pairs, or a PAGI::Headers object";
+    return ($headers->to_pairs) if blessed($headers) && $headers->isa('PAGI::Headers');
+    return (undef, $refused) unless ref($headers) eq 'ARRAY';
+    if (@$headers && ref($headers->[0]) eq 'ARRAY') {
+        return (undef, $refused)
+            if grep { ref($_) ne 'ARRAY' || @$_ != 2 || !defined($_->[0]) || ref($_->[0]) } @$headers;
+        return ([ map { [@$_] } @$headers ]);
+    }
+    my @names = map { $headers->[$_] } grep { $_ % 2 == 0 } 0 .. $#$headers;
+    return (undef, $refused) if @$headers % 2 || grep { !defined($_) || ref($_) } @names;
+    return ([ map { [ @{$headers}[$_, $_ + 1] ] } grep { $_ % 2 == 0 } 0 .. $#$headers ]);
+}
+
+# Headers as Tools sends them in an event: any of the three shapes, every
+# name an HTTP token and every value by the one rule. Returns the pairs, or (undef, $message).
+sub _sendable_headers {
+    my ($label, $headers) = @_;
+    my ($pairs, $refused) = _header_pairs($label, $headers);
+    return (undef, $refused) if $refused;
+    for my $pair (@$pairs) {
+        if (defined(my $refused = _header_name_refusal($pair->[0]))) {
+            return (undef, $refused);
+        }
+        my ($bytes, $not) = _sendable_header_value($pair->[1]);
+        return (undef, $not eq 'wide'
+            ? "header '$pair->[0]' value contains a character above 0xFF: encode it first"
+            : "header '$pair->[0]' value must be a string or an object that overloads stringification")
+            if $not;
+        $pair->[1] = $bytes;
+    }
+    return ($pairs);
+}
+
 sub _resolve_class {
     my ($namespace, $name, $what) = @_;
     croak "invalid $what class name; use leading '+' for an exact package"

@@ -428,10 +428,29 @@ subtest 'Text and HTML declare the UTF-8 they send on a custom content type' => 
         $later->content_type('application/xml');
         is $later->content_type, 'application/xml; charset=utf-8', "$class: set after construction";
         $later->content_type(undef);
-        is $later->content_type, undef, "$class: clearing still clears";
+        is $later->content_type, $make->('x')->content_type, "$class: clearing gives the class default";
     }
     is response('JSON', {}, content_type => 'application/xml')->content_type,
         'application/xml', 'other classes are unchanged';
+};
+
+subtest 'content_type(undef) gives the class default, so a typed body always says what it is' => sub {
+    for my $case (
+        [ Text     => sub { response('Text', 'x') },                 'text/plain; charset=utf-8' ],
+        [ HTML     => sub { response('HTML', 'x') },                 'text/html; charset=utf-8' ],
+        [ JSON     => sub { response('JSON', {}) },                  'application/json' ],
+        [ Problem  => sub { response('Problem', {}) },               'application/problem+json' ],
+        [ Redirect => sub { response('Redirect', '/x') },            'text/html; charset=utf-8' ],
+        [ bytes    => sub { PAGI::Response->new('x') },              'application/octet-stream' ],
+    ) {
+        my ($name, $make, $default) = @$case;
+        my $response = $make->()->content_type('application/xml')->content_type(undef);
+        is $response->content_type, $default, "$name: back to its default";
+        my ($start) = grep { $_->{type} eq 'http.response.start' } @{ emitted_events($response) };
+        is [ map { $_->[1] } grep { lc $_->[0] eq 'content-type' } @{ $start->{headers} } ], [$default],
+            "$name: and sends it";
+    }
+    is response('Empty', status => 204)->content_type(undef)->content_type, undef, 'Empty has no type to give';
 };
 
 done_testing;

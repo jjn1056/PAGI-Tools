@@ -367,17 +367,19 @@ subtest 'raw headers are fully validated before entering the response' => sub {
         }, qr/field-value scalar/, "$label header value is rejected");
     }
 
-    for my $name ('Bad Name', 'Bad:Name', "Wide-\x{2603}", []) {
+    for my $name ('Bad Name', 'Bad:Name', "Wide-\x{2603}") {
         like(dies {
             PAGI::Pages->not_found(headers => [$name => 'value'])
         }, qr/header name must be an HTTP token/,
-            'invalid or reference-valued header name is rejected');
+            'an invalid header name is rejected');
     }
 
+    like(dies { PAGI::Pages->not_found(headers => ['X-One' => 'value', [] => 'value']) },
+        qr/PAGI::Pages headers must be a flat/, 'a reference-valued header name is rejected');
     like(dies { PAGI::Pages->not_found(headers => {}) },
-        qr/even-length arrayref/, 'non-array raw headers are rejected');
+        qr/PAGI::Pages headers must be a flat/, 'non-array raw headers are rejected');
     like(dies { PAGI::Pages->not_found(headers => ['X-One']) },
-        qr/even-length arrayref/, 'odd raw header lists are rejected');
+        qr/PAGI::Pages headers must be a flat/, 'odd raw header lists are rejected');
 };
 
 subtest 'problem extensions cannot replace authoritative members' => sub {

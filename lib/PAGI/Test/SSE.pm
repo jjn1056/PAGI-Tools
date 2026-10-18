@@ -135,7 +135,12 @@ sub _start {
         # Successful close/refusal capture already ended the scope. A
         # validator-complete event whose body capture failed has not.
         if ($conn->is_connected) {
-            my $detail = $future->is_failed ? scalar($future->failure) : undef;
+            # A started stream the application returned from without
+            # sse.close is an incomplete response; the detail is the one
+            # PAGI::Server records for it.
+            my $detail = $future->is_failed ? scalar($future->failure)
+                       : $self->{started} ? 'sse.start without sse.close'
+                       : undef;
             $self->_transport_closed(reason => 'server_error', detail => $detail);
         }
         $conn->_deliver_notifications;
@@ -462,7 +467,13 @@ stream (see L<PAGI::Test::Client/sse>); that is raised once.
         say "Connection closed";
     }
 
-Returns true if the SSE connection has been closed.
+Returns true if the SSE connection has been closed: by the test calling
+C<close>, by the application sending C<sse.close>, or by the application
+returning. Events it sent before that stay readable with C<receive_event>.
+An application that returns after C<sse.start> without C<sse.close> has left
+the response incomplete (L<PAGI::Spec::Www/Application Left a Response Incomplete>):
+the connection ends abnormally with reason C<server_error> and detail
+C<sse.start without sse.close>, as PAGI::Server records it.
 
 =head1 INTERNAL METHODS
 

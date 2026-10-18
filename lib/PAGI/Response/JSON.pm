@@ -24,8 +24,8 @@ PAGI::Response::JSON - buffered UTF-8 JSON response
 =head1 DESCRIPTION
 
 Buffers one JSON::MaybeXS-compatible finite Perl value as UTF-8 JSON bytes
-with C<application/json>. Common C<status>, flat C<headers>, and
-C<content_type> options are accepted. Object member order is unspecified and
+with C<application/json>. Common C<status>, C<headers> (any shape
+L<PAGI::Response/new> takes), and C<content_type> options are accepted. Object member order is unspecified and
 is not a byte-stability contract. Signatures, hashes, and canonical caches
 need an application Response subclass with an explicitly canonical encoder.
 

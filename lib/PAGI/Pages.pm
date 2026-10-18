@@ -20,6 +20,7 @@ use PAGI::Response::HTML ();
 use PAGI::Response::JSON ();
 use PAGI::Response::Problem ();
 use PAGI::Response::Text ();
+use PAGI::Utils ();
 use PAGI::Utils::Headers qw(merge_vary);
 
 our @EXPORT;
@@ -232,13 +233,14 @@ sub _normalize_options {
 
     for my $key (qw(detail title)) {
         next unless exists $opts->{$key};
+        $opts->{$key} = PAGI::Utils::_stringified($opts->{$key});
         croak "PAGI::Pages $key must be a Unicode scalar"
             unless defined($opts->{$key}) && !ref($opts->{$key});
     }
 
-    _validate_absolute_problem_type($opts->{type})
+    $opts->{type} = _validate_absolute_problem_type($opts->{type})
         if exists $opts->{type};
-    _validate_uri_reference('instance', $opts->{instance})
+    $opts->{instance} = _validate_uri_reference('instance', $opts->{instance})
         if exists $opts->{instance};
 
     if (exists $opts->{extensions}) {
@@ -260,7 +262,7 @@ sub _normalize_options {
     }
 
     if (exists $opts->{cache_control}) {
-        _validate_field_value('cache_control', $opts->{cache_control});
+        $opts->{cache_control} = _validate_field_value('cache_control', $opts->{cache_control});
     }
 
     return $opts;
@@ -268,25 +270,26 @@ sub _normalize_options {
 
 sub _validate_headers {
     my ($headers) = @_;
-    croak 'PAGI::Pages headers must be an even-length arrayref [name => value, ...]'
-        unless ref($headers) eq 'ARRAY' && @$headers % 2 == 0;
+    my ($pairs, $refused) = PAGI::Utils::_header_pairs('PAGI::Pages', $headers);
+    croak $refused if $refused;
 
-    my @copy = @$headers;
-    for (my $index = 0; $index < @copy; $index += 2) {
-        my ($name, $value) = @copy[$index, $index + 1];
+    my @copy;
+    for my $pair (@$pairs) {
+        my ($name, $value) = @$pair;
         croak 'PAGI::Pages header name must be an HTTP token'
-            unless defined($name) && !ref($name)
-                && $name =~ /\A[!#\$%&'\*\+\-\.\^_\x60\|~0-9A-Za-z]+\z/;
-        _validate_field_value("header '$name'", $value);
+            unless _is_http_token($name);
+        $value = _validate_field_value("header '$name'", $value);
         my $lower = lc $name;
         croak "PAGI::Pages caller header '$name' is response-owned"
             if $RESPONSE_OWNED_FIELD{$lower};
+        push @copy, $name, $value;
     }
     return \@copy;
 }
 
 sub _validate_field_value {
     my ($label, $value) = @_;
+    $value = PAGI::Utils::_stringified($value);
     croak "PAGI::Pages $label must be a field-value scalar"
         unless defined($value) && !ref($value)
             && $value =~ /\A[\x20-\x7E]*\z/;
@@ -295,6 +298,7 @@ sub _validate_field_value {
 
 sub _validate_absolute_problem_type {
     my ($value) = @_;
+    $value = PAGI::Utils::_stringified($value);
     croak 'PAGI::Pages type must be an absolute URI'
         unless defined($value) && !ref($value)
             && $value =~ /\A[A-Za-z][A-Za-z0-9+.-]*:[\x21-\x7E]*\z/;
@@ -305,6 +309,7 @@ sub _validate_absolute_problem_type {
 
 sub _validate_uri_reference {
     my ($label, $value) = @_;
+    $value = PAGI::Utils::_stringified($value);
     croak "PAGI::Pages $label must be a URI-reference scalar"
         unless defined($value) && !ref($value)
             && $value =~ /\A[\x21-\x7E]*\z/;
@@ -583,11 +588,12 @@ sub _prepare_error_options {
 
 sub _normalize_challenges {
     my ($value) = @_;
+    $value = PAGI::Utils::_stringified($value);
     my @values = ref($value) eq 'ARRAY' ? @$value : ($value);
     croak 'PAGI::Pages challenge must be a nonempty scalar or arrayref of challenges'
         unless (ref($value) eq 'ARRAY' || !ref($value)) && @values;
     for my $challenge (@values) {
-        _validate_field_value('challenge', $challenge);
+        $challenge = _validate_field_value('challenge', $challenge);
         croak 'PAGI::Pages challenge must be a nonempty scalar or arrayref of challenges'
             unless $challenge =~ /\S/;
     }
@@ -641,6 +647,7 @@ sub _normalize_nonnegative_integer {
 
 sub _normalize_retry_after {
     my ($value) = @_;
+    $value = PAGI::Utils::_stringified($value);
     return _normalize_nonnegative_integer('retry_after', $value)
         if defined($value) && !ref($value) && $value =~ /\A[0-9]+\z/;
     _validate_field_value('retry_after', $value);
@@ -650,11 +657,7 @@ sub _normalize_retry_after {
     return $value;
 }
 
-sub _is_http_token {
-    my ($value) = @_;
-    return defined($value) && !ref($value)
-        && $value =~ /\A[!#\$%&'\*\+\-\.\^_\x60\|~0-9A-Za-z]+\z/;
-}
+sub _is_http_token { PAGI::Utils::Headers::_is_http_token($_[0]) }
 
 sub _has_header {
     my ($headers, $wanted) = @_;
@@ -887,7 +890,7 @@ sub render_html {
     _reject_future($favicon);
     my $favicon_link = '';
     if (defined $favicon) {
-        _validate_uri_reference('favicon_href', $favicon);
+        $favicon = _validate_uri_reference('favicon_href', $favicon);
         $favicon_link = '<link rel="icon" type="image/svg+xml" href="'
             . _html_escape($favicon) . '">' . "\n";
     }
@@ -1178,7 +1181,7 @@ Response. A WebSocket or SSE handler may pass the application directly to
 C<deny> or C<decline>; C<response_for> remains available when explicit local
 materialization is useful.
 
-Factory C<headers> options are flat response-header arrayrefs. For request
+Factory C<headers> options take the shapes in L</"HEADERS AND CACHE POLICY">. For request
 negotiation, Pages builds an isolated metadata view and reads repeated request
 fields through L<PAGI::Headers>; it does not reuse or mutate the source scope's
 C<pagi.request.headers> cache.
@@ -1812,6 +1815,10 @@ L</"REDIRECT OPTIONS">.
 
 =head1 OPTION REFERENCE
 
+Every option, redirect target and hook result below that takes a string or a
+URI also takes an object whose class overloads stringification, such as
+L<URI> (L<PAGI::Response/VALUES FROM OTHER CODE>).
+
 All factory options are flat key/value lists. An odd list, an empty or
 reference-valued option name, or an unknown option croaks at factory time.
 Option values are copied into the deferred application; caller mutation of
@@ -1829,8 +1836,7 @@ C<as> value applies.
 
 =item * C<headers>
 
-An even-length arrayref C<[name =E<gt> value, ...]>. See
-L</"HEADERS AND CACHE POLICY">.
+Headers in any of the three shapes. See L</"HEADERS AND CACHE POLICY">.
 
 =item * C<cache_control>
 
@@ -1876,8 +1882,7 @@ Status 511 also reserves C<login>.
 
 =item * C<headers>
 
-An even-length arrayref C<[name =E<gt> value, ...]>. See
-L</"HEADERS AND CACHE POLICY">.
+Headers in any of the three shapes. See L</"HEADERS AND CACHE POLICY">.
 
 =item * C<cache_control>
 
@@ -1962,8 +1967,7 @@ resource has moved."
 
 =item * C<headers>
 
-An even-length arrayref C<[name =E<gt> value, ...]>. See
-L</"HEADERS AND CACHE POLICY">.
+Headers in any of the three shapes. See L</"HEADERS AND CACHE POLICY">.
 
 =item * C<cache_control>
 
@@ -1986,10 +1990,13 @@ C<Retry-After> and conflicts with a raw field of that name.
 
 =head2 HEADERS AND CACHE POLICY
 
-C<headers> must be an even-length arrayref C<[name =E<gt> value, ...]>.
-Names are ASCII HTTP tokens. Values are ASCII field-value scalars containing
-only bytes C<0x20> through C<0x7e>; controls, wide characters, and references
-are rejected. Repeated names are allowed where their HTTP field permits them.
+C<headers> is a flat
+C<[name =E<gt> value, ...]> list, C<[[name, value], ...]> pairs as the PAGI
+spec writes headers, or a L<PAGI::Headers> object (copied). Any other shape
+croaks. Names are ASCII HTTP tokens. Values are ASCII field-value scalars
+containing only bytes C<0x20> through C<0x7e>, or objects that stringify to
+one; controls, wide characters, and other references are rejected. The same
+holds for C<cache_control>, C<challenge> and C<retry_after>. Repeated names are allowed where their HTTP field permits them.
 
 Pages reserves C<Content-Type>, C<Content-Length>, C<Transfer-Encoding>,
 C<Location>, C<Cache-Control>, and C<Connection>, case-insensitively. Supply

@@ -34,6 +34,12 @@ trusted, already selected filesystem path. It never maps C<< $scope->{path} >>
 to disk. Use L<PAGI::App::File> when untrusted URL paths must be resolved under
 a root with traversal, hidden-file, index, missing, and forbidden policy.
 
+The path and C<filename> may be objects that stringify, such as
+L<Path::Tiny> (L<PAGI::Response/VALUES FROM OTHER CODE>). The path is taken
+as a string when the response is built, so a L<File::Temp> object, which
+removes its file when it goes away, must be kept alive until the response
+has been sent.
+
 Construction validates configuration only. Existence, readability, metadata,
 logical-window bounds, conditionals, and client ranges are evaluated before
 response start for each invocation. The application opens no filehandle. Each
@@ -65,6 +71,7 @@ sub new {
     my ($class, $path, @pairs) = @_;
     croak 'PAGI::Response::File->new requires a selected file path'
         unless @_ >= 2;
+    $path = PAGI::Utils::_stringified($path);
     croak 'File response path must be a defined nonempty scalar string'
         unless defined($path) && !ref($path) && length($path);
     croak 'File response path must not contain a NUL byte'
@@ -81,7 +88,7 @@ sub new {
         if exists $options->{inline};
 
     if (exists $options->{filename}) {
-        my $filename = $options->{filename};
+        my $filename = $options->{filename} = PAGI::Utils::_stringified($options->{filename});
         croak 'File response filename must be a defined scalar'
             unless defined($filename) && !ref($filename);
         croak 'File response filename must not contain control bytes'
@@ -100,7 +107,7 @@ sub new {
         } else {
             croak 'File response ETag must be a valid entity-tag'
                 unless PAGI::Response::File::Plan::_valid_entity_tag($etag);
-            $etag_policy = $etag;
+            $etag_policy = PAGI::Utils::_byte_string($etag);
         }
     }
 
@@ -171,7 +178,7 @@ sub _plan_for_scope {
 sub _wire_headers_for_plan {
     my ($self, $plan) = @_;
     my $planned = $plan->headers;
-    my $configured = $self->{_headers}->to_pairs;
+    my $configured = $self->_sendable_header_pairs;
     @$configured = grep { lc($_->[0]) ne 'transfer-encoding' } @$configured;
 
     my %configured_names = map { lc($_->[0]) => 1 } @$configured;
@@ -312,9 +319,8 @@ field.
 
 =item * C<headers>
 
-Uses the common even-length flat arrayref. Every name is a defined, nonempty,
-non-reference scalar and every value is a defined non-reference scalar; nested
-pairs are rejected. File owns calculated C<Content-Length>,
+Takes the three shapes every C<headers> argument takes, with values that
+follow C<header> (see L<PAGI::Response/new>). File owns calculated C<Content-Length>,
 C<Content-Range>, and C<ETag>, so supplying any of those fields through the
 constructor or C<header> croaks (and preflight checks the mutable header
 collection again). An application-supplied C<Transfer-Encoding> is removed at
@@ -359,8 +365,9 @@ the planned C<Accept-Ranges: bytes> field. HEAD does not parse Range.
 
 Defaults to automatic generation from file metadata plus the logical window.
 A false scalar (C<0> or the empty string) disables ETag. Exact C<1> requests
-automatic generation. Every other value must be an unflagged valid strong or
-weak quoted entity-tag; references, C<undef>, other true scalars, and malformed
+automatic generation. Every other value must be a valid strong or weak quoted
+entity-tag, as bytes (L<PAGI::Response/BYTES AND CHARACTERS>: Perl's UTF-8
+flag does not matter); references, C<undef>, other true scalars, and malformed
 tags croak.
 
 =back

@@ -170,6 +170,62 @@
   - PAGI::Test::Client has a query method for the QUERY verb.
 
   [Changed]
+  - PAGI::Test::Client: an SSE application that returns after sse.start
+    without sse.close ends with disconnect_detail "sse.start without
+    sse.close", as PAGI::Server records it (it was undef).
+  - One headers argument everywhere: the response options (every class),
+    PAGI::Pages, PAGI::WebSocket's accept and PAGI::SSE's start take a flat
+    [name => value] list, [[name, value]] pairs as the PAGI spec writes
+    headers, or a PAGI::Headers object (copied). Any other shape croaks
+    with one message naming the site. accept and start now send pairs (a
+    flat list or an object reached the server in the wrong shape) and check
+    each value by the header value rule. PAGI::Test::Client is unchanged.
+  - Header names are HTTP tokens (RFC 9110) wherever Tools sends one:
+    header(), every headers option, accept, start, and a name added
+    straight to a response's PAGI::Headers (checked at send). A name with a
+    space, a colon or a character above 0x7E croaks, naming it; before,
+    accept sent an empty name as a nameless line and a wide name killed
+    PAGI::Server mid-handshake. Pages already had this rule.
+  - Byte APIs (PAGI::Response->new, a Stream writer's write, an explicit
+    File etag, PAGI::WebSocket's send_bytes and try_send_bytes) take any
+    string whose characters are all at most 0xFF, whatever Perl's internal
+    UTF-8 flag: ASCII from Encode::decode, or built with a decoded string,
+    was refused as "not encoded bytes" (#57), and send_bytes did not check
+    at all. Header values (header(), the headers option, content_type(), and
+    every header as it is sent) and cookie parts follow the same rule; a wide
+    character there used to pass Tools, or die inside Cookie::Baker. A
+    character above 0xFF croaks, naming the fix. Decoded text
+    through a byte API is sent as ISO-8859-1; send text with Text or HTML.
+    See BYTES AND CHARACTERS in PAGI::Response.
+  - Wherever a response takes a string it also takes an object whose class
+    overloads "" (URI, Path::Tiny, DateTime, exception objects), stringified
+    once; every other value that is not a string croaks, including objects
+    that overload only numeric or boolean conversion. 0.002's Text and HTML
+    handed any value to Encode, so a reference went out as HASH(0x...) and
+    undef as an empty string: a side effect, not a feature, and it is not
+    kept. Applies to Text, HTML and byte bodies; Stream write and
+    write_text; the Redirect location; Problem type, instance, title and
+    detail (the document passed in is not changed); and PAGI::Pages' detail,
+    title, type, instance, redirect targets, blocked_by, login_url,
+    favicon_href, header values, cache_control, challenge and retry_after;
+    File's path and filename; and header values, the
+    Content-Type and a cookie's value, domain and path. A cookie part that
+    is not a string, an undef value included, now croaks instead of going
+    out as HASH(0x...) or "c="; and every header a response sends (headers
+    added through $response->headers too) is checked as it is sent, naming
+    a header whose value is not a string. PAGI::WebSocket's send_text,
+    send_bytes and close reason, and PAGI::SSE's send, send_comment and
+    send_event (data, event, id), with their try_send variants, follow the
+    same rule; send_event's id no longer goes out as HASH(0x...) for an
+    object, and undef data is refused by both send_event and
+    try_send_event (it went to the server, which refused it, or out as an
+    empty event).
+  - content_type(undef) gives back the class's default type instead of
+    removing Content-Type, so a Text, HTML, JSON or other typed response
+    always says what it is; Empty and File, which have no default, send none.
+  - PAGI::WebSocket's try_send_text, try_send_bytes and try_send_json report
+    a failure to on_error, as PAGI::SSE's try_send* already did; they still
+    return false and never throw.
   - One way to load a class given by name, shared by middleware(),
     Builder's enable, response(), session_store/session_state, endpoint()
     and RequestClass: a class already defined (declared in app.pl, or
