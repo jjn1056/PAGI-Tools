@@ -1165,10 +1165,11 @@ C<< $ws->query_param($name, raw => 1) >>.
 Accepts the WebSocket connection. Optionally specify a subprotocol
 to use and additional response headers. C<headers> is a flat
 C<[name =E<gt> value, ...]> list, C<[[name, value], ...]> pairs as the PAGI
-spec writes headers, or a L<PAGI::Headers> object (copied); it is sent as C<[[name, value], ...]> pairs. Each value
-follows L<PAGI::Response/header>'s rule: an object that overloads
-stringification is sent as its string, and a value must be bytes; anything
-else croaks, naming the header. Any other shape croaks.
+spec writes headers, or a L<PAGI::Headers> object (copied); it is sent as
+C<[[name, value], ...]> pairs. Names and values follow L<PAGI::Response/metadata>:
+a name is an HTTP token; an object that overloads stringification is sent as
+its string, and a value must be bytes; anything else croaks, naming the
+header. Any other shape croaks.
 
 B<Handshake contract.> The server sends a C<websocket.connect> event and waits
 for the application's reply before completing the handshake; the reply is

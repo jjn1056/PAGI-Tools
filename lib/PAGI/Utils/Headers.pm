@@ -25,6 +25,12 @@ our @EXPORT_OK = qw(
 );
 
 my $HTTP_TOKEN = qr/[!#\$%&'*+\-.\^_`|~0-9A-Za-z]+/;
+
+# A field name, method or other HTTP token (RFC 9110 section 5.6.2).
+sub _is_http_token {
+    my ($value) = @_;
+    return defined($value) && !ref($value) && $value =~ /\A$HTTP_TOKEN\z/ ? 1 : 0;
+}
 my $BEARER_TOKEN = qr/[A-Za-z0-9\-._~+\/]+={0,}/;
 my $BASE64 = qr/(?:[A-Za-z0-9+\/]{4})*(?:[A-Za-z0-9+\/]{2}==|[A-Za-z0-9+\/]{3}=)?/;
 my $ETAG_OPAQUE = qr/[\x21\x23-\x7e\x80-\xff]*/;

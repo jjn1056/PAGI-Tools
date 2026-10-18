@@ -12,6 +12,7 @@ use Scalar::Util qw(blessed);
 use overload ();
 use PAGI::Lifespan;
 use PAGI::Utils::AppObject;
+use PAGI::Utils::Headers ();
 
 my @PAGI_ENVIRONMENTS = qw(development test staging production);
 my %VALID_PAGI_ENV = map { $_ => 1 } @PAGI_ENVIRONMENTS;
@@ -396,6 +397,15 @@ sub _sendable_header_value {
     return defined($bytes) ? ($bytes) : (undef, 'wide');
 }
 
+# Undef for a header name Tools may send (an HTTP token, RFC 9110), or why
+# not, with unprintable characters escaped so the message itself is safe.
+sub _header_name_refusal {
+    my ($name) = @_;
+    return undef if PAGI::Utils::Headers::_is_http_token($name);
+    (my $shown = $name // '') =~ s/([^\x20-\x7E])/sprintf '\\x{%X}', ord $1/ge;
+    return "header name '$shown' must be an HTTP token";
+}
+
 # A headers argument in any of its three shapes -- a flat [name => value]
 # list, [[name, value]] pairs as the PAGI spec writes headers, or a
 # PAGI::Headers object -- as a new list of [name, value] pairs. Returns the
@@ -417,12 +427,15 @@ sub _header_pairs {
 }
 
 # Headers as Tools sends them in an event: any of the three shapes, every
-# value by the one rule. Returns the pairs, or (undef, $message).
+# name an HTTP token and every value by the one rule. Returns the pairs, or (undef, $message).
 sub _sendable_headers {
     my ($label, $headers) = @_;
     my ($pairs, $refused) = _header_pairs($label, $headers);
     return (undef, $refused) if $refused;
     for my $pair (@$pairs) {
+        if (defined(my $refused = _header_name_refusal($pair->[0]))) {
+            return (undef, $refused);
+        }
         my ($bytes, $not) = _sendable_header_value($pair->[1]);
         return (undef, $not eq 'wide'
             ? "header '$pair->[0]' value contains a character above 0xFF: encode it first"

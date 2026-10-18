@@ -277,8 +277,7 @@ sub _validate_headers {
     for my $pair (@$pairs) {
         my ($name, $value) = @$pair;
         croak 'PAGI::Pages header name must be an HTTP token'
-            unless defined($name) && !ref($name)
-                && $name =~ /\A[!#\$%&'\*\+\-\.\^_\x60\|~0-9A-Za-z]+\z/;
+            unless _is_http_token($name);
         $value = _validate_field_value("header '$name'", $value);
         my $lower = lc $name;
         croak "PAGI::Pages caller header '$name' is response-owned"
@@ -658,11 +657,7 @@ sub _normalize_retry_after {
     return $value;
 }
 
-sub _is_http_token {
-    my ($value) = @_;
-    return defined($value) && !ref($value)
-        && $value =~ /\A[!#\$%&'\*\+\-\.\^_\x60\|~0-9A-Za-z]+\z/;
-}
+sub _is_http_token { PAGI::Utils::Headers::_is_http_token($_[0]) }
 
 sub _has_header {
     my ($headers, $wanted) = @_;

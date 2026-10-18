@@ -274,6 +274,11 @@ HTTP field values are octets: a character above 0xFF croaks, naming the
 header or cookie part, and text with one is encoded first (a non-ASCII
 download name is: File encodes C<filename> itself, following RFC 8187).
 
+Header names are HTTP tokens (RFC 9110): letters, digits and
+C<!#$%&'*+-.^_`|~>. A name with anything else (a space, a colon, a
+character above 0x7E) croaks, naming it; one added straight to the
+container croaks as the response is sent.
+
 =head1 SUBCLASSING
 
 Buffered application subclasses have two supported extension seams.
@@ -441,6 +446,9 @@ sub header {
     my ($self, $name, $value) = @_;
     croak 'Header name is required' unless defined $name && !ref($name) && length $name;
     return $self->{_headers}->get($name) if @_ == 2;
+    if (defined(my $refused = PAGI::Utils::_header_name_refusal($name))) {
+        croak $refused;
+    }
     my ($bytes, $not) = PAGI::Utils::_sendable_header_value($value);
     croak 'Header value is required' if ($not // '') eq 'not a string';
     croak "header '$name' value contains a character above 0xFF: encode it first" if $not;

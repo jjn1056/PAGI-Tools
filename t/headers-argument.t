@@ -118,6 +118,38 @@ subtest 'accept and start send values by the one rule' => sub {
     }
 };
 
+subtest 'header names are HTTP tokens at every site' => sub {
+    my $not_token = qr/header name (?:'[^']*' )?must be an HTTP token/;
+    my %direct = (
+        'header()'           => sub { response('Text', 'x')->header($_[0][0], $_[0][1]); [] },
+        'an added header'    => sub {
+            my $response = response('Text', 'x');
+            $response->headers->add(@{ $_[0] });
+            start_of(PAGITest::Stringy::events_of($response))->{headers};
+        },
+    );
+    my %every = (%direct, map { my $send = $site{$_}; ($_ => sub { $send->([ @{ $_[0] } ]) }) } keys %site);
+    for my $label (sort keys %every) {
+        my $send = $every{$label};
+        is(ours($send->(['X-A', '1'])), $label =~ /\(\)/ ? [] : [['X-A', '1']], "$label: a token is accepted");
+        ok(lives { $send->(["!#\$%&'*+-.^_`|~09az", 'v']) }, "$label: every token character is accepted");
+        for my $bad (
+            [ 'a space',            'Bad Name' ],
+            [ 'a colon',            'X:Y' ],
+            [ 'a Latin-1 character', "X-Caf\xE9" ],
+            [ 'a wide character',   "X-\x{263a}" ],
+        ) {
+            my ($what, $name) = @$bad;
+            # Added straight to the container, a name is refused when the
+            # response is sent, at the line that sends it.
+            my $where = $label eq 'an added header' ? qr/ at / : qr/ at $file line/;
+            like(dies { $send->([$name, 'v']) }, qr/$not_token$where/, "$label: a name with $what is refused");
+        }
+    }
+    like(dies { response('Text', 'x')->header("X-\x{263a}", 'v') }, qr/'X-\\x\{263A\}'/,
+        'the refused name is shown with unprintable characters escaped');
+};
+
 subtest 'Empty and Redirect refuse their own headers in every shape' => sub {
     for my $case (
         [ Empty    => [],     'Content-Type', qr/Empty response does not permit Content-Type/ ],

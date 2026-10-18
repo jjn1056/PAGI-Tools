@@ -1173,7 +1173,7 @@ false only when it is absent; malformed present state croaks.
     await $sse->start(status => 200, headers => ['x-custom' => 'value']);
 
 Starts the SSE stream. Called automatically on first send.
-C<headers> takes the same three shapes and value rule as
+C<headers> takes the same three shapes and name and value rules as
 L<PAGI::WebSocket/accept>, and is sent as C<[[name, value], ...]> pairs.
 Idempotent - only sends sse.start once. A call made while the stream is
 starting returns the same Future, so several sends made before the stream
