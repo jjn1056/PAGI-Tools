@@ -159,6 +159,31 @@ JSON data is not stringified: L<PAGI::Response::JSON> and
 L<PAGI::Response::NDJSON> encode their data as JSON, and their encoder
 refuses every blessed object.
 
+=head1 BYTES AND CHARACTERS
+
+A byte API (C<new>, a Stream writer's C<write>, an explicit File C<etag>)
+takes bytes: a string whose characters are all at most 0xFF. Perl's internal
+UTF-8 flag only records how a string is stored, so it does not matter: a
+string Perl happens to have flagged, such as ASCII from C<Encode::decode> or
+built with a decoded string, is accepted, and is sent as plain bytes. A
+character above 0xFF cannot be a byte and croaks, naming the fix.
+
+Two mistakes look alike and cannot be told apart at runtime, so they are
+documented instead:
+
+=over 4
+
+=item * Text through a byte API. Decoded text whose characters are all at
+most 0xFF is sent as one byte per character, which is ISO-8859-1, not UTF-8:
+C<"caf\x{e9}"> goes out as C<63 61 66 E9>. Send text with
+L<PAGI::Response::Text> or L<PAGI::Response::HTML>, which encode it as UTF-8,
+or encode it yourself.
+
+=item * Bytes through a text API. Already-encoded bytes given to Text or HTML
+are encoded again.
+
+=back
+
 =head1 METHODS
 
 =head2 response
@@ -190,8 +215,9 @@ C<< PAGI::Response->new($bytes, %options) >>.
 
     PAGI::Response->new($bytes, %options)
 
-Creates a complete buffered response. C<$bytes> is a string of encoded bytes,
-or an object that stringifies to one (L</VALUES FROM OTHER CODE>). The
+Creates a complete buffered response. C<$bytes> is a string of encoded bytes
+(L</BYTES AND CHARACTERS>), or an object that stringifies to one
+(L</VALUES FROM OTHER CODE>). The
 supported options are C<status>,
 C<content_type>, and C<headers>, where C<headers> is an even-length flat
 arrayref of name/value pairs whose values follow C<header> (L</metadata>).
@@ -603,8 +629,10 @@ sub _require_bytes {
     my ($name, $value) = @_;
     $value = PAGI::Utils::_stringified($value);
     croak "$name must be a defined unblessed scalar of encoded bytes"
-        unless defined $value && !ref($value) && !utf8::is_utf8($value);
-    return $value;
+        unless defined $value && !ref($value);
+    defined(my $bytes = PAGI::Utils::_byte_string($value))
+        or croak "$name must be encoded bytes: it contains a character above 0xFF; encode text first, or use Text or HTML";
+    return $bytes;
 }
 
 sub _validate_status {

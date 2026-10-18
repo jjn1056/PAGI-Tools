@@ -459,8 +459,9 @@ resolution is not proof that the client received it. Writer then checks
 connection state and counts bytes only while still connected. A disconnect
 never manufactures a write failure. Genuine validation or resource failures
 from C<$send> still propagate.
-C<write_text> performs strict UTF-8 encoding first. Either may be given an
-object that stringifies (L<PAGI::Response/VALUES FROM OTHER CODE>). Await
+C<write> takes bytes (L<PAGI::Response/BYTES AND CHARACTERS>); C<write_text>
+performs strict UTF-8 encoding first. Either may be given an object that
+stringifies (L<PAGI::Response/VALUES FROM OTHER CODE>). Await
 each write before starting another.
 
 =head2 write_item

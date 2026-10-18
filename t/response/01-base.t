@@ -78,8 +78,8 @@ subtest 'base bytes retain metadata and byte invariants' => sub {
     }
     my $utf8_ascii = 'ascii';
     utf8::upgrade($utf8_ascii);
-    like(dies { PAGI::Response->new($utf8_ascii) }, qr/encoded bytes/i,
-        'UTF-8-flagged ASCII is not accepted as bytes');
+    is(PAGI::Response->new($utf8_ascii)->body, 'ascii',
+        'flagged ASCII is bytes: the flag does not matter, only that every character fits in a byte');
 };
 
 subtest 'constructor and metadata setters validate and preserve ordered semantics' => sub {

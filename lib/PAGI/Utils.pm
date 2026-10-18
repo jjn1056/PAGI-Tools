@@ -372,6 +372,18 @@ sub _string_value {
     return defined($value) && !ref($value) ? $value : undef;
 }
 
+# $value as plain bytes, or undef when it holds a character above 0xFF.
+# Bytes are every character <= 0xFF: Perl's internal UTF-8 flag says how a
+# string is stored, not whether it is text, so it is not consulted. The copy
+# is downgraded (a no-op for a string that is not flagged), so what is sent
+# is one representation. Never a bare utf8::downgrade, which dies on a wide
+# character.
+sub _byte_string {
+    my ($value) = @_;
+    my $bytes = $value;
+    return utf8::downgrade($bytes, 1) ? $bytes : undef;
+}
+
 sub _resolve_class {
     my ($namespace, $name, $what) = @_;
     croak "invalid $what class name; use leading '+' for an exact package"
