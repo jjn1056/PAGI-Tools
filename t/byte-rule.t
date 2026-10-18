@@ -125,8 +125,9 @@ subtest 'header values and cookies' => sub {
     is($sent, 'plain', 'a flagged ASCII header value is sent');
     ok(!utf8::is_utf8($sent), 'as plain bytes');
 
-    for my $part (qw(value domain path)) {
-        my @args = $part eq 'value' ? (c => "smile \x{263a}") : (c => 'v', $part => "\x{263a}");
+    for my $part (qw(name value domain path)) {
+        my @args = $part eq 'name'  ? ("\x{263a}" => 'v')
+                 : $part eq 'value' ? (c => "smile \x{263a}") : (c => 'v', $part => "\x{263a}");
         like(dies { response('Text', 'x')->cookie(@args) },
             qr/cookie $part contains a character above 0xFF: encode it first/, "a wide cookie $part is refused in Tools' words");
     }

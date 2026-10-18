@@ -506,6 +506,11 @@ sub content_type_try {
 
 sub cookie {
     my ($self, $name, $value, %options) = @_;
+    # The name is an identifier, so it is not stringified; it is bytes.
+    if (defined $name && !ref $name) {
+        defined($name = PAGI::Utils::_byte_string($name))
+            or croak 'cookie name contains a character above 0xFF: encode it first';
+    }
     $value = _cookie_string('value', $value);
     for my $option (qw(domain path)) {
         $options{$option} = _cookie_string($option, $options{$option}) if defined $options{$option};
