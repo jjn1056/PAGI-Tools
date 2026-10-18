@@ -69,8 +69,18 @@ for my $protocol (qw(websocket sse)) {
         is $c->disconnect_reason, 'server_error', 'actual return triggers backstop';
         ok $session->is_closed, 'client transport closed';
         is $receive->()->get->{reason}, 'server_error', 'pending/later receive terminal event';
+        is $c->disconnect_detail, 'sse.start without sse.close', 'detail as PAGI::Server records it'
+            if $protocol eq 'sse';
     };
 }
+
+subtest 'an sse app that returns before sse.start is not given the started-stream detail' => sub {
+    my $c;
+    my $client = PAGI::Test::Client->new(app => async sub { $c = $_[0]{'pagi.connection'}; return });
+    like dies { $client->sse('/') }, qr/SSE connection not started/, 'the client reports no stream';
+    is $c->disconnect_reason, 'server_error', 'no response is abnormal';
+    isnt $c->disconnect_detail // '', 'sse.start without sse.close', 'and is not described as an unclosed stream';
+};
 
 sub ws_app {
     my ($slot, $close_now) = @_;

@@ -170,6 +170,9 @@
   - PAGI::Test::Client has a query method for the QUERY verb.
 
   [Changed]
+  - PAGI::Test::Client: an SSE application that returns after sse.start
+    without sse.close ends with disconnect_detail "sse.start without
+    sse.close", as PAGI::Server records it (it was undef).
   - One headers argument everywhere: the response options (every class),
     PAGI::Pages, PAGI::WebSocket's accept and PAGI::SSE's start take a flat
     [name => value] list, [[name, value]] pairs as the PAGI spec writes
