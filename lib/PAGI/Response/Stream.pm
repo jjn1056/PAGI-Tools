@@ -307,7 +307,8 @@ sub _cancel_outcome {
     PAGI::Response::Stream->new($producer, %common_response_options)
 
 The first argument must be a Writer producer coderef. C<status>,
-C<content_type>, and flat C<headers> use the common Response contract. Stream
+C<content_type>, and C<headers> (any shape L<PAGI::Response/new> takes) use
+the common Response contract. Stream
 does not calculate Content-Length; an explicitly supplied value is retained as
 the application's delivery promise.
 

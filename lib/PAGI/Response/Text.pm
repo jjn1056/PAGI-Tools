@@ -27,8 +27,8 @@ PAGI::Response::Text - buffered UTF-8 plain-text response
 
 Buffers one defined character scalar, or an object that stringifies to one
 (L<PAGI::Response/VALUES FROM OTHER CODE>), as strict UTF-8 bytes with
-C<text/plain; charset=utf-8>. Common C<status>, flat C<headers>, and
-C<content_type> options are accepted. Use byte-oriented L<PAGI::Response> when
+C<text/plain; charset=utf-8>. Common C<status>, C<headers> (any shape
+L<PAGI::Response/new> takes), and C<content_type> options are accepted. Use byte-oriented L<PAGI::Response> when
 the caller must choose another encoding explicitly.
 
 

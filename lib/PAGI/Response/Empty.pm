@@ -24,7 +24,8 @@ PAGI::Response::Empty - buffered zero-byte response
 =head1 DESCRIPTION
 
 Owns a buffered zero-byte body. Status defaults to 204 and no Content-Type is
-added or permitted. Flat headers are accepted; framing fields forbidden by a
+added or permitted. C<headers> are accepted in any shape L<PAGI::Response/new>
+takes; framing fields forbidden by a
 1xx, 204, or 304 status are omitted on emission.
 
 =cut

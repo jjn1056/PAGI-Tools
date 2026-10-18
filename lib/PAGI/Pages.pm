@@ -1186,7 +1186,7 @@ Response. A WebSocket or SSE handler may pass the application directly to
 C<deny> or C<decline>; C<response_for> remains available when explicit local
 materialization is useful.
 
-Factory C<headers> options are flat response-header arrayrefs. For request
+Factory C<headers> options take the shapes in L</"HEADERS AND CACHE POLICY">. For request
 negotiation, Pages builds an isolated metadata view and reads repeated request
 fields through L<PAGI::Headers>; it does not reuse or mutate the source scope's
 C<pagi.request.headers> cache.

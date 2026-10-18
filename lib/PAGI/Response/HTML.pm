@@ -27,8 +27,8 @@ PAGI::Response::HTML - buffered UTF-8 HTML response
 
 Buffers one defined character scalar, or an object that stringifies to one
 (L<PAGI::Response/VALUES FROM OTHER CODE>), as strict UTF-8 bytes with
-C<text/html; charset=utf-8>. Common C<status>, flat C<headers>, and
-C<content_type> options are accepted. The class encodes markup but does not
+C<text/html; charset=utf-8>. Common C<status>, C<headers> (any shape
+L<PAGI::Response/new> takes), and C<content_type> options are accepted. The class encodes markup but does not
 escape or sanitize it.
 
 

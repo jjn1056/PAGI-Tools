@@ -27,7 +27,8 @@ PAGI::Response::Redirect - buffered HTTP redirect response
 Buffers a small escaped HTML document and owns its validated URI-reference
 Location, which may be given as an object that stringifies, such as L<URI>
 (L<PAGI::Response/VALUES FROM OTHER CODE>). Status defaults to 302 and must be 301, 302, 303, 307, or 308.
-Common flat C<headers> and C<content_type> are accepted, but callers cannot
+Common C<headers> (any shape L<PAGI::Response/new> takes) and C<content_type>
+are accepted, but callers cannot
 compete with the response-owned Location field. The chosen status and exact
 single Location remain tied to the buffered HTML body. Mutations that would
 stale those semantics are rejected directly or, for the mutable header
