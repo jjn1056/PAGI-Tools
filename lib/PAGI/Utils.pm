@@ -396,6 +396,43 @@ sub _sendable_header_value {
     return defined($bytes) ? ($bytes) : (undef, 'wide');
 }
 
+# A headers argument in any of its three shapes -- a flat [name => value]
+# list, [[name, value]] pairs as the PAGI spec writes headers, or a
+# PAGI::Headers object -- as a new list of [name, value] pairs. Returns the
+# pairs, or (undef, $message) for anything else, so the site croaks at its
+# caller's line. Values are not checked here.
+sub _header_pairs {
+    my ($label, $headers) = @_;
+    my $refused = "$label headers must be a flat [name => value] list, [[name, value]] pairs, or a PAGI::Headers object";
+    return ($headers->to_pairs) if blessed($headers) && $headers->isa('PAGI::Headers');
+    return (undef, $refused) unless ref($headers) eq 'ARRAY';
+    if (@$headers && ref($headers->[0]) eq 'ARRAY') {
+        return (undef, $refused)
+            if grep { ref($_) ne 'ARRAY' || @$_ != 2 || !defined($_->[0]) || ref($_->[0]) } @$headers;
+        return ([ map { [@$_] } @$headers ]);
+    }
+    my @names = map { $headers->[$_] } grep { $_ % 2 == 0 } 0 .. $#$headers;
+    return (undef, $refused) if @$headers % 2 || grep { ref } @names;
+    return ([ map { [ @{$headers}[$_, $_ + 1] ] } grep { $_ % 2 == 0 } 0 .. $#$headers ]);
+}
+
+# Headers as Tools sends them in an event: any of the three shapes, every
+# value by the one rule. Returns the pairs, or (undef, $message).
+sub _sendable_headers {
+    my ($label, $headers) = @_;
+    my ($pairs, $refused) = _header_pairs($label, $headers);
+    return (undef, $refused) if $refused;
+    for my $pair (@$pairs) {
+        my ($bytes, $not) = _sendable_header_value($pair->[1]);
+        return (undef, $not eq 'wide'
+            ? "header '$pair->[0]' value contains a character above 0xFF: encode it first"
+            : "header '$pair->[0]' value must be a string or an object that overloads stringification")
+            if $not;
+        $pair->[1] = $bytes;
+    }
+    return ($pairs);
+}
+
 sub _resolve_class {
     my ($namespace, $name, $what) = @_;
     croak "invalid $what class name; use leading '+' for an exact package"

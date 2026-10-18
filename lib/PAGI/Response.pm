@@ -219,8 +219,11 @@ Creates a complete buffered response. C<$bytes> is a string of encoded bytes
 (L</BYTES AND CHARACTERS>), or an object that stringifies to one
 (L</VALUES FROM OTHER CODE>). The
 supported options are C<status>,
-C<content_type>, and C<headers>, where C<headers> is an even-length flat
-arrayref of name/value pairs whose values follow C<header> (L</metadata>).
+C<content_type>, and C<headers>, where C<headers> is a flat
+C<[name =E<gt> value, ...]> list, C<[[name, value], ...]> pairs as the PAGI
+spec writes headers, or a L<PAGI::Headers> object (copied; later changes to
+it do not reach the response), whose values follow C<header> (L</metadata>). Every
+C<headers> argument in PAGI-Tools takes these three shapes.
 Unknown, duplicate, odd, or malformed options
 croak synchronously. Status defaults to 200 and body-bearing construction
 rejects 1xx, 204, 205, and 304. Default Content-Type is
@@ -401,17 +404,9 @@ sub new {
 
     $self->status($options->{status}) if exists $options->{status};
     if (exists $options->{headers}) {
-        my $headers = $options->{headers};
-        croak 'headers must be an arrayref of flat name/value pairs'
-            unless ref($headers) eq 'ARRAY';
-        croak 'headers must be flat name/value pairs, not nested pairs'
-            if grep { ref $headers->[$_] } grep { $_ % 2 == 0 } 0 .. $#$headers;
-        croak 'headers must be an even-length flat arrayref [ name => value, ... ]'
-            if @$headers % 2;
-        for (my $index = 0; $index < @$headers; $index += 2) {
-            my ($name, $header_value) = @{$headers}[$index, $index + 1];
-            $self->header($name, $header_value);
-        }
+        my ($pairs, $refused) = PAGI::Utils::_header_pairs('PAGI::Response', $options->{headers});
+        croak $refused if $refused;
+        $self->header(@$_) for @$pairs;
     }
     $self->content_type($options->{content_type})
         if exists $options->{content_type};
@@ -576,16 +571,9 @@ sub _emission_plan {
 # naming the header, before anything is sent.
 sub _sendable_header_pairs {
     my ($self) = @_;
-    my @pairs;
-    for my $pair (@{ $self->{_headers}->to_pairs }) {
-        my ($name, $value) = @$pair;
-        my ($bytes, $not) = PAGI::Utils::_sendable_header_value($value);
-        croak "header '$name' value must be a string or an object that overloads stringification"
-            if ($not // '') eq 'not a string';
-        croak "header '$name' value contains a character above 0xFF: encode it first" if $not;
-        push @pairs, [$name, $bytes];
-    }
-    return \@pairs;
+    my ($pairs, $refused) = PAGI::Utils::_sendable_headers('PAGI::Response', $self->{_headers});
+    croak $refused if $refused;
+    return $pairs;
 }
 
 sub _wire_headers {

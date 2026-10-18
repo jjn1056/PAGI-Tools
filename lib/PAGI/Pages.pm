@@ -20,6 +20,7 @@ use PAGI::Response::HTML ();
 use PAGI::Response::JSON ();
 use PAGI::Response::Problem ();
 use PAGI::Response::Text ();
+use PAGI::Utils ();
 use PAGI::Utils::Headers qw(merge_vary);
 
 our @EXPORT;
@@ -269,12 +270,12 @@ sub _normalize_options {
 
 sub _validate_headers {
     my ($headers) = @_;
-    croak 'PAGI::Pages headers must be an even-length arrayref [name => value, ...]'
-        unless ref($headers) eq 'ARRAY' && @$headers % 2 == 0;
+    my ($pairs, $refused) = PAGI::Utils::_header_pairs('PAGI::Pages', $headers);
+    croak $refused if $refused;
 
-    my @copy = @$headers;
-    for (my $index = 0; $index < @copy; $index += 2) {
-        my ($name, $value) = @copy[$index, $index + 1];
+    my @copy;
+    for my $pair (@$pairs) {
+        my ($name, $value) = @$pair;
         croak 'PAGI::Pages header name must be an HTTP token'
             unless defined($name) && !ref($name)
                 && $name =~ /\A[!#\$%&'\*\+\-\.\^_\x60\|~0-9A-Za-z]+\z/;
@@ -282,6 +283,7 @@ sub _validate_headers {
         my $lower = lc $name;
         croak "PAGI::Pages caller header '$name' is response-owned"
             if $RESPONSE_OWNED_FIELD{$lower};
+        push @copy, $name, $value;
     }
     return \@copy;
 }
@@ -1836,8 +1838,7 @@ C<as> value applies.
 
 =item * C<headers>
 
-An even-length arrayref C<[name =E<gt> value, ...]>. See
-L</"HEADERS AND CACHE POLICY">.
+Headers in any of the three shapes. See L</"HEADERS AND CACHE POLICY">.
 
 =item * C<cache_control>
 
@@ -1883,8 +1884,7 @@ Status 511 also reserves C<login>.
 
 =item * C<headers>
 
-An even-length arrayref C<[name =E<gt> value, ...]>. See
-L</"HEADERS AND CACHE POLICY">.
+Headers in any of the three shapes. See L</"HEADERS AND CACHE POLICY">.
 
 =item * C<cache_control>
 
@@ -1969,8 +1969,7 @@ resource has moved."
 
 =item * C<headers>
 
-An even-length arrayref C<[name =E<gt> value, ...]>. See
-L</"HEADERS AND CACHE POLICY">.
+Headers in any of the three shapes. See L</"HEADERS AND CACHE POLICY">.
 
 =item * C<cache_control>
 
@@ -1993,8 +1992,10 @@ C<Retry-After> and conflicts with a raw field of that name.
 
 =head2 HEADERS AND CACHE POLICY
 
-C<headers> must be an even-length arrayref C<[name =E<gt> value, ...]>.
-Names are ASCII HTTP tokens. Values are ASCII field-value scalars containing
+C<headers> is a flat
+C<[name =E<gt> value, ...]> list, C<[[name, value], ...]> pairs as the PAGI
+spec writes headers, or a L<PAGI::Headers> object (copied).
+Any other shape croaks. Names are ASCII HTTP tokens. Values are ASCII field-value scalars containing
 only bytes C<0x20> through C<0x7e>; controls, wide characters, and references
 are rejected. Repeated names are allowed where their HTTP field permits them.
 

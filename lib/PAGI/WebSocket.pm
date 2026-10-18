@@ -454,7 +454,11 @@ async sub accept {
         type => 'websocket.accept',
     };
     $event->{subprotocol} = $opts{subprotocol} if exists $opts{subprotocol};
-    $event->{headers} = $opts{headers} if exists $opts{headers};
+    if (exists $opts{headers}) {
+        my ($headers, $refused) = PAGI::Utils::_sendable_headers('PAGI::WebSocket accept', $opts{headers});
+        croak $refused if $refused;
+        $event->{headers} = $headers;
+    }
 
     await PAGI::Common::send_in_order($self, $event);
     $self->_set_state('connected') unless $self->is_closed;
@@ -1156,9 +1160,15 @@ C<< $ws->query_param($name, raw => 1) >>.
     await $ws->accept;
     await $ws->accept(subprotocol => 'chat');
     await $ws->accept(headers => [['x-custom', 'value']]);
+    await $ws->accept(headers => ['x-custom' => 'value']);
 
 Accepts the WebSocket connection. Optionally specify a subprotocol
-to use and additional response headers.
+to use and additional response headers. C<headers> is a flat
+C<[name =E<gt> value, ...]> list, C<[[name, value], ...]> pairs as the PAGI
+spec writes headers, or a L<PAGI::Headers> object (copied); it is sent as C<[[name, value], ...]> pairs. Each value
+follows L<PAGI::Response/header>'s rule: an object that overloads
+stringification is sent as its string, and a value must be bytes; anything
+else croaks, naming the header. Any other shape croaks.
 
 B<Handshake contract.> The server sends a C<websocket.connect> event and waits
 for the application's reply before completing the handshake; the reply is

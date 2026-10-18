@@ -170,6 +170,13 @@
   - PAGI::Test::Client has a query method for the QUERY verb.
 
   [Changed]
+  - One headers argument everywhere: the response options (every class),
+    PAGI::Pages, PAGI::WebSocket's accept and PAGI::SSE's start take a flat
+    [name => value] list, [[name, value]] pairs as the PAGI spec writes
+    headers, or a PAGI::Headers object (copied). Any other shape croaks
+    with one message naming the site. accept and start now send pairs (a
+    flat list or an object reached the server in the wrong shape) and check
+    each value by the header value rule. PAGI::Test::Client is unchanged.
   - Byte APIs (PAGI::Response->new, a Stream writer's write, an explicit
     File etag, PAGI::WebSocket's send_bytes and try_send_bytes) take any
     string whose characters are all at most 0xFF, whatever Perl's internal

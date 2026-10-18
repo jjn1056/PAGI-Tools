@@ -126,10 +126,10 @@ subtest 'constructor and metadata setters validate and preserve ordered semantic
         'undefined constructor option name is rejected';
     like dies { PAGI::Response->new('x', [] => 201) }, qr/option names.*scalar strings/i,
         'reference constructor option name is rejected';
-    like dies { PAGI::Response->new('x', headers => ['X-One']) }, qr/even-length/i,
-        'flat headers require pairs';
-    like dies { PAGI::Response->new('x', headers => [['X-One', 'one']]) }, qr/nested/i,
-        'nested header pairs are rejected';
+    like dies { PAGI::Response->new('x', headers => ['X-One']) }, qr/PAGI::Response headers must be a flat/,
+        'an odd flat header list is rejected';
+    is(PAGI::Response->new('x', headers => [['X-One', 'one']])->header('X-One'), 'one',
+        'header pairs are accepted');
 };
 
 subtest 'Response application validates the full triplet, awaits each send, and protects framing' => sub {

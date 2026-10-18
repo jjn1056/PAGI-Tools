@@ -319,9 +319,8 @@ field.
 
 =item * C<headers>
 
-Uses the common even-length flat arrayref. Every name is a defined, nonempty,
-non-reference scalar and every value is a defined non-reference scalar; nested
-pairs are rejected. File owns calculated C<Content-Length>,
+Takes the three shapes every C<headers> argument takes, with values that
+follow C<header> (see L<PAGI::Response/new>). File owns calculated C<Content-Length>,
 C<Content-Range>, and C<ETag>, so supplying any of those fields through the
 constructor or C<header> croaks (and preflight checks the mutable header
 collection again). An application-supplied C<Transfer-Encoding> is removed at

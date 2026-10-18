@@ -311,7 +311,11 @@ async sub _start {
         type   => 'sse.start',
         status => $opts{status} // 200,
     };
-    $event->{headers} = $opts{headers} if exists $opts{headers};
+    if (exists $opts{headers}) {
+        my ($headers, $refused) = PAGI::Utils::_sendable_headers('PAGI::SSE start', $opts{headers});
+        croak $refused if $refused;
+        $event->{headers} = $headers;
+    }
 
     await PAGI::Common::send_in_order($self, $event);
     $self->_set_state('started') unless $self->is_closed;
@@ -1166,9 +1170,11 @@ false only when it is absent; malformed present state croaks.
 =head2 start
 
     await $sse->start;
-    await $sse->start(status => 200, headers => [...]);
+    await $sse->start(status => 200, headers => ['x-custom' => 'value']);
 
 Starts the SSE stream. Called automatically on first send.
+C<headers> takes the same three shapes and value rule as
+L<PAGI::WebSocket/accept>, and is sent as C<[[name, value], ...]> pairs.
 Idempotent - only sends sse.start once. A call made while the stream is
 starting returns the same Future, so several sends made before the stream
 starts produce one sse.start.

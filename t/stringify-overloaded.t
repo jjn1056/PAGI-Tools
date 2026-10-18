@@ -166,8 +166,8 @@ PAGITest::Stringy::check_site(
     run     => sub { sent_response(response('Text', 'x', headers => ['X-A' => $_[0]]))->header('x-a') },
     refused => qr/Header value is required/,
 );
-like(dies { response('Text', 'x', headers => [['X-A', 1]]) },
-    qr/headers must be flat name\/value pairs, not nested pairs/, 'a nested pair is still refused as one');
+is(sent_response(response('Text', 'x', headers => [['X-A', PAGITest::Stringy::Overloaded->new('ok')]]))->header('x-a'),
+    'ok', 'a header object given as a [name, value] pair is sent as its string');
 
 is(sent_response(PAGI::Response->new('x')->content_type(PAGITest::Stringy::Overloaded->new('text/csv')))
     ->header('content-type'), 'text/csv', 'content_type takes an object that stringifies');
