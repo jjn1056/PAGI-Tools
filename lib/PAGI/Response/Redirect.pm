@@ -52,7 +52,6 @@ sub new {
     my $options = PAGI::Response::_parse_options(@pairs);
     my $status = exists($options->{status}) ? $options->{status} : 302;
     $status = _validate_redirect_status($status);
-    _reject_location_header($options->{headers}) if exists $options->{headers};
 
     push @pairs, status => 302 unless exists $options->{status};
     my $title = $REDIRECT_TITLE{0 + $status};
@@ -118,17 +117,6 @@ sub _validate_redirect_status {
         unless defined($status) && !ref($status) && $status =~ /\A\d+\z/
             && $REDIRECT_STATUS{0 + $status};
     return 0 + $status;
-}
-
-sub _reject_location_header {
-    my ($headers) = @_;
-    return unless ref($headers) eq 'ARRAY' && @$headers % 2 == 0;
-    for (my $index = 0; $index < @$headers; $index += 2) {
-        my $name = $headers->[$index];
-        croak 'Redirect Location is response-owned'
-            if defined($name) && !ref($name) && lc($name) eq 'location';
-    }
-    return;
 }
 
 sub _escape_html {

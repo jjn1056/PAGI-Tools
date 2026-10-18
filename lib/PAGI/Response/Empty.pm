@@ -35,7 +35,6 @@ sub new {
     my $options = PAGI::Response::_parse_options(@pairs);
     croak 'Empty response does not permit Content-Type'
         if exists $options->{content_type};
-    _reject_content_type_header($options->{headers}) if exists $options->{headers};
     push @pairs, status => 204 unless exists $options->{status};
     return $class->SUPER::new('', @pairs);
 }
@@ -70,17 +69,6 @@ sub _wire_headers {
         $name ne 'content-length' && $name ne 'transfer-encoding';
     } @$headers;
     return $headers;
-}
-
-sub _reject_content_type_header {
-    my ($headers) = @_;
-    return unless ref($headers) eq 'ARRAY' && @$headers % 2 == 0;
-    for (my $index = 0; $index < @$headers; $index += 2) {
-        my $name = $headers->[$index];
-        croak 'Empty response does not permit Content-Type'
-            if defined($name) && !ref($name) && lc($name) eq 'content-type';
-    }
-    return;
 }
 
 1;
