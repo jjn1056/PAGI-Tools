@@ -170,6 +170,8 @@ subtest 'refusals' => sub {
         qr/requires a producer coderef or a source object with next_chunk/, 'an object without next_chunk');
     like(dies { response('Stream', sub {}, on_close => 'x') },
         qr/Stream on_close must be a code reference/, 'a non-code on_close');
+    like(dies { response('Stream', sub {}, on_close => sub {}, on_close => sub {}) },
+        qr/Duplicate response option 'on_close'/, 'a duplicate on_close, as any duplicate option');
 };
 
 done_testing;

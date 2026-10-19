@@ -119,8 +119,14 @@ subtest 'a failing entry' => sub {
         is($status, 500, "$label: the last-resort 500");
         is(refaddr($reported->[0]), refaddr($error), "$label: on_error saw the original");
         is(refaddr($failure), refaddr($error), "$label: the original is re-raised");
-        like($warnings, [ qr/ErrorHandler handler failed/ ], "$label: diagnosed");
+        like($warnings, [ qr/ErrorHandler catch entry failed/ ], "$label: diagnosed as the catch entry");
     }
+};
+
+subtest 'a failing handler is still diagnosed as the handler' => sub {
+    my (undef, undef, undef, undef, $warnings) = run(error => "db down\n",
+        options => { catch => { 'MyApp::Error' => bare('no') }, handler => sub { die "handler broke\n" } });
+    like($warnings, [ qr/ErrorHandler handler failed: handler broke/ ], 'the handler');
 };
 
 subtest 'a field-required status answered by an entry' => sub {

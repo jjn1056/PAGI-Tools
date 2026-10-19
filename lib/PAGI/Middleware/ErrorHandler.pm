@@ -311,7 +311,8 @@ sub wrap {
             my $reason = defined($handler_failure)
                 ? "$handler_failure" : "it finished without starting a response\n";
             chomp $reason;
-            eval { warn "PAGI ErrorHandler handler failed: $reason\n"; 1 };
+            my $answerer = $error_scope->{'pagi.error'}{answered_by} // 'handler';
+            eval { warn "PAGI ErrorHandler $answerer failed: $reason\n"; 1 };
             await $self->_send_last_resort($wrapped_send) unless $started;
             _reraise($error);
         }
@@ -324,6 +325,7 @@ async sub _answer {
     my ($self, $scope, $receive, $send) = @_;
     my $error = $scope->{'pagi.error'};
     if (my $entry = $self->_catch_entry($error->{exception}, $error->{status}, $error->{http_error})) {
+        $error->{answered_by} = 'catch entry';    # names it if it fails
         my $context = PAGI::ErrorContext->new($scope);
         my $answer = await Future->wrap($entry->(
             PAGI::Request::_Factory::request_for_scope($scope, $receive), $context));
@@ -665,9 +667,10 @@ built-in answer runs. The built-in answer is a UTF-8 octet string with a
 byte-correct C<Content-Length> and C<Cache-Control: no-store>. A handler
 controls its own content and cache headers.
 
-=item * If the handler dies, returns something that is not an application, or
-answers without starting a response, the middleware emits one hardcoded UTF-8
-plain-text 500 with C<no-store>, warns C<PAGI ErrorHandler handler failed: ...>,
+=item * If the handler or a C<catch> entry dies, returns something that is not
+an application, or answers without starting a response, the middleware emits
+one hardcoded UTF-8 plain-text 500 with C<no-store>, warns C<PAGI ErrorHandler
+handler failed: ...> (C<catch entry failed> for an entry),
 and re-raises the original exception. That last resort contains no exception
 or handler data. A failure while sending it propagates without another
 response attempt.

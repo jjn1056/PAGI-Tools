@@ -91,6 +91,8 @@ sub new {
         next unless defined $pairs[$i] && !ref($pairs[$i]) && $pairs[$i] eq 'on_close';
         (undef, $on_close) = splice @pairs, $i, 2;
         croak 'Stream on_close must be a code reference' unless ref($on_close) eq 'CODE';
+        croak "Duplicate response option 'on_close'"
+            if grep { defined && !ref && $_ eq 'on_close' } @pairs[ grep { $_ % 2 == 0 } 0 .. $#pairs ];
         last;
     }
     my $producer = @_ >= 2 && ref($content) eq 'CODE' ? $content
