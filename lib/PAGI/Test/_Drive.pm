@@ -11,29 +11,39 @@ use Time::HiRes ();
 # I/O before giving up, in seconds.
 our $TIMEOUT = 5;
 
-# Returns 1 once $future is ready, driving an event loop for at most $seconds,
-# else 0. A Future whose class runs its own loop (an IO::Async::Future from the
-# application's own loop) runs that loop, as ->get on it does. ->get on a plain
-# pending Future cannot block, so the wait is joined with a Future::IO sleep:
-# wait_any builds its result in the class of the first subfuture that is not a
-# plain Future -- $future's own, else the sleep's -- and ->get runs that loop.
-# The $seconds limit holds when the loop that runs is Future::IO's. Without
-# Future::IO only $future's own loop can make progress, so a plain pending
-# $future returns 0 at once. A failed $future is the caller's to read.
+# Returns 1 once $future is ready, driving Future::IO's event loop for at most
+# $seconds, else 0. ->get on a pending Future blocks only if its class can
+# run a loop, so the wait is joined with a Future::IO sleep: wait_any builds
+# its result in the class of the first subfuture that is not a plain Future,
+# so the sleep goes first, whatever class $future has. Without Future::IO
+# nothing can be waiting on real I/O, so a pending $future cannot progress and
+# this returns 0 at once. A failed $future is the caller's to read.
 sub drive {
     my ($future, $seconds) = @_;
     return 1 if $future->is_ready;
-    unless (eval { require Future::IO; 1 }) {
-        eval { $future->await };
-        return $future->is_ready ? 1 : 0;
-    }
+    return 0 unless eval { require Future::IO; 1 };
 
     my $waiter = Future->wait_any(
-        $future->without_cancel,
         Future::IO->sleep($seconds),
+        $future->without_cancel,
     );
     eval { $waiter->get };
     return $future->is_ready ? 1 : 0;
+}
+
+# A sentence for a timeout message, or '' when Future::IO runs on a real
+# event loop. With Future::IO bound to none, an application that waits on a
+# loop of its own can never progress, and the binding is the application's to
+# supply (PAGI::Test::Client, TESTING AN APPLICATION THAT COMMITS TO AN EVENT
+# LOOP). Future::IO keeps its implementation in $Future::IO::IMPL: unset until
+# one is chosen, its own minimal loop once it is first used without one.
+sub loop_hint {
+    no warnings 'once';
+    my $impl = $Future::IO::IMPL;
+    return '' if defined $impl && $impl ne 'Future::IO::_DefaultImpl';
+    return ' If the application waits on an event loop of its own, bind'
+        . ' Future::IO to that loop in the test; see PAGI::Test::Client,'
+        . ' "TESTING AN APPLICATION THAT COMMITS TO AN EVENT LOOP".';
 }
 
 # Waits for an answer from $attempt, driving the event loop in between.
