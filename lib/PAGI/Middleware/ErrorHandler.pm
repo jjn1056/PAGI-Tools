@@ -113,8 +113,9 @@ is still re-raised to the server after rendering (see L</DESCRIPTION>).
 The status for an exception that claims none, from 400 to 599. A status HTTP
 says must carry a field the built-in answer cannot supply -- 401
 (C<WWW-Authenticate>), 405 (C<Allow>), 407 (C<Proxy-Authenticate>), 426
-(C<Upgrade>) -- needs a C<handler>. An exception's C<status_code> outside
-400-599, or one of those without a handler, answers 500 with a diagnostic.
+(C<Upgrade>) -- needs a C<handler>, or an exception whose C<headers> carry
+that field. An exception's C<status_code> outside 400-599, or one of those
+with neither, answers 500 with a diagnostic.
 
 =item * handler (default: the built-in answer)
 
@@ -224,12 +225,14 @@ sub wrap {
         await $self->_report_error($error, $scope);
         _reraise($error) if $started;
 
+        my ($status, $headers) = $self->_status_for_error($error);
         my $error_scope = {
             %$scope,
             (defined($scope->{type}) ? () : (type => 'http')),
             'pagi.error' => {
                 exception   => $error,
-                status      => $self->_status_for_error($error),
+                status      => $status,
+                headers     => $headers // [],
                 development => await $self->_development_for_request,
             },
         };
@@ -366,13 +369,33 @@ sub _status_for_error {
         $self->_diagnose_rejected_status("status $claimed is outside 400-599");
         return 500;
     }
-    if ($FIELD_REQUIRED{$numeric} && !$self->_has_handler) {
+    my ($headers, $refused) = _exception_headers($error);
+    if (defined $refused) {
+        $self->_diagnose_rejected_status($refused, 'exception headers');
+        return 500;
+    }
+    my $field = $FIELD_REQUIRED{$numeric};
+    if ($field && !$self->_has_handler && !grep { lc($_->[0]) eq lc($field) } @$headers) {
         $self->_diagnose_rejected_status(
-            "status $claimed must carry $FIELD_REQUIRED{$numeric}, which the built-in answer cannot supply",
+            "status $claimed must carry $field, which the built-in answer cannot supply",
         );
         return 500;
     }
-    return $numeric;
+    return ($numeric, $headers);
+}
+
+# The headers an HTTP error carries, from its headers method when it has one:
+# (pairs) or (undef, why they cannot be sent).
+sub _exception_headers {
+    my ($error) = @_;
+    my $given;
+    my $obtained = eval {
+        $given = $error->headers if $error->can('headers');
+        1;
+    };
+    return (undef, 'headers accessor failed') unless $obtained;
+    return ([]) unless defined $given;
+    return PAGI::Utils::_sendable_headers('exception', $given);
 }
 
 # $subject names what was rejected: an exception's status_code claim unless
@@ -488,10 +511,14 @@ class:
 =item * B<A value with C<status_code> is an HTTP error.> The claim is called
 exception-safely and kept when it is an integer from 400 to 599 (and, without
 a handler, not one of the statuses that need a field the built-in answer
-lacks; see C<status>). Throwing, Future-valued, reference-valued, malformed
-and out-of-range claims fall back to 500 with a diagnostic, without replacing
-the original exception. The built-in answer shows its C<client_message> for
-a 4xx. Its own C<to_app>, if it has one, is never called.
+lacks, unless its C<headers> carry it; see C<status>). Throwing,
+Future-valued, reference-valued, malformed and out-of-range claims fall back
+to 500 with a diagnostic, without replacing the original exception, as do
+C<headers> that cannot be sent (a wrong shape, a name that is not an HTTP
+token, a character above 0xFF, a C<headers> method that dies). The built-in
+answer shows its C<client_message> for a 4xx and sends its C<headers>; a
+C<handler>'s answer is its own, and reads them from the exception if it
+wants them. Its own C<to_app>, if it has one, is never called.
 L<PAGI::Exception::HTTP> is the class PAGI-Tools ships:
 
     die PAGI::Exception::HTTP->new(404, 'Resource not found');

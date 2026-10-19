@@ -183,6 +183,12 @@
     on such a status is still refused, and Stream, NDJSON and File still
     refuse the status; Empty remains the class that never carries a
     Content-Type.
+  - PAGI::Exception::HTTP takes headers (new(401, $message, headers =>
+    ['WWW-Authenticate' => ...])), and ErrorHandler's built-in answer sends
+    an HTTP error's headers, from any thrown object with a headers method:
+    a 401, 405, 407 or 426 that carries its required field no longer needs
+    a handler. Headers that cannot be sent make the answer a 500 with a
+    diagnostic.
 
   [Changed]
   - PAGI::Test::Client: an SSE application that returns after sse.start

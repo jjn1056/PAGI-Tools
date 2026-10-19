@@ -111,9 +111,13 @@ sub default {
     my $body = $self->message;
     my $detail = $self->detail;
     $body .= "\n\n$detail" if defined($detail) && length($detail);
+    # The exception's own headers, with no-store unless it sets Cache-Control.
+    my @headers = map { [@$_] } @{ $self->{error}{headers} // [] };
+    unshift @headers, ['Cache-Control' => 'no-store']
+        unless grep { lc($_->[0]) eq 'cache-control' } @headers;
     return PAGI::Response::Text->new($body,
         status  => $self->status,
-        headers => ['Cache-Control' => 'no-store'],
+        headers => \@headers,
     );
 }
 
@@ -197,8 +201,9 @@ True for 400-499 and 500-599.
 ErrorHandler's built-in answer. When the exception is a thrown page (a value
 with C<to_app> and no C<status_code>) whose status is C<status>, that is the
 page itself. Otherwise it is a L<PAGI::Response::Text>: C<message>, followed
-in development by a blank line and C<detail>, with the status and
-C<Cache-Control: no-store>. A handler returns it to leave an error to the
+in development by a blank line and C<detail>, with the status, the
+headers of an HTTP error that has them (L<PAGI::Exception::HTTP/headers>),
+and C<Cache-Control: no-store> unless those set Cache-Control. A handler returns it to leave an error to the
 built-in answer.
 
 =head1 SEE ALSO
