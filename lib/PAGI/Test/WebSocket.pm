@@ -148,13 +148,13 @@ sub _start {
         # is not delivery. Only an app Close or peer Close may keep an active
         # socket waiting for the manual transport outcome after app return.
         if ($conn->is_connected && !$self->{_app_close} && !$self->{_peer_close}) {
-            # The detail PAGI::Server records: an unfinished refusal, a
-            # failure's first line, an accepted socket left without a
-            # closing handshake, or no response at all.
-            my $detail = !$self->{accepted} && $conn->response_started
-                           ? 'refusal started but never completed'
-                       : $future->is_failed
+            # The detail PAGI::Server records. A crash reports its error; a
+            # return, what was left undone: an unfinished refusal, an
+            # accepted socket left without a closing handshake, or no
+            # response at all.
+            my $detail = $future->is_failed
                            ? PAGI::Test::ConnectionState::_detail_from_error(scalar $future->failure)
+                       : !$self->{accepted} && $conn->response_started ? 'refusal started but never completed'
                        : $self->{accepted} ? 'accepted socket left without a closing handshake'
                        : 'no response was started';
             $self->_transport_closed(code => 1011, reason => 'server_error', detail => $detail);

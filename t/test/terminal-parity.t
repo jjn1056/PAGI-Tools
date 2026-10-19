@@ -79,6 +79,21 @@ for my $protocol ('sse', 'websocket') {
     };
 }
 
+for my $protocol ('sse', 'websocket') {
+    subtest "a $protocol refusal the app dies in" => sub {
+        # PAGI-Server Connection.pm, the refusal branches of the HTTP/1.1
+        # tails and _h2_incomplete_scope_end (fix/failure-detail, W4).
+        my $c = ended($protocol => async sub {
+            my ($receive, $send) = @_;
+            await $send->({ type => 'http.response.start', status => 403, headers => [] });
+            await $send->({ type => 'http.response.body', body => 'no', more => 1 });
+            die "the handler broke\nsecond line\n";
+        });
+        is($c->disconnect_reason, 'server_error', 'server_error');
+        is($c->disconnect_detail, 'the handler broke', 'the first line');
+    };
+}
+
 subtest 'a WebSocket app that dies after accept' => sub {
     # PAGI-Server Connection.pm, _handle_websocket_request: a failure after
     # accept ends with _detail_from_error (fix/failure-detail, W1).

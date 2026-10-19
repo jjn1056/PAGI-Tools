@@ -1447,6 +1447,10 @@ may fail -- correctly.
   checked a stream was still open right after the app returned now sees it
   closed. The disconnect reason and detail are PAGI-Server's
   (`PAGI::Test::Client`, SEMANTICS).
+- **A failure reports its error, whatever the stage.** An app that dies in
+  an unfinished refusal has the error's first line as its detail, as any
+  failure does; "refusal started but never completed" is now only for one
+  that returned.
 - **A dying WebSocket app's detail is the error's first line,** without
   Perl's " at FILE line N", as for SSE; it was the whole exception text.
   PAGI-Server records the same on HTTP/1.1 and HTTP/2 from the release

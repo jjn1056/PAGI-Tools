@@ -139,12 +139,11 @@ sub _start {
             # The detail PAGI::Server records for each outcome: a failure's
             # first line, an unclosed stream, an unfinished refusal, or no
             # response at all.
-            my $failed = $future->is_failed;
-            my $detail = $self->{started}
-                           ? ($failed ? PAGI::Test::ConnectionState::_detail_from_error(scalar $future->failure)
-                                      : 'sse.start without sse.close')
+            # A crash reports its error; a return, what was left undone.
+            my $detail = $future->is_failed
+                           ? PAGI::Test::ConnectionState::_detail_from_error(scalar $future->failure)
+                       : $self->{started} ? 'sse.start without sse.close'
                        : $conn->response_started ? 'refusal started but never completed'
-                       : $failed ? PAGI::Test::ConnectionState::_detail_from_error(scalar $future->failure)
                        : 'no response was started';
             $self->_transport_closed(reason => 'server_error', detail => $detail);
         }
