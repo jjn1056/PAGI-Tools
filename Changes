@@ -189,6 +189,11 @@
     a 401, 405, 407 or 426 that carries its required field no longer needs
     a handler. Headers that cannot be sent make the answer a 500 with a
     diagnostic.
+  - ErrorHandler catch => { 404 => sub ($request, $error) {...},
+    'MyApp::Conflict' => sub {...} }: answers by status and exception
+    class before handler, in Starlette's order (an HTTP error's status,
+    then the class and its ancestors, then the status a plain die was
+    given).
 
   [Changed]
   - PAGI::Test::Client: an SSE application that returns after sse.start

@@ -142,6 +142,45 @@ The handler sees the request as this layer sees it: scope keys added further
 in (C<path_params>, CSRF's token) are not there, and its
 answer does not pass through inner middleware's send wrappers.
 
+=item * catch (default: none)
+
+Answers by status and by exception class, before C<handler>:
+
+    catch => {
+        404 => sub { response('JSON', { error => 'not found' }) },
+        'MyApp::Conflict' => sub {
+            my ($request, $error) = @_;
+            response('JSON', { error => $error->exception->reason }, status => 409);
+        },
+        500 => sub { response('Text', 'Sorry.') },
+    }
+
+A key that is an integer from 400 to 599 is a status; any other key is an
+exact package name (no leading C<+>: nothing is loaded). An entry is called
+with the Request a C<handler> gets and the L<PAGI::ErrorContext>, and returns
+what a C<handler> returns; a Response that set no status of its own is sent
+with the error's status. The entry that answers is, in Starlette's order:
+
+=over 4
+
+=item 1. for an HTTP error (a thrown value whose C<status_code> was accepted,
+see L</EXCEPTION HANDLING>), its status;
+
+=item 2. for a blessed value, its class, then its ancestors in method
+resolution order;
+
+=item 3. for any other error (a plain C<die>, a claim that was rejected), the
+status ErrorHandler gave it (C<status>, 500 by default).
+
+=back
+
+With no entry, C<handler> answers, or the built-in answer. A thrown page or
+Response is an answer, not an error, and never reaches C<catch>. An entry for
+a status that must carry a field (see C<status>) answers it as a C<handler>
+does, and is responsible for the field. An entry that dies or returns
+something that is not an application is a handler failure: the last-resort
+500, the original error reported and re-raised.
+
 =back
 
 =cut
@@ -572,7 +611,7 @@ to 500 with a diagnostic, without replacing the original exception, as do
 C<headers> that cannot be sent (a wrong shape, a name that is not an HTTP
 token, a character above 0xFF, a C<headers> method that dies). The built-in
 answer shows its C<client_message> for a 4xx and sends its C<headers>; a
-C<handler>'s answer is its own, and reads them from the exception if it
+C<handler>'s or C<catch> entry's answer is its own, and reads them from the exception if it
 wants them. Its own C<to_app>, if it has one, is never called.
 L<PAGI::Exception::HTTP> is the class PAGI-Tools ships:
 

@@ -143,7 +143,8 @@ PAGI::ErrorContext - The error an ErrorHandler handler is answering
 =head1 DESCRIPTION
 
 L<PAGI::Middleware::ErrorHandler> puts the error it is handling in the scope
-it gives its C<handler>, as C<pagi.error>. This class reads it. It is not an
+it gives its C<handler>, as C<pagi.error>. This class reads it. A C<catch>
+entry is given one as its second argument. It is not an
 exception class: nothing throws it.
 
 =head1 FUNCTIONS
