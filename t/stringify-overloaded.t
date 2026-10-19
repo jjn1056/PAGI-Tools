@@ -26,6 +26,8 @@ PAGITest::Stringy::check_site(
     name    => 'byte body',
     run     => sub { PAGITest::Stringy::body_of(PAGI::Response->new($_[0])) },
     refused => qr/response body must be a defined unblessed scalar of encoded bytes/,
+    # A plain undef is an empty body in the base class (t/response/base-empty.t).
+    skip_undef => 1,
 );
 
 PAGITest::Stringy::check_site(
