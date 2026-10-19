@@ -172,7 +172,8 @@ sub _start {
         # Abandoned: cancel the handler so it cannot resume later, in some
         # other test, with nobody holding its Future.
         $self->{app_future}->cancel;
-        croak "WebSocket handshake did not complete within $PAGI::Test::_Drive::TIMEOUT seconds";
+        croak "WebSocket handshake did not complete within $PAGI::Test::_Drive::TIMEOUT seconds."
+            . PAGI::Test::_Drive::loop_hint();
     }
 
     unless ($self->{accepted} || $self->{refused}) {
@@ -309,7 +310,8 @@ sub _receive_message {
         }
         return;
     });
-    croak "Timeout waiting for $what" if $no_more_data || !@got;
+    croak "Timeout waiting for $what" if $no_more_data;
+    croak "Timeout waiting for $what." . PAGI::Test::_Drive::loop_hint() unless @got;
     return $got[0];
 }
 

@@ -202,7 +202,8 @@ sub _request {
         # Cancel the abandoned application so its pending wait cannot resume
         # later, in some other test, with nobody holding its Future.
         $app_future->cancel;
-        croak "PAGI request did not complete within $PAGI::Test::_Drive::TIMEOUT seconds";
+        croak "PAGI request did not complete within $PAGI::Test::_Drive::TIMEOUT seconds."
+            . PAGI::Test::_Drive::loop_hint();
     }
     my $app_error = $@;
     $scope->{'pagi.connection'}->_deliver_notifications;
@@ -682,7 +683,8 @@ sub _await_lifespan_phase {
             for $result_future, $app_future;
         PAGI::Test::_Drive::drive($either, $PAGI::Test::_Drive::TIMEOUT)
             or die "PAGI lifespan $phase_name did not complete within "
-                . "$PAGI::Test::_Drive::TIMEOUT seconds\n";
+                . "$PAGI::Test::_Drive::TIMEOUT seconds."
+                . PAGI::Test::_Drive::loop_hint() . "\n";
     }
 
     if ($result_future->is_ready) {
@@ -1227,13 +1229,9 @@ response's producer, that awaits real off-loop I/O through L<Future::IO>
 completes in-process. A request still pending after 5 seconds dies with
 C<PAGI request did not complete within 5 seconds>.
 
-The loop driven is L<Future::IO>'s. An application that waits on another
-event loop directly -- a timer on its own L<IO::Async::Loop>, say -- never
-resumes unless Future::IO runs on that loop, and its requests die with that
-timeout. Load the matching implementation in the test, as C<pagi-server>
-binds Future::IO to the loop it serves on:
-
-    use Future::IO::Impl::IOAsync;    # Future::IO runs on IO::Async's loop
+The loop driven is L<Future::IO>'s. An application that waits on an event
+loop of its own needs one line in its test; see L</TESTING AN APPLICATION
+THAT COMMITS TO AN EVENT LOOP>.
 
 =head2 get
 
@@ -1593,6 +1591,27 @@ including here.
 Class method that creates a client with strict lifespan
 (C<< lifespan => 1 >>), calls start, runs your callback, then calls stop.
 Exceptions propagate.
+
+=head1 TESTING AN APPLICATION THAT COMMITS TO AN EVENT LOOP
+
+PAGI's contract is Futures. The client waits on an application by running
+L<Future::IO>'s event loop, which is all that code waiting through Future::IO
+needs. Middleware, frameworks and applications meant to be shared should wait
+that way, since every PAGI server drives Future::IO.
+
+An application may instead wait on an event loop of its own -- a timer on its
+own L<IO::Async::Loop>, or a client library built on that loop. Then the
+application owns that choice and its hookups: bind Future::IO to the same
+loop at the top of the test, as C<pagi-server> binds it to the loop it serves
+on:
+
+    use Future::IO::Impl::IOAsync;    # this application waits on IO::Async
+
+With the binding, every wait runs that loop, each with its timeout: requests,
+the WebSocket and SSE handshakes and receives, and the lifespan phases.
+Without it nothing runs the application's loop, so each of those waits dies at
+its timeout. While Future::IO is bound to no event loop, the timeout message
+ends with a pointer to this section.
 
 =head1 SEE ALSO
 

@@ -392,6 +392,14 @@
     Tutorial link to one statement of each rule instead of restating it.
 
   [Breaking -- see UPGRADING.md]
+  - PAGI::Test::Client no longer runs an application's own event loop
+    for an HTTP request: 0.002002's ->get on the app's Future ran an
+    IO::Async loop the app waited on, for requests only. An application
+    that waits on a loop of its own binds Future::IO to it in the test
+    (use Future::IO::Impl::IOAsync), and then requests, WebSocket and SSE
+    waits and lifespan all run it. While Future::IO is bound to no event
+    loop, a test-client timeout says so and points to the new POD section
+    TESTING AN APPLICATION THAT COMMITS TO AN EVENT LOOP.
   - body_stream over max_bytes is a BodyError 413 too_large (it was a plain
     die, so a 500), or 400 invalid_body past the request's own
     Content-Length; the message no longer names the limit, which moves to

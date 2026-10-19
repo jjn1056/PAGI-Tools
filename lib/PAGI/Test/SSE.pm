@@ -160,7 +160,8 @@ sub _start {
         # Abandoned: cancel the handler so it cannot resume later, in some
         # other test, with nobody holding its Future.
         $self->{app_future}->cancel;
-        croak "SSE stream did not start within $PAGI::Test::_Drive::TIMEOUT seconds";
+        croak "SSE stream did not start within $PAGI::Test::_Drive::TIMEOUT seconds."
+            . PAGI::Test::_Drive::loop_hint();
     }
 
     unless ($self->{started} || $self->{refused}) {
@@ -232,7 +233,7 @@ sub receive_event {
         return undef if $self->{closed};
         return;
     });
-    croak "Timeout waiting for SSE event" unless @got;
+    croak "Timeout waiting for SSE event." . PAGI::Test::_Drive::loop_hint() unless @got;
     return $got[0];
 }
 

@@ -31,6 +31,21 @@ sub drive {
     return $future->is_ready ? 1 : 0;
 }
 
+# A sentence for a timeout message, or '' when Future::IO runs on a real
+# event loop. With Future::IO bound to none, an application that waits on a
+# loop of its own can never progress, and the binding is the application's to
+# supply (PAGI::Test::Client, TESTING AN APPLICATION THAT COMMITS TO AN EVENT
+# LOOP). Future::IO keeps its implementation in $Future::IO::IMPL: unset until
+# one is chosen, its own minimal loop once it is first used without one.
+sub loop_hint {
+    no warnings 'once';
+    my $impl = $Future::IO::IMPL;
+    return '' if defined $impl && $impl ne 'Future::IO::_DefaultImpl';
+    return ' If the application waits on an event loop of its own, bind'
+        . ' Future::IO to that loop in the test; see PAGI::Test::Client,'
+        . ' "TESTING AN APPLICATION THAT COMMITS TO AN EVENT LOOP".';
+}
+
 # Waits for an answer from $attempt, driving the event loop in between.
 # $attempt returns a one-element list to answer (the element may be undef)
 # or the empty list to keep waiting. Returns the answer, or the empty list
