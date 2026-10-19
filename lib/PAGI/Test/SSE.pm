@@ -135,12 +135,16 @@ sub _start {
         # Successful close/refusal capture already ended the scope. A
         # validator-complete event whose body capture failed has not.
         if ($conn->is_connected) {
-            # A started stream the application returned from without
-            # sse.close is an incomplete response; the detail is the one
-            # PAGI::Server records for it.
-            my $detail = $future->is_failed ? scalar($future->failure)
-                       : $self->{started} ? 'sse.start without sse.close'
-                       : undef;
+            # The detail PAGI::Server records for each outcome: a failure's
+            # first line, an unclosed stream, an unfinished refusal, or no
+            # response at all.
+            my $failed = $future->is_failed;
+            my $detail = $self->{started}
+                           ? ($failed ? _detail_from_error(scalar $future->failure)
+                                      : 'sse.start without sse.close')
+                       : $conn->response_started ? 'refusal started but never completed'
+                       : $failed ? _detail_from_error(scalar $future->failure)
+                       : 'no response was started';
             $self->_transport_closed(reason => 'server_error', detail => $detail);
         }
         $conn->_deliver_notifications;
@@ -280,6 +284,18 @@ sub _transport_closed {
 sub is_closed {
     my ($self) = @_;
     return $self->{closed};
+}
+
+
+# A failure's detail, as PAGI::Server records it: the first line, without
+# Perl's " at FILE line N." tail.
+sub _detail_from_error {
+    my ($error) = @_;
+    my ($first) = split /\n/, ($error // '');
+    return undef unless defined $first;
+    $first =~ s/ at \S+ line \d+\.?\s*\z//;
+    $first =~ s/\s+\z//;
+    return length $first ? $first : undef;
 }
 
 1;

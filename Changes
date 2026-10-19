@@ -477,6 +477,13 @@
     It used to build the class with new and no arguments, ignoring BUILD_APP.
 
   [Fixed]
+  - PAGI::Test::Client records the disconnect detail PAGI::Server records:
+    an SSE app's failure as its first line, without " at FILE line N"; an
+    SSE app that returns without starting, "no response was started"; a
+    refusal left unfinished, "refusal started but never completed"; a
+    WebSocket app that returns from an accepted socket without a closing
+    handshake, "accepted socket left without a closing handshake". It
+    recorded the whole exception, or no detail.
   - A Content-Type given in a response's headers option, or set with
     header('Content-Type', ...), goes through the class's content_type
     rule like the content_type option: Text and HTML keep their charset
