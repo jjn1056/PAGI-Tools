@@ -1,7 +1,10 @@
-use v5.40;
+use strict;
+use warnings;
 use Test2::V0;
 use PAGI::Test::Client;
 use FindBin qw($Bin);
+
+BEGIN { plan skip_all => 'examples/framework-wrap-style requires Perl 5.40' if $] < 5.040 }
 
 my $app = do("$Bin/../examples/framework-wrap-style/app.pl")
     or die "app: $@";
