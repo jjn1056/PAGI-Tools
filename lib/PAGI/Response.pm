@@ -95,6 +95,11 @@ Response object. Each invocation derives its own plain delivery values before
 response start, so deliberate mutation affects later invocations without
 splitting an invocation already in progress.
 
+A L<PAGI::Pages> page is an application, not a Response; its
+C<response_for($request)> gives a fresh Response for the request, which is
+the value to change when a framework post-processes a handler's page
+(L<PAGI::Pages/APPLICATION INVOCATION>).
+
 A Response is not a terminal deployed root. C<to_app> produces a native
 application that emits ordinary HTTP response events. It accepts HTTP scopes
 and can emit a preaccept WebSocket refusal or prestart SSE refusal on the

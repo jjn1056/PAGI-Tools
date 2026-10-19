@@ -1181,6 +1181,16 @@ Response. A WebSocket or SSE handler may pass the application directly to
 C<deny> or C<decline>; C<response_for> remains available when explicit local
 materialization is useful.
 
+A page is an application, shared between requests; C<response_for> is the
+one step that turns it into a response value, fresh on each call and
+negotiated for the request (a L<PAGI::Request>, a WebSocket or SSE object,
+or a raw scope hash). A framework that post-processes whatever its handlers
+return, adding headers or cookies say, takes that step first:
+
+    $value = $value->response_for($request) if $value->can('response_for');
+
+See L<PAGI::Pages::Application/response_for>.
+
 Factory C<headers> options take the shapes in L</"HEADERS AND CACHE POLICY">. For request
 negotiation, Pages builds an isolated metadata view and reads repeated request
 fields through L<PAGI::Headers>; it does not reuse or mutate the source scope's
