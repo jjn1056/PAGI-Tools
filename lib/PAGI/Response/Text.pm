@@ -35,7 +35,8 @@ the caller must choose another encoding explicitly.
 =head2 Content type
 
 The body is always UTF-8, so a custom content type without a charset gets
-C<; charset=utf-8>, whether it is given to the constructor or set later:
+C<; charset=utf-8>, however it is given (the C<content_type> option, a
+Content-Type pair in C<headers>, C<content_type> or C<header> later):
 C<< response('Text', $s, content_type => 'text/csv') >> sends
 C<text/csv; charset=utf-8>. A type that already names a charset is kept as
 given, and JSON types (C<application/json>, C<*+json>) get none, since JSON is

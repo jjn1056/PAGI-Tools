@@ -255,7 +255,13 @@ C<header($name, $value)> appends and preserves repeated-field order;
 C<content_type> replaces Content-Type, and C<content_type(undef)> gives back the
 class's default type (Text's C<text/plain; charset=utf-8>, for one), so a typed
 body always says what it is; Empty and File have none, File's coming from the
-file name. The C<*_try> setters are chainable and
+file name. However a Content-Type arrives -- the C<content_type> option, a
+Content-Type pair in the C<headers> option, or C<header('Content-Type', ...)>
+later -- it goes through the class's C<content_type>, so it replaces the one
+already there and keeps the class's rule: Text and HTML add their charset,
+Empty refuses one. Given both the option and a pair, the option wins. A
+Content-Type added straight to the container returned by C<headers> bypasses
+the rule. The C<*_try> setters are chainable and
 do not overwrite an explicit value. C<body> is read-only encoded bytes for
 buffered responses and croaks for File and Stream. C<is_buffered> reports the
 memory strategy, independently of protocol adaptation.
@@ -449,6 +455,11 @@ sub header {
     if (defined(my $refused = PAGI::Utils::_header_name_refusal($name))) {
         croak $refused;
     }
+    # A Content-Type set any way goes through the class's own content_type
+    # rule (Text and HTML keep their charset, Empty refuses one), and
+    # replaces rather than adds: a response has one type.
+    return $self->content_type($value)
+        if defined $value && lc($name) eq 'content-type';
     my ($bytes, $not) = PAGI::Utils::_sendable_header_value($value);
     croak 'Header value is required' if ($not // '') eq 'not a string';
     croak "header '$name' value contains a character above 0xFF: encode it first" if $not;

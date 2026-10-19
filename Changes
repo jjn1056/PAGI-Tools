@@ -456,6 +456,12 @@
     It used to build the class with new and no arguments, ignoring BUILD_APP.
 
   [Fixed]
+  - A Content-Type given in a response's headers option, or set with
+    header('Content-Type', ...), goes through the class's content_type
+    rule like the content_type option: Text and HTML keep their charset
+    (response('Text', $s, headers => ['Content-Type' => 'text/csv']) sent
+    text/csv with no charset), Empty refuses one, and header() replaces
+    the type rather than adding a second.
   - PAGI::Middleware::MethodOverride reads the _method field of a
     urlencoded or multipart POST body, as its documentation always said
     (and as Rails and Laravel do); it read only the header and the query
