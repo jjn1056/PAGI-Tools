@@ -31,6 +31,12 @@ PAGI::Response::Stream - reusable backpressured HTTP streaming response
         content_type => 'text/plain; charset=utf-8',
     );
 
+    # Or the content is a source: any object with next_chunk.
+    my $rows = response('Stream', $cursor,
+        on_close     => sub { $cursor_owner->release },
+        content_type => 'text/csv; charset=utf-8',
+    );
+
 =head1 DESCRIPTION
 
 Stream stores response configuration and a producer callback. It creates a
@@ -341,11 +347,15 @@ sub _cancel_outcome {
 
 =head2 new
 
-    PAGI::Response::Stream->new($producer, %common_response_options)
+    PAGI::Response::Stream->new($producer, %options)
+    PAGI::Response::Stream->new($source, %options)
 
-The first argument must be a Writer producer coderef. C<status>,
-C<content_type>, and C<headers> (any shape L<PAGI::Response/new> takes) use
-the common Response contract. Stream
+The first argument is a Writer producer coderef, or a source: an object with
+C<next_chunk> (L</Streaming from a source>). C<status>, C<content_type>, and
+C<headers> (any shape L<PAGI::Response/new> takes) use the common Response
+contract. C<on_close> is Stream's own: a coderef called once however the
+stream ends (completion, an error, the client leaving), and waited for if it
+returns a Future, as a producer's C<< $writer->on_close >> is. Stream
 does not calculate Content-Length; an explicitly supplied value is retained as
 the application's delivery promise.
 
@@ -381,6 +391,23 @@ value may serve several requests at once.
 It must return encoded bytes, as every PAGI body is. C<write> refuses a string
 holding wide characters, but it cannot tell a Latin-1 string from binary data,
 so encode text yourself (for example with C<Encode::encode('UTF-8', $text)>).
+
+=head2 Streaming from a source
+
+    my $response = response('Stream', $source, on_close => sub { ... });
+
+A source is any object with C<next_chunk>, which returns the next value,
+immediately or as a Future, or C<undef> at the end. Stream pulls one value,
+writes it, and only then pulls the next, so a slow client slows the source:
+the backpressure L<PAGI::Response::Writer/pipe_from> has. It stops pulling
+once the client has disconnected. On a plain Stream each value is bytes (an
+empty string is skipped); on a format subclass, such as
+L<PAGI::Response::NDJSON>, each value is an item, written with
+C<write_item>. A C<next_chunk> that dies or fails is a producer error.
+
+Stream calls nothing but C<next_chunk> on a source: a source may be an object
+the response does not own, such as a feed other requests share, so a C<close>
+of its own is never called. Cleanup is the C<on_close> option.
 
 =head1 DISCONNECTS AND FAILURES
 

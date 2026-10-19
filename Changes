@@ -194,6 +194,11 @@
     class before handler, in Starlette's order (an HTTP error's status,
     then the class and its ancestors, then the status a plain die was
     given).
+  - A Stream's content may be a source, any object with next_chunk:
+    response('Stream', $source) pulls it one value at a time, as
+    Starlette's StreamingResponse iterates its content (NDJSON takes a
+    source of items). Stream calls nothing else on a source; the on_close
+    option is its cleanup, for a source or a producer.
 
   [Changed]
   - PAGI::Test::Client: an SSE application that returns after sse.start
