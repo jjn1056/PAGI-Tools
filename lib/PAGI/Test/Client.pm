@@ -1499,7 +1499,8 @@ style, once the application has failed) or from L<PAGI::Test::SSE/close>.
 
 =head1 SEMANTICS
 
-How an SSE or WebSocket session ends, as PAGI::Server ends it. The reason
+How an SSE or WebSocket session ends: as PAGI::Server ends it, except where
+marked below. The reason
 and detail are on the scope's C<pagi.connection> (a
 L<PAGI::Test::ConnectionState>: C<disconnect_reason>, C<disconnect_detail>);
 a clean end records no reason. Events the application sent before the end
@@ -1520,13 +1521,22 @@ stay readable after C<is_closed> is true.
     the app sends websocket.close        true       (none)        (none); close_code is the app's
     the app returns, no closing handshake true      server_error  accepted socket left without a
                                                                   closing handshake; close_code 1011
-    the app dies                         true       server_error  the error
+    the app dies                         true       server_error  the exception's text, as raised (*)
+    the app returns without accepting    (websocket server_error  no response was started
+      or refusing                         dies)
     the app refuses                      true       (none)        (none); refused and response say so
     a refusal left unfinished            true       server_error  refusal started but never completed
     the test calls close                 true       (none)        (none); close_code is the test's
 
 An app that dies or returns before C<sse> or C<websocket> returns makes that
-call die. These are versioned behaviour: a change to any of them gets an
+call die.
+
+(*) Not PAGI::Server's value. For a WebSocket app that dies, PAGI::Server's
+HTTP/1.1 path records the end it finds (C<accepted socket left without a
+closing handshake>, or C<no response was started>) and its HTTP/2 path the
+error's first line; until those agree, the test client keeps the exception.
+
+These are versioned behaviour: a change to any of them gets an
 entry in F<UPGRADING.md>, and F<t/test/terminal-parity.t> pins them against
 PAGI::Server's values.
 

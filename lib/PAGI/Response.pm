@@ -241,9 +241,10 @@ body has no Content-Type unless one is given, as in Starlette's base
 C<Response>.
 
 A status whose HTTP semantics forbid content (1xx, 204, 205, 304) takes an
-empty body, in this class and in every buffered class built on it (Text,
-HTML, Problem, Redirect): C<< response('Text', '', status => 204) >> is a
-204. A body with bytes on such a status croaks ("response body is forbidden
+empty body, in this class and in Text and HTML:
+C<< response('Text', '', status => 204) >> is a 204. A buffered subclass
+gets the same rule. Problem and Redirect never have an empty body (a
+problem document, a redirect page), so they never take such a status. A body with bytes on such a status croaks ("response body is forbidden
 for status N"), at construction or when C<status> is set later; so does JSON,
 whose C<undef> renders as C<null>, and so do Stream, NDJSON and File, which
 always have a body to deliver. L<PAGI::Response::Empty> remains the class for

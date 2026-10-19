@@ -147,13 +147,15 @@ sub _start {
         # is not delivery. Only an app Close or peer Close may keep an active
         # socket waiting for the manual transport outcome after app return.
         if ($conn->is_connected && !$self->{_app_close} && !$self->{_peer_close}) {
-            # The detail PAGI::Server records: an unfinished refusal, or an
-            # accepted socket left without a closing handshake.
+            # The detail PAGI::Server records: an unfinished refusal, an
+            # accepted socket left without a closing handshake, or no
+            # response at all. A failure keeps its own text (an open
+            # question: the server's HTTP/1.1 and HTTP/2 paths differ).
             my $detail = !$self->{accepted} && $conn->response_started
                            ? 'refusal started but never completed'
                        : $future->is_failed ? scalar($future->failure)
                        : $self->{accepted} ? 'accepted socket left without a closing handshake'
-                       : undef;
+                       : 'no response was started';
             $self->_transport_closed(code => 1011, reason => 'server_error', detail => $detail);
         }
         $conn->_deliver_notifications;

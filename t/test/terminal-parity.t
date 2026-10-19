@@ -79,6 +79,16 @@ for my $protocol ('sse', 'websocket') {
     };
 }
 
+subtest 'a WebSocket app that returns without accepting or refusing' => sub {
+    # Connection.pm:8216.
+    my $c = ended(websocket => async sub {
+        my ($receive, $send) = @_;
+        await $receive->();
+    });
+    is($c->disconnect_reason, 'server_error', 'server_error');
+    is($c->disconnect_detail, 'no response was started', 'no response was started');
+};
+
 subtest 'a WebSocket app that returns without a closing handshake' => sub {
     # Connection.pm:8261.
     my $c = ended(websocket => async sub {
