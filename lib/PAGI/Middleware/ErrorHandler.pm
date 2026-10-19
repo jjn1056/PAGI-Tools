@@ -8,6 +8,7 @@ use Encode qw(encode);
 use Future;
 use Future::AsyncAwait;
 use Scalar::Util 'blessed';
+use mro ();
 use PAGI::Request::_Factory ();
 use PAGI::ErrorContext ();
 use PAGI::Utils ();
@@ -247,7 +248,7 @@ sub wrap {
         await $self->_report_error($error, $scope);
         _reraise($error) if $started;
 
-        my ($status, $headers) = $self->_status_for_error($error);
+        my ($status, $headers, $http_error) = $self->_status_for_error($error);
         my $error_scope = {
             %$scope,
             (defined($scope->{type}) ? () : (type => 'http')),
@@ -255,6 +256,7 @@ sub wrap {
                 exception   => $error,
                 status      => $status,
                 headers     => $headers // [],
+                http_error  => $http_error ? 1 : 0,
                 development => await $self->_development_for_request,
             },
         };
@@ -281,29 +283,59 @@ sub wrap {
 
 async sub _answer {
     my ($self, $scope, $receive, $send) = @_;
+    my $error = $scope->{'pagi.error'};
+    if (my $entry = $self->_catch_entry($error->{exception}, $error->{status}, $error->{http_error})) {
+        my $context = PAGI::ErrorContext->new($scope);
+        my $answer = await Future->wrap($entry->(
+            PAGI::Request::_Factory::request_for_scope($scope, $receive), $context));
+        return await _send_answer($answer, $context, 'ErrorHandler catch entry', $scope, $receive, $send);
+    }
     if (my $app = $self->{handler_app}) {
         return await Future->wrap($app->($scope, $receive, $send));
     }
     my $context = PAGI::ErrorContext->new($scope);
-    my $answer = $context->default;
     if (my $handler = $self->{handler_code}) {
-        $answer = await Future->wrap($handler->(PAGI::Request::_Factory::request_for_scope($scope, $receive)));
-        PAGI::Utils::_validate_app_value($answer,
-            'ErrorHandler handler must return a PAGI application:');
-        # A Response that set no status of its own answers with the error's,
-        # set on a copy of the response start: the Response itself may be
-        # shared, and must not keep this error's status for the next one.
-        if (blessed($answer) && $answer->isa('PAGI::Response') && !$answer->has_status) {
-            my ($status, $inner) = ($context->status, $send);
-            $send = async sub {
-                my ($event) = @_;
-                $event = { %$event, status => $status }
-                    if ($event->{type} // '') eq 'http.response.start';
-                await Future->wrap($inner->($event));
-            };
-        }
+        my $answer = await Future->wrap($handler->(PAGI::Request::_Factory::request_for_scope($scope, $receive)));
+        return await _send_answer($answer, $context, 'ErrorHandler handler', $scope, $receive, $send);
+    }
+    return await PAGI::Utils::invoke_app($context->default, $scope, $receive, $send);
+}
+
+# Sends what a handler or a catch entry answered. A Response that set no
+# status of its own answers with the error's, set on a copy of the response
+# start: the Response itself may be shared, and must not keep this error's
+# status for the next one.
+async sub _send_answer {
+    my ($answer, $context, $label, $scope, $receive, $send) = @_;
+    PAGI::Utils::_validate_app_value($answer, "$label must return a PAGI application:");
+    if (blessed($answer) && $answer->isa('PAGI::Response') && !$answer->has_status) {
+        my ($status, $inner) = ($context->status, $send);
+        $send = async sub {
+            my ($event) = @_;
+            $event = { %$event, status => $status }
+                if ($event->{type} // '') eq 'http.response.start';
+            await Future->wrap($inner->($event));
+        };
     }
     return await PAGI::Utils::invoke_app($answer, $scope, $receive, $send);
+}
+
+# Starlette's order: an HTTP error's status, then the exception's class and
+# its ancestors in method resolution order, then the status any other error
+# was given. A thrown page or Response is an answer, not an error, and never
+# reaches catch.
+sub _catch_entry {
+    my ($self, $exception, $status, $http_error) = @_;
+    my $catch = $self->{catch} or return undef;
+    return undef if PAGI::ErrorContext::_is_page($exception);
+    return $catch->{$status} if $http_error && $catch->{$status};
+    if (blessed($exception)) {
+        for my $class (@{ mro::get_linear_isa(ref $exception) }) {
+            return $catch->{$class} if $catch->{$class};
+        }
+    }
+    return $catch->{$status} if !$http_error && $catch->{$status};
+    return undef;
 }
 
 # A failed Future must carry a true exception, and Future tests it for
@@ -397,13 +429,14 @@ sub _status_for_error {
         return 500;
     }
     my $field = $FIELD_REQUIRED{$numeric};
-    if ($field && !$self->_has_handler && !grep { lc($_->[0]) eq lc($field) } @$headers) {
+    if ($field && !$self->_has_handler && !$self->_catch_entry($error, $numeric, 1)
+        && !grep { lc($_->[0]) eq lc($field) } @$headers) {
         $self->_diagnose_rejected_status(
             "status $claimed must carry $field, which the built-in answer cannot supply",
         );
         return 500;
     }
-    return ($numeric, $headers);
+    return ($numeric, $headers, 1);
 }
 
 # The headers an HTTP error carries, from its headers method when it has one:
