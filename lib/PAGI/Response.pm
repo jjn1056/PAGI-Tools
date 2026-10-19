@@ -219,6 +219,17 @@ and C<response('NAME'): CLASS is not a PAGI::Response> for a helper such as
 L<PAGI::Response::Writer>. The base byte response is
 C<< PAGI::Response->new($bytes, %options) >>.
 
+=head2 status_forbids_body
+
+    use PAGI::Response qw(status_forbids_body);
+
+    my $bodyless = status_forbids_body(204);    # true
+
+Returns true when an HTTP status forbids response content: 1xx, 204, 205
+and 304 (RFC 9110). Every response class applies this rule, refusing a body
+with bytes on those statuses; a framework deciding what to send can ask the
+same question. Takes an integer status.
+
 =head2 new
 
     PAGI::Response->new($bytes, %options)
@@ -476,7 +487,7 @@ application.
 =cut
 
 my %KNOWN_OPTIONS = map { $_ => 1 } qw(status content_type headers);
-our @EXPORT_OK = qw(response);
+our @EXPORT_OK = qw(response status_forbids_body);
 our %EXPORT_TAGS = (all => \@EXPORT_OK);
 
 # Resolve NAME under PAGI::Response:: (or exactly, with a leading '+'), load
@@ -525,7 +536,7 @@ sub render { $_[1] // '' }
 sub _body_default_content_type {
     my ($self) = @_;
     my $default = $self->default_content_type;
-    return undef if defined $self->{_status} && _status_forbids_body($self->{_status});
+    return undef if defined $self->{_status} && status_forbids_body($self->{_status});
     return undef
         if defined $default && $default eq 'application/octet-stream'
         && $self->_has_empty_buffered_body;
@@ -545,7 +556,7 @@ sub status {
     return $self->{_status} // 200 if @_ == 1;
     _validate_status($code);
     croak "response body is forbidden for status $code"
-        if _status_forbids_body($code) && !$self->_allows_body_forbidden_status;
+        if status_forbids_body($code) && !$self->_allows_body_forbidden_status;
     $self->{_status} = $code;
     return $self;
 }
@@ -780,7 +791,8 @@ sub _validate_status {
     return;
 }
 
-sub _status_forbids_body {
+# RFC 9110: informational, 204, 205 and 304 responses carry no content.
+sub status_forbids_body {
     my ($status) = @_;
     return $status >= 100 && $status < 200 || $status == 204 || $status == 205 || $status == 304;
 }

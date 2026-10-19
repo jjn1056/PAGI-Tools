@@ -7,6 +7,9 @@
   UPGRADING-REFERENCE.md has the details. Needs PAGI::Server 0.003000.
 
   [New]
+  - PAGI::Response exports status_forbids_body($status): true for the
+    statuses that carry no content (1xx, 204, 205, 304), the rule every
+    response class applies.
   - PAGI::App: an optional base class for applications, in
     Plack::Component's shape (new, prepare_app, to_app, call), whose
     run_if_script, the module's last line in place of 1;, makes
