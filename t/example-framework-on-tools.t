@@ -191,4 +191,30 @@ subtest 'the OpenAPI document refuses colliding paths and keeps operationIds uni
         'distinct operationIds across methods and placements';
 };
 
+# on_error: the most specific class answers, whatever the declaration order
+# (Tiny's on_error is ErrorHandler's catch), and a status works as a key.
+subtest 'on_error precedence' => sub {
+    package CatchProbe;
+    use Test2::V0;
+    use PAGI::Exception::HTTP;
+    use feature 'signatures';
+    no warnings 'experimental::signatures';
+    use lib "$FindBin::Bin/../examples/framework-on-tools/lib";
+    use Tiny;
+
+    package CatchProbe::General  { sub new { bless {}, shift } }
+    package CatchProbe::Specific { our @ISA = ('CatchProbe::General') }
+    package CatchProbe;
+
+    on_error 'CatchProbe::General'  => sub ($req, $exc) { response('Text', 'general', status => 409) };
+    on_error 'CatchProbe::Specific' => sub ($req, $exc) { response('Text', 'specific', status => 409) };
+    on_error 404                    => sub ($req, $exc) { response('Text', 'by status', status => 404) };
+    get '/specific' => sub ($req) { die CatchProbe::Specific->new };
+    get '/missing'  => sub ($req) { die PAGI::Exception::HTTP->new(404) };
+    my $probe = PAGI::Test::Client->new(app => tiny);
+
+    is($probe->get('/specific')->text, 'specific', 'the most specific class answers, though its parent is declared first');
+    is($probe->get('/missing')->text, 'by status', 'a status key answers an HTTP error');
+};
+
 done_testing;
