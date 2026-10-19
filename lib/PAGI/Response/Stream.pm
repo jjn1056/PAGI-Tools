@@ -32,9 +32,13 @@ PAGI::Response::Stream - reusable backpressured HTTP streaming response
     );
 
     # Or the content is a source: any object with next_chunk.
-    my $rows = response('Stream', $cursor,
-        on_close     => sub { $cursor_owner->release },
-        content_type => 'text/csv; charset=utf-8',
+    package Countdown {
+        sub new        { my ($class, $n) = @_; return bless { n => $n }, $class }
+        sub next_chunk { my ($self) = @_; return $self->{n} ? $self->{n}-- . "\n" : undef }
+    }
+    my $countdown = response('Stream', Countdown->new(3),
+        on_close     => sub { print STDERR "countdown finished\n" },
+        content_type => 'text/plain; charset=utf-8',
     );
 
 =head1 DESCRIPTION
