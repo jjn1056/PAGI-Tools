@@ -13,12 +13,13 @@ use PAGI::Routing  qw(route);
 # ---------------------------------------------------------------------------
 # A pull source over a child process's stdout.
 #
-# This is the whole adapter. Future::IO->read issues a read only when the
-# consumer asks for one, so backpressure is structural: while the client is
-# slow the pipe fills and the child blocks on write. Nothing accumulates in
-# this process. It names no event loop, so the same code runs under any
-# conforming PAGI server -- the server binds the Future::IO implementation
-# (pagi-server does this for you).
+# This is the whole adapter, and it is the response's content: Stream pulls
+# next_chunk and writes each chunk, as Starlette's StreamingResponse iterates
+# its content. Future::IO->read issues a read only when the stream asks for
+# one, so backpressure is structural: while the client is slow the pipe fills
+# and the child blocks on write. Nothing accumulates in this process. It names
+# no event loop, so the same code runs under any conforming PAGI server -- the
+# server binds the Future::IO implementation (pagi-server does this for you).
 # ---------------------------------------------------------------------------
 package ProcessSource {
     sub new {
@@ -26,8 +27,8 @@ package ProcessSource {
         return bless { fh => $args{fh}, size => $args{size} // 65536 }, $class;
     }
 
-    # PAGI::Response::Writer::pipe_from needs exactly this one method:
-    # bytes, or undef at end of stream, immediately or as a Future.
+    # A source needs exactly this one method: bytes, or undef at end of
+    # stream, immediately or as a Future.
     sub next_chunk {
         my ($self) = @_;
         return Future::IO->read($self->{fh}, $self->{size});
@@ -67,17 +68,13 @@ async sub run_report ($request) {
 
     my ($fh, $pid) = spawn_reader(@$command);
 
-    return response('Stream',
-        async sub ($writer) {
-            # Runs exactly once, however this stream ends: normal completion,
-            # a producer error, or the client vanishing mid-stream. That is
-            # what stops the child when someone closes the browser tab.
-            $writer->on_close(sub {
-                kill 'TERM', $pid;
-                return Future::IO->waitpid($pid);
-            });
-
-            await $writer->pipe_from(ProcessSource->new(fh => $fh));
+    return response('Stream', ProcessSource->new(fh => $fh),
+        # Runs exactly once, however this stream ends: normal completion, a
+        # failed read, or the client vanishing mid-stream. That is what stops
+        # the child when someone closes the browser tab.
+        on_close => sub {
+            kill 'TERM', $pid;
+            return Future::IO->waitpid($pid);
         },
         content_type => 'text/plain; charset=utf-8',
     );

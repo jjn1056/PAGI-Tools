@@ -452,7 +452,7 @@ sub _resolve_class {
         unless defined $name && !ref $name
             && $name =~ /\A\+?[A-Za-z_]\w*(?:::[A-Za-z_]\w*)*\z/;
     return substr($name, 1) if substr($name, 0, 1) eq '+';
-    return $name if index($name, "${namespace}::") == 0;
+    return $name if $name eq $namespace || index($name, "${namespace}::") == 0;
     return "${namespace}::$name";
 }
 
@@ -527,7 +527,7 @@ sub _package_is_defined {
 # refused (a name compiled code mentioned), is left for the caller's own
 # check to report.
 sub _load_class {
-    my ($class, $caller, $usable) = @_;
+    my ($class, $caller, $usable, $given) = @_;
     (my $file = "$class.pm") =~ s{::}{/}g;
     my $failed = exists($INC{$file}) && !defined($INC{$file});
     my $defined = !$failed && _package_is_defined($class);
@@ -538,6 +538,12 @@ sub _load_class {
     # require's own " at FILE line N." names this line, not the caller's.
     (my $error = $@) =~ s/ at \S+ line \d+\.\n\z//;
     return undef if $defined && $error =~ /\ACan't locate \Q$file\E in \@INC/;
+    # A short name with :: that was prefixed and not found was most likely
+    # meant as a package name of its own.
+    return "$caller: cannot load $class: no file $file in \@INC;"
+        . " for the package $given itself, write '+$given'"
+        if defined($given) && $given =~ /::/ && substr($given, 0, 1) ne '+'
+            && $given ne $class && $error =~ /\ACan't locate \Q$file\E in \@INC/;
     return "$caller: cannot load $class: $error";
 }
 

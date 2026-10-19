@@ -4,6 +4,7 @@ use strict;
 use warnings;
 
 use Carp qw(croak);
+use Scalar::Util qw(blessed);
 use Future;
 use Future::AsyncAwait;
 
@@ -27,6 +28,16 @@ PAGI::Response::Stream - reusable backpressured HTTP streaming response
             await $writer->write("one\n");
             await $writer->write_text("two\n");
         },
+        content_type => 'text/plain; charset=utf-8',
+    );
+
+    # Or the content is a source: any object with next_chunk.
+    package Countdown {
+        sub new        { my ($class, $n) = @_; return bless { n => $n }, $class }
+        sub next_chunk { my ($self) = @_; return $self->{n} ? $self->{n}-- . "\n" : undef }
+    }
+    my $countdown = response('Stream', Countdown->new(3),
+        on_close     => sub { print STDERR "countdown finished\n" },
         content_type => 'text/plain; charset=utf-8',
     );
 
@@ -72,14 +83,45 @@ one item becomes bytes.
 =cut
 
 sub new {
-    my ($class, $producer, @pairs) = @_;
-    croak "$class->new requires a producer coderef"
-        unless @_ >= 2 && ref($producer) eq 'CODE';
+    my ($class, $content, @pairs) = @_;
+    # on_close is Stream's own option: taken out before the common options
+    # are parsed, and run once however the stream ends.
+    my $on_close;
+    for (my $i = 0; $i < @pairs - 1; $i += 2) {
+        next unless defined $pairs[$i] && !ref($pairs[$i]) && $pairs[$i] eq 'on_close';
+        (undef, $on_close) = splice @pairs, $i, 2;
+        croak 'Stream on_close must be a code reference' unless ref($on_close) eq 'CODE';
+        croak "Duplicate response option 'on_close'"
+            if grep { defined && !ref && $_ eq 'on_close' } @pairs[ grep { $_ % 2 == 0 } 0 .. $#pairs ];
+        last;
+    }
+    my $producer = @_ >= 2 && ref($content) eq 'CODE' ? $content
+        : blessed($content) && $content->can('next_chunk') ? $class->_source_producer($content)
+        : croak "$class->new requires a producer coderef or a source object with next_chunk";
 
     my $self = $class->SUPER::new('', @pairs);
     delete $self->{_body};
     $self->{_producer} = $producer;
+    $self->{_on_close} = $on_close if $on_close;
     return $self;
+}
+
+# A source is pulled one value at a time, each written before the next pull,
+# and nothing but next_chunk is called on it. On a format subclass (one with
+# its own format_item) each value is an item.
+sub _source_producer {
+    my ($class, $source) = @_;
+    my $items = $class->can('format_item') != \&PAGI::Response::Stream::format_item;
+    return async sub {
+        my ($writer) = @_;
+        return await $writer->pipe_from($source) unless $items;
+        while (!$writer->is_disconnected) {
+            my $item = await Future->wrap($source->next_chunk);
+            last unless defined $item;
+            await $writer->write_item($item);
+        }
+        return;
+    };
 }
 
 sub is_buffered { return 0 }
@@ -99,6 +141,7 @@ sub _stream_delivery_plan {
     my ($self) = @_;
     return {
         producer => $self->{_producer},
+        on_close => $self->{_on_close},
         status   => $self->status,
         headers  => $self->_stream_wire_headers,
     };
@@ -145,11 +188,25 @@ sub _emit {
 async sub _run_lifecycle {
     my ($self, $plan, $scope, $receive, $send, $cancel_signal) = @_;
 
-    await Future->wrap($send->({
-        type    => 'http.response.start',
-        status  => $plan->{status},
-        headers => $plan->{headers},
-    }));
+    # on_close runs once however the stream ends, so it is armed before
+    # anything that can end it: a failed start runs it here, and from the
+    # Writer's creation on, the Writer's cleanup runs it.
+    my $started = eval {
+        await Future->wrap($send->({
+            type    => 'http.response.start',
+            status  => $plan->{status},
+            headers => $plan->{headers},
+        }));
+        1;
+    };
+    unless ($started) {
+        my $error = $@;
+        if (my $on_close = $plan->{on_close}) {
+            eval { await Future->wrap($on_close->()); 1 }
+                or warn "PAGI::Response::Writer on_close callback error: $@";
+        }
+        die $error;
+    }
 
     my $writer = PAGI::Response::Writer->_new(
         response   => $self,
@@ -157,6 +214,7 @@ async sub _run_lifecycle {
         connection => $scope->{'pagi.connection'},
         transport  => $scope->{'pagi.transport'},
     );
+    $writer->on_close($plan->{on_close}) if $plan->{on_close};
     if ($cancel_signal->is_ready) {
         await $writer->_abort;
         await $writer->_cleanup;
@@ -304,11 +362,15 @@ sub _cancel_outcome {
 
 =head2 new
 
-    PAGI::Response::Stream->new($producer, %common_response_options)
+    PAGI::Response::Stream->new($producer, %options)
+    PAGI::Response::Stream->new($source, %options)
 
-The first argument must be a Writer producer coderef. C<status>,
-C<content_type>, and C<headers> (any shape L<PAGI::Response/new> takes) use
-the common Response contract. Stream
+The first argument is a Writer producer coderef, or a source: an object with
+C<next_chunk> (L</Streaming from a source>). C<status>, C<content_type>, and
+C<headers> (any shape L<PAGI::Response/new> takes) use the common Response
+contract. C<on_close> is Stream's own: a coderef called once however the
+stream ends (completion, an error, the client leaving), and waited for if it
+returns a Future, as a producer's C<< $writer->on_close >> is. Stream
 does not calculate Content-Length; an explicitly supplied value is retained as
 the application's delivery promise.
 
@@ -344,6 +406,23 @@ value may serve several requests at once.
 It must return encoded bytes, as every PAGI body is. C<write> refuses a string
 holding wide characters, but it cannot tell a Latin-1 string from binary data,
 so encode text yourself (for example with C<Encode::encode('UTF-8', $text)>).
+
+=head2 Streaming from a source
+
+    my $response = response('Stream', $source, on_close => sub { ... });
+
+A source is any object with C<next_chunk>, which returns the next value,
+immediately or as a Future, or C<undef> at the end. Stream pulls one value,
+writes it, and only then pulls the next, so a slow client slows the source:
+the backpressure L<PAGI::Response::Writer/pipe_from> has. It stops pulling
+once the client has disconnected. On a plain Stream each value is bytes (an
+empty string is skipped); on a format subclass, such as
+L<PAGI::Response::NDJSON>, each value is an item, written with
+C<write_item>. A C<next_chunk> that dies or fails is a producer error.
+
+Stream calls nothing but C<next_chunk> on a source: a source may be an object
+the response does not own, such as a feed other requests share, so a C<close>
+of its own is never called. Cleanup is the C<on_close> option.
 
 =head1 DISCONNECTS AND FAILURES
 

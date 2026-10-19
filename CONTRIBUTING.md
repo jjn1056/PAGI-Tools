@@ -45,6 +45,15 @@ bundled `PAGITest::FakeServer` fixture in `t/lib/`. There is no dependency
 on `PAGI::Server` at test time — real-server integration tests live in the
 `PAGI-Server` distribution.
 
+## The test client is versioned API
+
+`PAGI::Test::Client` and its SSE and WebSocket companions are what
+applications' test suites are written against, so a change to what they
+report (when a stream counts as closed, a disconnect reason or detail, an
+event's shape) gets an entry in `UPGRADING.md`, as any public behaviour
+change does. Their outcomes follow PAGI::Server's; `t/test/terminal-parity.t`
+pins them.
+
 ## AI-Assisted Contributions
 
 AI tools are welcome in your workflow. However, you're responsible for

@@ -1761,6 +1761,30 @@ Returns C<$self> for chaining.
         await $sse->run;
     }
 
+=head1 SUBCLASSING
+
+A framework may subclass PAGI::SSE (Thunderhorse does). The contract:
+
+=over 4
+
+=item * B<State.> The object holds C<scope>, C<receive> and C<send>, and its
+private connection state, every field of which starts with C<_> (C<_state>
+and the callbacks and the disconnect reason among them). A subclass adds fields under any other name.
+
+=item * B<One object per connection.> Build it once, after the final route
+match, and never replace its C<scope>, C<receive> or C<send>: its state
+machine (start, send, close, disconnect) assumes the same channels for its whole life, and
+swapping them, above all after C<start>, breaks it. Path parameters reach it
+through the scope, written there in place before it is built (see
+L<PAGI::Request/SUBCLASSING>).
+
+=item * B<The pattern.> PAGI-FastAPI builds
+C<< PAGI::SSE->new($scope, $receive, $send) >> once per connection, after
+routing, as Starlette builds its C<WebSocket> (see
+L<PAGI::WebSocket/SUBCLASSING>).
+
+=back
+
 =head1 SEE ALSO
 
 L<PAGI::WebSocket> - Similar wrapper for WebSocket connections

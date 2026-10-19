@@ -4,18 +4,26 @@ use strict;
 use warnings;
 use Carp qw(croak);
 use PAGI::ErrorContext ();
+use PAGI::Utils ();
 use overload
     '""'     => sub { $_[0]->_as_string },
     bool     => sub { 1 },
     fallback => 1;
 
 sub new {
-    my ($class, $status, $client_message) = @_;
+    my ($class, $status, $client_message, @options) = @_;
     croak 'PAGI::Exception::HTTP status must be an integer from 400 to 599'
         unless defined($status) && !ref($status) && $status =~ /\A[45][0-9][0-9]\z/;
+    croak 'PAGI::Exception::HTTP options must be name => value pairs' if @options % 2;
+    my %options = @options;
+    my $headers = exists $options{headers} ? delete $options{headers} : [];
+    croak 'Unknown PAGI::Exception::HTTP option: ' . join(', ', sort keys %options) if %options;
+    my ($pairs, $refused) = PAGI::Utils::_sendable_headers('PAGI::Exception::HTTP', $headers);
+    croak $refused if $refused;
     return bless {
         status_code    => 0 + $status,
         client_message => $client_message,
+        headers        => $pairs,
     }, $class;
 }
 
@@ -23,6 +31,7 @@ sub throw { my $class = shift; die $class->new(@_) }
 
 sub status_code    { $_[0]{status_code} }
 sub client_message { $_[0]{client_message} }
+sub headers        { [ map { [@$_] } @{ $_[0]{headers} } ] }
 
 sub _as_string {
     my ($self) = @_;
@@ -71,10 +80,20 @@ There are no per-status subclasses: the status is an argument.
 
     my $error = PAGI::Exception::HTTP->new(409, 'That name is taken.');
     PAGI::Exception::HTTP->throw(403);
+    PAGI::Exception::HTTP->throw(401, 'Sign in first.',
+        headers => ['WWW-Authenticate' => 'Bearer realm="notes"']);
 
 C<new> croaks unless the status is an integer from 400 to 599. The message is
 optional; it is shown to the client, so keep it free of internal detail.
 C<throw> takes the same arguments and dies with the new object.
+
+The one option, C<headers>, takes any of the three shapes
+L<PAGI::Response/new> takes (a flat list, C<[[name, value], ...]> pairs, or a
+L<PAGI::Headers> object), with names that are HTTP tokens and values that are
+bytes; a malformed one croaks here. ErrorHandler's built-in answer sends
+them, and with them it can answer a status that must carry a field (401
+C<WWW-Authenticate>, 405 C<Allow>, 407 C<Proxy-Authenticate>, 426
+C<Upgrade>), which otherwise needs a C<handler>.
 
 =head1 ACCESSORS
 
@@ -86,6 +105,11 @@ The status, 400-599.
 
 The message given to C<new>, or undef.
 
+=head2 headers
+
+The headers given to C<new>, as a new C<[[name, value], ...]> list each
+call; an empty list without them.
+
 =head1 STRINGIFICATION
 
 The object stringifies as the status and the message, or the status's reason
@@ -96,7 +120,10 @@ what a log or an C<on_error> tracker shows.
 
 ErrorHandler recognises an HTTP error by what it can do, not by its class:
 any thrown object with a C<status_code> method returning 400-599 is one, and
-a C<client_message> method, when present, supplies the client-safe text.
+a C<client_message> method, when present, supplies the client-safe text,
+and a C<headers> method, when present, the headers to send (any shape
+C<new> takes); headers that cannot be sent make the answer a 500 with a
+diagnostic.
 L<PAGI::Request::BodyError> is the in-house example.
 
 Exception classes written for Plack, such as L<HTTP::Exception> (which uses

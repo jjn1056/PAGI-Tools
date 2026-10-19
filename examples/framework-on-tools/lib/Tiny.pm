@@ -9,7 +9,7 @@ package Tiny;
 #   - handlers may return a hashref (JSON), a string (HTML) or a Response;
 #   - `before` hooks, Starlette-style `around` middleware with call_next;
 #   - services built at startup and read as $req->svc('db');
-#   - exception classes mapped to responses with `on_error`;
+#   - exception classes (or statuses) mapped to responses with `on_error`;
 #   - a raw ($scope, $receive, $send) escape hatch with `raw`;
 #   - plugins; an OpenAPI document generated from the Router.
 #
@@ -24,7 +24,6 @@ use PAGI::Request;
 use PAGI::Routing qw(route mount middleware request_response);
 use PAGI::Compose qw(compose);
 use PAGI::Response qw(response);
-use PAGI::ErrorContext qw(error_context);
 use PAGI::Utils qw(as_app_object);
 use PAGI::Routing::OpenAPI ();
 
@@ -86,7 +85,7 @@ sub new ($class, $package = scalar caller) {
         routes   => [],
         before   => [],
         around   => [],
-        on_error => [],    # [class, handler] pairs, in order
+        on_error => {},    # exception class or status => handler
         services => [],    # [name, builder] pairs, in order
     }, $class;
 }
@@ -98,7 +97,7 @@ sub del  ($path, @rest) { _current()->add_route('DELETE', $path, @rest) }
 sub raw  ($path, $code)  { _current()->add_raw($path, $code) }
 sub before ($code)       { push @{ _current()->{before} }, $code }
 sub around ($code)       { push @{ _current()->{around} }, $code }
-sub on_error ($class, $code) { push @{ _current()->{on_error} }, [$class, $code] }
+sub on_error ($key, $code)   { _current()->{on_error}{$key} = $code }
 sub service ($name, $code)   { push @{ _current()->{services} }, [$name, $code] }
 sub plugin ($name, @args) {
     my $class = "Tiny::Plugin::$name";
@@ -234,23 +233,19 @@ sub _around_middleware ($hook) {
 }
 
 # ----------------------------------------------------------------------
-# Errors. Seam: ErrorHandler's handler gets the thrown value through
-# error_context, so mapping exception classes to responses is one handler.
-# The handler sees the request as that layer sees it: a Tiny::Request,
+# Errors. Seam: ErrorHandler's `catch` maps statuses and exception classes
+# to answers, most specific class first, as Starlette's exception_handlers
+# do; Tiny only adapts each one to its own handler shape and plain values.
+# The entry sees the request as that layer sees it: a Tiny::Request,
 # because RequestClass is outside it, but no path_params, which Starlette's
 # handlers also lack.
 
-sub _error_handler ($self) {
-    my @map = @{ $self->{on_error} };
-    return sub ($req) {
-        my $error = error_context($req);
-        my $exc   = $error->exception;
-        for my $pair (@map) {
-            my ($class, $code) = @$pair;
-            return _coerce($code->($req, $exc)) if blessed($exc) && $exc->isa($class);
-        }
-        return $error->default;
-    };
+sub _catch ($self) {
+    my %on_error = %{ $self->{on_error} };
+    return { map {
+        my $code = $on_error{$_};
+        ($_ => sub ($req, $error) { _coerce($code->($req, $error->exception)) });
+    } keys %on_error };
 }
 
 # ----------------------------------------------------------------------
@@ -268,7 +263,7 @@ sub to_compose ($self) {
         middleware => [
             middleware('RequestClass', class => 'Tiny::Request'),
             (map { middleware(_around_middleware($_)) } @{ $self->{around} }),
-            middleware('ErrorHandler', handler => $self->_error_handler),
+            middleware('ErrorHandler', catch => $self->_catch),
         ],
         (@services ? (lifespan => {
             startup => async sub ($state, $scope) {

@@ -9,6 +9,7 @@ use Carp qw(croak);
 use PAGI::Utils::_SendValidation;
 use PAGI::Test::Response;
 use PAGI::Test::_Drive;
+use PAGI::Test::ConnectionState ();
 
 
 sub new {
@@ -135,12 +136,15 @@ sub _start {
         # Successful close/refusal capture already ended the scope. A
         # validator-complete event whose body capture failed has not.
         if ($conn->is_connected) {
-            # A started stream the application returned from without
-            # sse.close is an incomplete response; the detail is the one
-            # PAGI::Server records for it.
-            my $detail = $future->is_failed ? scalar($future->failure)
+            # The detail PAGI::Server records for each outcome: a failure's
+            # first line, an unclosed stream, an unfinished refusal, or no
+            # response at all.
+            # A crash reports its error; a return, what was left undone.
+            my $detail = $future->is_failed
+                           ? PAGI::Test::ConnectionState::_detail_from_error(scalar $future->failure)
                        : $self->{started} ? 'sse.start without sse.close'
-                       : undef;
+                       : $conn->response_started ? 'refusal started but never completed'
+                       : 'no response was started';
             $self->_transport_closed(reason => 'server_error', detail => $detail);
         }
         $conn->_deliver_notifications;
@@ -281,6 +285,7 @@ sub is_closed {
     my ($self) = @_;
     return $self->{closed};
 }
+
 
 1;
 
@@ -474,6 +479,8 @@ An application that returns after C<sse.start> without C<sse.close> has left
 the response incomplete (L<PAGI::Spec::Www/Application Left a Response Incomplete>):
 the connection ends abnormally with reason C<server_error> and detail
 C<sse.start without sse.close>, as PAGI::Server records it.
+Every outcome, with its reason and detail, is in
+L<PAGI::Test::Client/SEMANTICS>.
 
 =head1 INTERNAL METHODS
 

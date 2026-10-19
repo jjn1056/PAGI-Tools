@@ -17,9 +17,11 @@ curl -s http://localhost:5000/reports/bulk | wc -c
 routes with `routes => [...]` and its `http_default` directly, so no separate
 Router needs to be retained just to deploy this small HTTP application.
 
-**A four-line source adapter.** `PAGI::Response::Writer::pipe_from` needs one
-method — `next_chunk`, returning bytes or `undef` at end of stream, immediately
-or as a Future. A child process's stdout becomes a response body with:
+**A four-line source adapter, as the response's content.** A Stream's content
+may be a source: any object with one method, `next_chunk`, returning bytes or
+`undef` at end of stream, immediately or as a Future. Stream pulls it, as
+Starlette's `StreamingResponse` iterates its content, and calls nothing else
+on it. A child process's stdout becomes a response body with:
 
 ```perl
 sub next_chunk {
@@ -34,15 +36,18 @@ server: the pipe fills and the child blocks on `write`. Requesting
 `/reports/bulk` through a slow client streams 5MB with no growth in resident
 memory, because the toolkit never buffers ahead of the socket.
 
-**Cleanup that fires on every ending.** `on_close` runs exactly once, whether
-the stream finished normally, the producer threw, or the client disconnected
-mid-response:
+**Cleanup that fires on every ending.** The `on_close` option runs exactly
+once, whether the stream finished normally, a read failed, or the client
+disconnected mid-response:
 
 ```perl
-$writer->on_close(sub {
-    kill 'TERM', $pid;
-    return Future::IO->waitpid($pid);
-});
+return response('Stream', ProcessSource->new(fh => $fh),
+    on_close => sub {
+        kill 'TERM', $pid;
+        return Future::IO->waitpid($pid);
+    },
+    content_type => 'text/plain; charset=utf-8',
+);
 ```
 
 Start `/reports/ticker`, press Ctrl-C, and the child process is gone within a

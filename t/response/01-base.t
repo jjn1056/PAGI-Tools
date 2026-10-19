@@ -67,9 +67,9 @@ subtest 'base bytes retain metadata and byte invariants' => sub {
     ok($res->is_buffered, 'base bytes are buffered');
     ok(!$res->can('scope'), 'Response is not a scope source');
     ok(!$res->can('cors'), 'CORS policy is not a Response method');
-    like(dies { PAGI::Response->new(undef) }, qr/defined.*encoded bytes/i,
-        'undefined body is rejected');
-    like(dies { PAGI::Response->new([]) }, qr/unblessed scalar.*encoded bytes/i,
+    is(PAGI::Response->new(undef)->body, '',
+        'undefined content is an empty body in the base class');
+    like(dies { PAGI::Response->new([]) }, qr/defined string of encoded bytes, or an object that stringifies to one/,
         'reference body is rejected');
     like(dies { PAGI::Response->new("wide \x{263a}") }, qr/encoded bytes/i);
     for my $forbidden (100, 204, 205, 304) {

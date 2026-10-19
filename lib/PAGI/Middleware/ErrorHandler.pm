@@ -8,6 +8,7 @@ use Encode qw(encode);
 use Future;
 use Future::AsyncAwait;
 use Scalar::Util 'blessed';
+use mro ();
 use PAGI::Request::_Factory ();
 use PAGI::ErrorContext ();
 use PAGI::Utils ();
@@ -113,8 +114,9 @@ is still re-raised to the server after rendering (see L</DESCRIPTION>).
 The status for an exception that claims none, from 400 to 599. A status HTTP
 says must carry a field the built-in answer cannot supply -- 401
 (C<WWW-Authenticate>), 405 (C<Allow>), 407 (C<Proxy-Authenticate>), 426
-(C<Upgrade>) -- needs a C<handler>. An exception's C<status_code> outside
-400-599, or one of those without a handler, answers 500 with a diagnostic.
+(C<Upgrade>) -- needs a C<handler>, or an exception whose C<headers> carry
+that field. An exception's C<status_code> outside 400-599, or one of those
+with neither, answers 500 with a diagnostic.
 
 =item * handler (default: the built-in answer)
 
@@ -140,6 +142,45 @@ The handler sees the request as this layer sees it: scope keys added further
 in (C<path_params>, CSRF's token) are not there, and its
 answer does not pass through inner middleware's send wrappers.
 
+=item * catch (default: none)
+
+Answers by status and by exception class, before C<handler>:
+
+    catch => {
+        404 => sub { response('JSON', { error => 'not found' }) },
+        'MyApp::Conflict' => sub {
+            my ($request, $error) = @_;
+            response('JSON', { error => $error->exception->reason }, status => 409);
+        },
+        500 => sub { response('Text', 'Sorry.') },
+    }
+
+A key that is an integer from 400 to 599 is a status; any other key is an
+exact package name (no leading C<+>: nothing is loaded). An entry is called
+with the Request a C<handler> gets and the L<PAGI::ErrorContext>, and returns
+what a C<handler> returns; a Response that set no status of its own is sent
+with the error's status. The entry that answers is, in Starlette's order:
+
+=over 4
+
+=item 1. for an HTTP error (a thrown value whose C<status_code> was accepted,
+see L</EXCEPTION HANDLING>), its status;
+
+=item 2. for a blessed value, its class, then its ancestors in method
+resolution order;
+
+=item 3. for any other error (a plain C<die>, a claim that was rejected), the
+status ErrorHandler gave it (C<status>, 500 by default).
+
+=back
+
+With no entry, C<handler> answers, or the built-in answer. A thrown page or
+Response is an answer, not an error, and never reaches C<catch>. An entry for
+a status that must carry a field (see C<status>) answers it as a C<handler>
+does, and is responsible for the field. An entry that dies or returns
+something that is not an application is a handler failure: the last-resort
+500, the original error reported and re-raised.
+
 =back
 
 =cut
@@ -160,12 +201,34 @@ sub _init {
         if (ref($handler) eq 'CODE') { $self->{handler_code} = $handler }
         else                         { $self->{handler_app} = PAGI::Utils::to_app($handler) }
     }
+    $self->{catch} = _catch_table($config->{catch}) if exists $config->{catch};
     croak "ErrorHandler status $self->{status} must carry "
         . "$FIELD_REQUIRED{$self->{status}}, which the built-in answer cannot "
         . 'supply; a handler is required'
-        if $FIELD_REQUIRED{$self->{status}} && !$self->_has_handler;
+        if $FIELD_REQUIRED{$self->{status}} && !$self->_has_handler
+            && !($self->{catch} && $self->{catch}{$self->{status}});
     PAGI::Utils::_reject_unknown_options('ErrorHandler', $config,
-        qw(development handler on_error status));
+        qw(catch development handler on_error status));
+}
+
+# The catch table, checked: each key a status from 400 to 599 or an exact
+# package name, each entry a code reference. Returns a copy.
+sub _catch_table {
+    my ($catch) = @_;
+    croak 'ErrorHandler catch must be a hash reference of status or class => code'
+        unless ref($catch) eq 'HASH';
+    my %table;
+    for my $key (sort keys %$catch) {
+        unless ($key =~ /\A[45][0-9][0-9]\z/ || $key =~ /\A[A-Za-z_]\w*(?:::\w+)*\z/) {
+            my $hint = $key =~ /\A\+([A-Za-z_]\w*(?:::\w+)*)\z/
+                ? "; a class name is exact, so write '$1'" : '';
+            croak "ErrorHandler catch key '$key' is neither a status from 400 to 599 nor a package name$hint";
+        }
+        croak "ErrorHandler catch entry for '$key' must be a code reference"
+            unless ref($catch->{$key}) eq 'CODE';
+        $table{$key} = $catch->{$key};
+    }
+    return \%table;
 }
 
 sub _has_handler { $_[0]{handler_code} || $_[0]{handler_app} ? 1 : 0 }
@@ -224,12 +287,15 @@ sub wrap {
         await $self->_report_error($error, $scope);
         _reraise($error) if $started;
 
+        my ($status, $headers, $http_error) = $self->_status_for_error($error);
         my $error_scope = {
             %$scope,
             (defined($scope->{type}) ? () : (type => 'http')),
             'pagi.error' => {
                 exception   => $error,
-                status      => $self->_status_for_error($error),
+                status      => $status,
+                headers     => $headers // [],
+                http_error  => $http_error ? 1 : 0,
                 development => await $self->_development_for_request,
             },
         };
@@ -245,7 +311,8 @@ sub wrap {
             my $reason = defined($handler_failure)
                 ? "$handler_failure" : "it finished without starting a response\n";
             chomp $reason;
-            eval { warn "PAGI ErrorHandler handler failed: $reason\n"; 1 };
+            my $answerer = $error_scope->{'pagi.error'}{answered_by} // 'handler';
+            eval { warn "PAGI ErrorHandler $answerer failed: $reason\n"; 1 };
             await $self->_send_last_resort($wrapped_send) unless $started;
             _reraise($error);
         }
@@ -256,29 +323,60 @@ sub wrap {
 
 async sub _answer {
     my ($self, $scope, $receive, $send) = @_;
+    my $error = $scope->{'pagi.error'};
+    if (my $entry = $self->_catch_entry($error->{exception}, $error->{status}, $error->{http_error})) {
+        $error->{answered_by} = 'catch entry';    # names it if it fails
+        my $context = PAGI::ErrorContext->new($scope);
+        my $answer = await Future->wrap($entry->(
+            PAGI::Request::_Factory::request_for_scope($scope, $receive), $context));
+        return await _send_answer($answer, $context, 'ErrorHandler catch entry', $scope, $receive, $send);
+    }
     if (my $app = $self->{handler_app}) {
         return await Future->wrap($app->($scope, $receive, $send));
     }
     my $context = PAGI::ErrorContext->new($scope);
-    my $answer = $context->default;
     if (my $handler = $self->{handler_code}) {
-        $answer = await Future->wrap($handler->(PAGI::Request::_Factory::request_for_scope($scope, $receive)));
-        PAGI::Utils::_validate_app_value($answer,
-            'ErrorHandler handler must return a PAGI application:');
-        # A Response that set no status of its own answers with the error's,
-        # set on a copy of the response start: the Response itself may be
-        # shared, and must not keep this error's status for the next one.
-        if (blessed($answer) && $answer->isa('PAGI::Response') && !$answer->has_status) {
-            my ($status, $inner) = ($context->status, $send);
-            $send = async sub {
-                my ($event) = @_;
-                $event = { %$event, status => $status }
-                    if ($event->{type} // '') eq 'http.response.start';
-                await Future->wrap($inner->($event));
-            };
-        }
+        my $answer = await Future->wrap($handler->(PAGI::Request::_Factory::request_for_scope($scope, $receive)));
+        return await _send_answer($answer, $context, 'ErrorHandler handler', $scope, $receive, $send);
+    }
+    return await PAGI::Utils::invoke_app($context->default, $scope, $receive, $send);
+}
+
+# Sends what a handler or a catch entry answered. A Response that set no
+# status of its own answers with the error's, set on a copy of the response
+# start: the Response itself may be shared, and must not keep this error's
+# status for the next one.
+async sub _send_answer {
+    my ($answer, $context, $label, $scope, $receive, $send) = @_;
+    PAGI::Utils::_validate_app_value($answer, "$label must return a PAGI application:");
+    if (blessed($answer) && $answer->isa('PAGI::Response') && !$answer->has_status) {
+        my ($status, $inner) = ($context->status, $send);
+        $send = async sub {
+            my ($event) = @_;
+            $event = { %$event, status => $status }
+                if ($event->{type} // '') eq 'http.response.start';
+            await Future->wrap($inner->($event));
+        };
     }
     return await PAGI::Utils::invoke_app($answer, $scope, $receive, $send);
+}
+
+# Starlette's order: an HTTP error's status, then the exception's class and
+# its ancestors in method resolution order, then the status any other error
+# was given. A thrown page or Response is an answer, not an error, and never
+# reaches catch.
+sub _catch_entry {
+    my ($self, $exception, $status, $http_error) = @_;
+    my $catch = $self->{catch} or return undef;
+    return undef if PAGI::ErrorContext::_is_page($exception);
+    return $catch->{$status} if $http_error && $catch->{$status};
+    if (blessed($exception)) {
+        for my $class (@{ mro::get_linear_isa(ref $exception) }) {
+            return $catch->{$class} if $catch->{$class};
+        }
+    }
+    return $catch->{$status} if !$http_error && $catch->{$status};
+    return undef;
 }
 
 # A failed Future must carry a true exception, and Future tests it for
@@ -366,13 +464,34 @@ sub _status_for_error {
         $self->_diagnose_rejected_status("status $claimed is outside 400-599");
         return 500;
     }
-    if ($FIELD_REQUIRED{$numeric} && !$self->_has_handler) {
+    my ($headers, $refused) = _exception_headers($error);
+    if (defined $refused) {
+        $self->_diagnose_rejected_status($refused, 'exception headers');
+        return 500;
+    }
+    my $field = $FIELD_REQUIRED{$numeric};
+    if ($field && !$self->_has_handler && !$self->_catch_entry($error, $numeric, 1)
+        && !grep { lc($_->[0]) eq lc($field) } @$headers) {
         $self->_diagnose_rejected_status(
-            "status $claimed must carry $FIELD_REQUIRED{$numeric}, which the built-in answer cannot supply",
+            "status $claimed must carry $field, which the built-in answer cannot supply",
         );
         return 500;
     }
-    return $numeric;
+    return ($numeric, $headers, 1);
+}
+
+# The headers an HTTP error carries, from its headers method when it has one:
+# (pairs) or (undef, why they cannot be sent).
+sub _exception_headers {
+    my ($error) = @_;
+    my $given;
+    my $obtained = eval {
+        $given = $error->headers if $error->can('headers');
+        1;
+    };
+    return (undef, 'headers accessor failed') unless $obtained;
+    return ([]) unless defined $given;
+    return PAGI::Utils::_sendable_headers('exception', $given);
 }
 
 # $subject names what was rejected: an exception's status_code claim unless
@@ -488,10 +607,14 @@ class:
 =item * B<A value with C<status_code> is an HTTP error.> The claim is called
 exception-safely and kept when it is an integer from 400 to 599 (and, without
 a handler, not one of the statuses that need a field the built-in answer
-lacks; see C<status>). Throwing, Future-valued, reference-valued, malformed
-and out-of-range claims fall back to 500 with a diagnostic, without replacing
-the original exception. The built-in answer shows its C<client_message> for
-a 4xx. Its own C<to_app>, if it has one, is never called.
+lacks, unless its C<headers> carry it; see C<status>). Throwing,
+Future-valued, reference-valued, malformed and out-of-range claims fall back
+to 500 with a diagnostic, without replacing the original exception, as do
+C<headers> that cannot be sent (a wrong shape, a name that is not an HTTP
+token, a character above 0xFF, a C<headers> method that dies). The built-in
+answer shows its C<client_message> for a 4xx and sends its C<headers>; a
+C<handler>'s or C<catch> entry's answer is its own, and reads them from the exception if it
+wants them. Its own C<to_app>, if it has one, is never called.
 L<PAGI::Exception::HTTP> is the class PAGI-Tools ships:
 
     die PAGI::Exception::HTTP->new(404, 'Resource not found');
@@ -544,9 +667,10 @@ built-in answer runs. The built-in answer is a UTF-8 octet string with a
 byte-correct C<Content-Length> and C<Cache-Control: no-store>. A handler
 controls its own content and cache headers.
 
-=item * If the handler dies, returns something that is not an application, or
-answers without starting a response, the middleware emits one hardcoded UTF-8
-plain-text 500 with C<no-store>, warns C<PAGI ErrorHandler handler failed: ...>,
+=item * If the handler or a C<catch> entry dies, returns something that is not
+an application, or answers without starting a response, the middleware emits
+one hardcoded UTF-8 plain-text 500 with C<no-store>, warns C<PAGI ErrorHandler
+handler failed: ...> (C<catch entry failed> for an entry),
 and re-raises the original exception. That last resort contains no exception
 or handler data. A failure while sending it propagates without another
 response attempt.

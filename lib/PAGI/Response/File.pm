@@ -59,6 +59,9 @@ File may serve an ordinary HTTP WebSocket refusal or SSE decline. Because File
 is non-buffered, those scopes must provide C<pagi.connection> so disconnect and
 terminal state remain authoritative while the file send is in flight.
 
+Owned fields: Content-Length, Content-Range and ETag (see
+L<PAGI::Response/Owned fields>).
+
 =cut
 
 my %KNOWN_OPTIONS = map { $_ => 1 } qw(

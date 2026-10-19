@@ -95,6 +95,11 @@ Response object. Each invocation derives its own plain delivery values before
 response start, so deliberate mutation affects later invocations without
 splitting an invocation already in progress.
 
+A L<PAGI::Pages> page is an application, not a Response; its
+C<response_for($request)> gives a fresh Response for the request, which is
+the value to change when a framework post-processes a handler's page
+(L<PAGI::Pages/APPLICATION INVOCATION>).
+
 A Response is not a terminal deployed root. C<to_app> produces a native
 application that emits ordinary HTTP response events. It accepts HTTP scopes
 and can emit a preaccept WebSocket refusal or prestart SSE refusal on the
@@ -196,8 +201,11 @@ are encoded again.
 
 Builds a Response by class name. A short name is resolved under
 C<PAGI::Response::> (C<'JSON'> is L<PAGI::Response::JSON>), a name already
-under that namespace is kept, and a leading C<+> names an exact package, so a
-Response class from another distribution needs no change here. A class
+under that namespace is kept, C<'PAGI::Response'> is the base class, and a
+leading C<+> names an exact package, so a Response class from another
+distribution needs no change here. A name with C<::> outside the namespace is
+still prefixed (C<'MyApp::XML'> is C<PAGI::Response::MyApp::XML>); when no such
+file exists, the error suggests C<'+MyApp::XML'>. A class
 already defined -- declared in the application file, or loaded before -- is
 used as it is; otherwise its file is loaded, and a name with no file, or a
 file that fails to load, dies C<response('...'): cannot load ...>. The class
@@ -214,10 +222,12 @@ C<< PAGI::Response->new($bytes, %options) >>.
 =head2 new
 
     PAGI::Response->new($bytes, %options)
+    PAGI::Response->new                    # the empty value, for staging
 
 Creates a complete buffered response. C<$bytes> is a string of encoded bytes
 (L</BYTES AND CHARACTERS>), or an object that stringifies to one
-(L</VALUES FROM OTHER CODE>). The
+(L</VALUES FROM OTHER CODE>); C<undef>, or no content at all, is an empty
+body. The
 supported options are C<status>,
 C<content_type>, and C<headers>, where C<headers> is a flat
 C<[name =E<gt> value, ...]> list, C<[[name, value], ...]> pairs as the PAGI
@@ -225,9 +235,40 @@ spec writes headers, or a L<PAGI::Headers> object (copied; later changes to
 it do not reach the response), whose values follow C<header> (L</metadata>). Every
 C<headers> argument in PAGI-Tools takes these three shapes.
 Unknown, duplicate, odd, or malformed options
-croak synchronously. Status defaults to 200 and body-bearing construction
-rejects 1xx, 204, 205, and 304. Default Content-Type is
-C<application/octet-stream>.
+croak synchronously. Status defaults to 200. Default Content-Type is
+C<application/octet-stream>, written only when the body has bytes: an empty
+body has no Content-Type unless one is given, as in Starlette's base
+C<Response>.
+
+A status whose HTTP semantics forbid content (1xx, 204, 205, 304) takes an
+empty body, in this class and in Text and HTML:
+C<< response('Text', '', status => 204) >> is a 204. A buffered subclass
+gets the same rule. Problem and Redirect never have an empty body (a
+problem document, a redirect page), so they never take such a status. A body with bytes on such a status croaks ("response body is forbidden
+for status N"), at construction or when C<status> is set later; so does JSON,
+whose C<undef> renders as C<null>, and so do Stream, NDJSON and File, which
+always have a body to deliver. L<PAGI::Response::Empty> remains the class for
+a response that must never carry a Content-Type.
+
+On 1xx, 204 and 304 no Content-Length is sent (205 keeps its
+C<Content-Length: 0>), and the class's default Content-Type is not written:
+unlike Starlette, which adds its media type whatever the status. That is
+decided when the value is built: C<< response('Text', '')->status(204) >>
+keeps the C<text/plain; charset=utf-8> it was built with. A Content-Type the
+caller gives is sent.
+
+C<< PAGI::Response->new >> with no arguments is the empty value: no explicit
+status (C<has_status> is false), no Content-Type, an empty body. As an
+application it sends 200 with an empty body and no Content-Type. A framework
+can stage C<status>, C<header> and C<cookie> on it before it knows the
+final class, then build the class named C<$name> with what was staged:
+
+    response($name // '+PAGI::Response', $body,
+        ($staged->has_status ? (status => $staged->status) : ()),
+        headers => $staged->headers);
+
+How a staged value merges with the final one (which wins, which headers
+add) is the framework's policy; PAGI-Tools adds none.
 
 =head2 to_app
 
@@ -255,7 +296,10 @@ C<header($name, $value)> appends and preserves repeated-field order;
 C<content_type> replaces Content-Type, and C<content_type(undef)> gives back the
 class's default type (Text's C<text/plain; charset=utf-8>, for one), so a typed
 body always says what it is; Empty and File have none, File's coming from the
-file name. The C<*_try> setters are chainable and
+file name. C<header('Content-Type', ...)> is C<content_type>: it replaces
+the type and keeps the class's rule (L</Owned fields>); one added straight
+to the container returned by C<headers> bypasses the rule. The C<*_try>
+setters are chainable and
 do not overwrite an explicit value. C<body> is read-only encoded bytes for
 buffered responses and croaks for File and Stream. C<is_buffered> reports the
 memory strategy, independently of protocol adaptation.
@@ -278,6 +322,45 @@ Header names are HTTP tokens (RFC 9110): letters, digits and
 C<!#$%&'*+-.^_`|~>. A name with anything else (a space, a colon, a
 character above 0x7E) croaks, naming it; one added straight to the
 container croaks as the response is sent.
+
+=head1 CONSTRUCTOR CONTRACT
+
+Every response class is built the same way:
+
+    Class->new($content, status => $code, headers => $headers,
+        content_type => $type, %class_options)
+    response($name, $content, ...)          # the same, by name
+
+C<$content> is the class's one positional argument: bytes for
+C<PAGI::Response>, characters for Text and HTML, data for JSON, a document
+for Problem, a URL for Redirect, a path for File, a producer for Stream and
+NDJSON. The common options are C<status>, C<headers> (any of the three
+shapes L</new> takes, order kept) and C<content_type>; every class accepts
+them, or refuses one for a reason its documentation gives. Class options
+(File's C<filename>, C<etag> and so on) follow. L<PAGI::Response::Empty> is
+the exception: it takes no content, only options.
+
+So a framework can build whichever class a handler chose with one call,
+the base class included as C<'+PAGI::Response'>. A third-party class keeps
+the contract to be built that way; the shipped classes are tested against
+it in F<t/response/contract.t>.
+
+=head2 Owned fields
+
+Some classes calculate a header themselves and refuse it from the caller:
+
+    Class      Owns                                  Because
+    ---------  ------------------------------------  ----------------------
+    Empty      Content-Type                          it has no content
+    Redirect   Location                              the location is the content
+    File       Content-Length, Content-Range, ETag   calculated from the file
+
+Staged headers handed to such a class must not contain a field it owns:
+building with one croaks, naming it. A Content-Type, however it arrives
+(the C<content_type> option, a pair in C<headers>, or C<header> later), goes
+through the class's own C<content_type>, so Text and HTML keep their
+charset and Empty refuses one; given both the option and a pair, the option
+wins.
 
 =head1 SUBCLASSING
 
@@ -335,6 +418,19 @@ should not be hidden inside an encoder.
 
 Delivery internals used by File and Stream are not a public subclass seam.
 
+=head1 ERRORS FROM A FRAMEWORK
+
+PAGI-Tools croaks, so an error names the line that called it. A framework
+that calls Tools on its users' behalf (building the Response a handler
+chose, say) is that caller, and the error would name the framework's line.
+Marking the framework's own packages as internal to Carp makes it name the
+user's line instead:
+
+    package My::Framework::Response;
+    $Carp::Internal{+__PACKAGE__}++;     # or: our @CARP_NOT = (...);
+
+Carp then skips those packages when it reports where an error came from.
+
 =head1 STREAMING AND FILE RESPONSES
 
 =head2 Stream
@@ -391,7 +487,7 @@ sub response {
         unless defined($name) && !ref($name) && length($name);
     require PAGI::Utils;
     my $class = PAGI::Utils::_resolve_class('PAGI::Response', $name, 'response');
-    my $error = PAGI::Utils::_load_class($class, "response('$name')", sub { $_[0]->isa('PAGI::Response') });
+    my $error = PAGI::Utils::_load_class($class, "response('$name')", sub { $_[0]->isa('PAGI::Response') }, $name);
     croak $error if defined $error;
     croak "response('$name'): $class is not a PAGI::Response"
         unless $class->isa('PAGI::Response');
@@ -400,8 +496,6 @@ sub response {
 
 sub new {
     my ($class, $value, @pairs) = @_;
-    croak 'PAGI::Response->new requires a body byte scalar'
-        unless @_ >= 2;
     my $options = _parse_options(@pairs);
 
     my $self = bless { _headers => PAGI::Headers->new }, $class;
@@ -415,12 +509,36 @@ sub new {
     }
     $self->content_type($options->{content_type})
         if exists $options->{content_type};
-    $self->content_type_try($self->default_content_type);
+    $self->content_type_try($self->_body_default_content_type);
     return $self;
 }
 
 sub default_content_type { 'application/octet-stream' }
-sub render { $_[1] }
+# No content is an empty body; subclasses with their own render keep their
+# own meaning of undef (JSON's null, Text's refusal).
+sub render { $_[1] // '' }
+
+# The type a response says it is when nothing else was given: the class's
+# default, except that the base class's application/octet-stream describes
+# bytes, so an empty buffered body has none (as Starlette's base Response,
+# whose media type is None).
+sub _body_default_content_type {
+    my ($self) = @_;
+    my $default = $self->default_content_type;
+    return undef if defined $self->{_status} && _status_forbids_body($self->{_status});
+    return undef
+        if defined $default && $default eq 'application/octet-stream'
+        && $self->_has_empty_buffered_body;
+    return $default;
+}
+
+# The body is buffered and renders to nothing. An unbuffered class (Stream,
+# NDJSON, File) builds through an empty buffered constructor and then drops
+# the body, so is_buffered, a class constant, keeps it out while it does.
+sub _has_empty_buffered_body {
+    my ($self) = @_;
+    return $self->is_buffered && defined $self->{_body} && $self->{_body} eq '';
+}
 
 sub status {
     my ($self, $code) = @_;
@@ -449,6 +567,11 @@ sub header {
     if (defined(my $refused = PAGI::Utils::_header_name_refusal($name))) {
         croak $refused;
     }
+    # A Content-Type set any way goes through the class's own content_type
+    # rule (Text and HTML keep their charset, Empty refuses one), and
+    # replaces rather than adds: a response has one type.
+    return $self->content_type($value)
+        if defined $value && lc($name) eq 'content-type';
     my ($bytes, $not) = PAGI::Utils::_sendable_header_value($value);
     croak 'Header value is required' if ($not // '') eq 'not a string';
     croak "header '$name' value contains a character above 0xFF: encode it first" if $not;
@@ -488,7 +611,7 @@ sub content_type {
         croak "header 'Content-Type' value contains a character above 0xFF: encode it first" if $not;
         $value = $bytes;
         $self->{_headers}->set('Content-Type', $value);
-    } elsif (defined(my $default = $self->default_content_type)) {
+    } elsif (defined(my $default = $self->_body_default_content_type)) {
         # Clearing a typed body gives back its default, so it always says
         # what it is; a class with no default (Empty, File) sends none.
         $self->{_headers}->set('Content-Type', $default);
@@ -592,7 +715,10 @@ sub _wire_headers {
         $name =~ tr/A-Z/a-z/;
         $name ne 'content-length' && $name ne 'transfer-encoding';
     } @$headers;
-    push @$headers, ['content-length', $length];
+    # 1xx, 204 and 304 carry no Content-Length; 205 keeps its 0 (RFC 9110).
+    my $status = $self->status;
+    push @$headers, ['content-length', $length]
+        unless $status >= 100 && $status < 200 || $status == 204 || $status == 304;
     return $headers;
 }
 
@@ -640,7 +766,7 @@ sub _parse_options {
 sub _require_bytes {
     my ($name, $value) = @_;
     $value = PAGI::Utils::_stringified($value);
-    croak "$name must be a defined unblessed scalar of encoded bytes"
+    croak "$name must be a defined string of encoded bytes, or an object that stringifies to one"
         unless defined $value && !ref($value);
     defined(my $bytes = PAGI::Utils::_byte_string($value))
         or croak "$name must be encoded bytes: it contains a character above 0xFF; encode text first, or use Text or HTML";
@@ -659,7 +785,9 @@ sub _status_forbids_body {
     return $status >= 100 && $status < 200 || $status == 204 || $status == 205 || $status == 304;
 }
 
-sub _allows_body_forbidden_status { 0 }
+# A buffered response with an empty body may carry a no-body status; a body
+# with bytes, or one still to be delivered (Stream, NDJSON, File), may not.
+sub _allows_body_forbidden_status { $_[0]->_has_empty_buffered_body }
 
 sub _validate_uri_reference {
     my ($label, $value) = @_;

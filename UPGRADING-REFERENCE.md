@@ -1438,6 +1438,23 @@ may fail -- correctly.
   `websocket.close` fails; after the peer closed, it is dropped. Refusals are
   ordinary `http.response.*` (status 300+ for WebSocket); `websocket.close`
   before accept is rejected.
+- **`is_closed` is true once the stream is over.** In 0.002002,
+  `Test::SSE`'s `is_closed` turned true only when the test called `close`,
+  and `Test::WebSocket`'s when the test called `close` or the app sent
+  `websocket.close`. It is now also true when the application returns,
+  dies, or refuses, as on a server; events the application sent stay
+  readable with `receive_event`, `receive_text` and the rest. A test that
+  checked a stream was still open right after the app returned now sees it
+  closed. The disconnect reason and detail are PAGI-Server's
+  (`PAGI::Test::Client`, SEMANTICS).
+- **A failure reports its error, whatever the stage.** An app that dies in
+  an unfinished refusal has the error's first line as its detail, as any
+  failure does; "refusal started but never completed" is now only for one
+  that returned.
+- **A dying WebSocket app's detail is the error's first line,** without
+  Perl's " at FILE line N", as for SSE; it was the whole exception text.
+  PAGI-Server records the same on HTTP/1.1 and HTTP/2 from the release
+  that fixed its HTTP/1.1 WebSocket and SSE failure paths.
 - **HTTP responses** are HTTP/1.1-shaped: app-supplied `Transfer-Encoding`
   and `Connection` headers are stripped with a warning, and every scope
   advertises `extensions`.

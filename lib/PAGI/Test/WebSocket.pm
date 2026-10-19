@@ -9,6 +9,7 @@ use Carp qw(croak);
 use PAGI::Utils::_SendValidation;
 use PAGI::Test::Response;
 use PAGI::Test::_Drive;
+use PAGI::Test::ConnectionState ();
 
 
 sub new {
@@ -147,7 +148,15 @@ sub _start {
         # is not delivery. Only an app Close or peer Close may keep an active
         # socket waiting for the manual transport outcome after app return.
         if ($conn->is_connected && !$self->{_app_close} && !$self->{_peer_close}) {
-            my $detail = $future->is_failed ? scalar($future->failure) : undef;
+            # The detail PAGI::Server records. A crash reports its error; a
+            # return, what was left undone: an unfinished refusal, an
+            # accepted socket left without a closing handshake, or no
+            # response at all.
+            my $detail = $future->is_failed
+                           ? PAGI::Test::ConnectionState::_detail_from_error(scalar $future->failure)
+                       : !$self->{accepted} && $conn->response_started ? 'refusal started but never completed'
+                       : $self->{accepted} ? 'accepted socket left without a closing handshake'
+                       : 'no response was started';
             $self->_transport_closed(code => 1011, reason => 'server_error', detail => $detail);
         }
         $conn->_deliver_notifications;
@@ -668,7 +677,10 @@ an empty string if still open.
         say "Connection closed";
     }
 
-Returns true if the WebSocket connection has been closed.
+Returns true if the WebSocket connection has been closed: by the test, by
+the application's C<websocket.close>, or by the application returning,
+dying or refusing. Messages it sent before that stay readable. Every
+outcome, with its reason and detail, is in L<PAGI::Test::Client/SEMANTICS>.
 
 =head1 INTERNAL METHODS
 

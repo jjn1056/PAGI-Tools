@@ -316,4 +316,16 @@ sub abort {
     return;
 }
 
+
+# A failure's detail, as PAGI::Server records it: the first line, without
+# Perl's " at FILE line N." tail.
+sub _detail_from_error {
+    my ($error) = @_;
+    my ($first) = split /\n/, ($error // '');
+    return undef unless defined $first;
+    $first =~ s/ at \S+ line \d+\.?\s*\z//;
+    $first =~ s/\s+\z//;
+    return length $first ? $first : undef;
+}
+
 1;

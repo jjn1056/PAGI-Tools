@@ -24,7 +24,7 @@ sub _build_named {
     my ($function, $kind, $name, @args) = @_;
     my $class = PAGI::Utils::_resolve_class(
         "PAGI::Middleware::Session::$kind", $name, 'session ' . lc $kind);
-    my $error = PAGI::Utils::_load_class($class, "$function('$name')", sub { $_[0]->can('new') });
+    my $error = PAGI::Utils::_load_class($class, "$function('$name')", sub { $_[0]->can('new') }, $name);
     croak $error if defined $error;
     return $class->new(@args);
 }
@@ -134,10 +134,13 @@ C<session_store('Memory')> is
 C<< PAGI::Middleware::Session::Store::Memory->new >> (stores from other
 distributions, like the cookie store, work the same way);
 
-=item * a name already in that namespace is used as given;
+=item * a name already in that namespace, or the namespace itself, is used
+as given;
 
 =item * a leading C<+> names an exact package, for a State or Store of your
-own: C<session_store('+MyApp::SessionStore', ...)>.
+own: C<session_store('+MyApp::SessionStore', ...)>. A name with C<::>
+without one is still prefixed, and when no such file exists the error
+suggests the C<+>.
 
 =back
 

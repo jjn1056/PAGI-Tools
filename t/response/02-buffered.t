@@ -104,10 +104,10 @@ subtest 'base Response remains the explicit non-UTF-8 byte escape hatch' => sub 
     is($base->content_type, 'text/plain; charset=iso-8859-1',
         'base Response preserves caller-selected charset');
     for my $status (100, 204, 205, 304) {
-        like(dies { PAGI::Response->new('', status => $status) }, qr/body.*\Q$status\E/i,
-            "base Response rejects an empty body for status $status");
-        like(dies { response('Text', '', status => $status) }, qr/body.*\Q$status\E/i,
-            "Text rejects an empty body for status $status");
+        ok(lives { PAGI::Response->new('', status => $status) },
+            "base Response accepts an empty body for status $status");
+        ok(lives { response('Text', '', status => $status) },
+            "Text accepts an empty body for status $status");
     }
 };
 

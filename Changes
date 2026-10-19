@@ -168,6 +168,37 @@
   - Endpoint::HTTP answers QUERY with a query method. A query helper method
     on an existing subclass now answers QUERY too.
   - PAGI::Test::Client has a query method for the QUERY verb.
+  - PAGI::Response->new with no arguments is the empty value: no explicit
+    status, no Content-Type, an empty body; a framework stages status,
+    headers and cookies on it before it knows the final class (as
+    FastAPI's temporary Response). Undef content is an empty body in the
+    base class (JSON still renders undef as null; Text and HTML still
+    refuse it), and the base class writes its application/octet-stream
+    only when the body has bytes, as Starlette's base Response has no
+    media type: an empty untyped redirect sends no Content-Type.
+  - A status that forbids content (1xx, 204, 205, 304) takes an empty body
+    in the base class, Text and HTML, not only Empty:
+    response('Text', '', status => 204) is a 204, sent with no default
+    Content-Type and, on 1xx/204/304, no Content-Length. A body with bytes
+    on such a status is still refused, and Stream, NDJSON and File still
+    refuse the status; Empty remains the class that never carries a
+    Content-Type.
+  - PAGI::Exception::HTTP takes headers (new(401, $message, headers =>
+    ['WWW-Authenticate' => ...])), and ErrorHandler's built-in answer sends
+    an HTTP error's headers, from any thrown object with a headers method:
+    a 401, 405, 407 or 426 that carries its required field no longer needs
+    a handler. Headers that cannot be sent make the answer a 500 with a
+    diagnostic.
+  - ErrorHandler catch => { 404 => sub ($request, $error) {...},
+    'MyApp::Conflict' => sub {...} }: answers by status and exception
+    class before handler, in Starlette's order (an HTTP error's status,
+    then the class and its ancestors, then the status a plain die was
+    given).
+  - A Stream's content may be a source, any object with next_chunk:
+    response('Stream', $source) pulls it one value at a time, as
+    Starlette's StreamingResponse iterates its content (NDJSON takes a
+    source of items). Stream calls nothing else on a source; the on_close
+    option is its cleanup, for a source or a producer.
 
   [Changed]
   - PAGI::Test::Client: an SSE application that returns after sse.start
@@ -456,6 +487,34 @@
     It used to build the class with new and no arguments, ignoring BUILD_APP.
 
   [Fixed]
+  - A JSON response accepts any JSON value on every JSON::MaybeXS
+    backend: response('JSON', undef) sends null and a string or number
+    is sent as itself. On a backend that does not enable allow_nonref by
+    default, they croaked "hash- or arrayref expected".
+  - response('PAGI::Response', ...) builds the base class, and each
+    loader's namespace root resolves to itself (it became
+    PAGI::Response::PAGI::Response). A short name with :: that has no file
+    suggests the leading + instead of listing @INC.
+  - The byte-body refusal says "must be a defined string of encoded bytes,
+    or an object that stringifies to one"; it said "unblessed scalar",
+    though objects that stringify are accepted.
+  - PAGI::Test::Client records the disconnect detail PAGI::Server records:
+    an SSE app's failure as its first line, without " at FILE line N"; an
+    SSE app that returns without starting, "no response was started"; a
+    refusal left unfinished, "refusal started but never completed"; a
+    WebSocket app that returns without accepting or refusing, "no response
+    was started"; a WebSocket app that dies, at any stage (an unfinished
+    refusal included, on SSE too), its first line, as PAGI-Server records
+    it from its failure-path fixes; a
+    WebSocket app that returns from an accepted socket without a closing
+    handshake, "accepted socket left without a closing handshake". It
+    recorded the whole exception, or no detail.
+  - A Content-Type given in a response's headers option, or set with
+    header('Content-Type', ...), goes through the class's content_type
+    rule like the content_type option: Text and HTML keep their charset
+    (response('Text', $s, headers => ['Content-Type' => 'text/csv']) sent
+    text/csv with no charset), Empty refuses one, and header() replaces
+    the type rather than adding a second.
   - PAGI::Middleware::MethodOverride reads the _method field of a
     urlencoded or multipart POST body, as its documentation always said
     (and as Rails and Laravel do); it read only the header and the query

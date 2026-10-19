@@ -25,7 +25,9 @@ PAGITest::Stringy::check_site(
 PAGITest::Stringy::check_site(
     name    => 'byte body',
     run     => sub { PAGITest::Stringy::body_of(PAGI::Response->new($_[0])) },
-    refused => qr/response body must be a defined unblessed scalar of encoded bytes/,
+    refused => qr/response body must be a defined string of encoded bytes, or an object that stringifies to one/,
+    # A plain undef is an empty body in the base class (t/response/base-empty.t).
+    skip_undef => 1,
 );
 
 PAGITest::Stringy::check_site(
@@ -37,7 +39,7 @@ PAGITest::Stringy::check_site(
 PAGITest::Stringy::check_site(
     name    => 'Stream write',
     run     => sub { my ($value) = @_; PAGITest::Stringy::body_of(response('Stream', sub { $_[0]->write($value) })) },
-    refused => qr/stream chunk must be a defined unblessed scalar of encoded bytes/,
+    refused => qr/stream chunk must be a defined string of encoded bytes, or an object that stringifies to one/,
 );
 
 # URLs, and the strings of a problem document.

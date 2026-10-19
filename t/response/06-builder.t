@@ -63,7 +63,7 @@ subtest 'errors name the problem' => sub {
     like(dies { response() }, qr/\Qresponse() requires a Response class name\E/, 'no name');
     like(dies { response(undef) }, qr/\Qresponse() requires a Response class name\E/, 'undef name');
     like(dies { response(['Text']) }, qr/\Qresponse() requires a Response class name\E/, 'reference name');
-    like(dies { response('Text') }, qr/requires a body/,
+    like(dies { response('Text') }, qr/Text response body must be a defined/,
         "a missing body is the constructor's own error");
 };
 

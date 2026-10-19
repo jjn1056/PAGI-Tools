@@ -153,8 +153,18 @@ subtest 'a client that disconnects mid-stream does not disturb the server' => su
         return $received =~ /tick 3\b/;
     }, 20), 'ticker streamed progressively while connected');
 
+    # The server runs in this process, so the report's child is ours.
+    my @children = grep { /\A\d+\z/ } split /\s+/, `pgrep -P $$`;
+    is(scalar @children, 1, 'one child process is running the report');
+
     close($sock);                       # client vanishes mid-stream
     $loop->loop_once(0.05) for 1 .. 20;  # let the server observe it
+
+    # The child is gone soon after the client leaves. (The example's on_close
+    # stops it; so would the pipe closing when the response is freed, so this
+    # pins what a user sees, not which of the two did it. Stream's on_close
+    # itself is pinned in t/response/stream-source.t.)
+    ok(pump_until(sub { !kill 0, $children[0] }, 5), 'the child has exited after the client left');
 
     # The server must still be healthy: the disconnect is an ordinary end,
     # not an error, and the example's on_close cleanup must not break it.
