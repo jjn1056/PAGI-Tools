@@ -531,9 +531,7 @@
     I/O: a streamed response whose producer awaits Future::IO now completes
     in-process instead of failing with a 500 (it previously worked only by
     accident, for handlers whose first wait was the I/O itself). A request
-    still pending after 5 seconds dies with a timeout message. A handler
-    that waits on its own event loop (an IO::Async timer, say) is still
-    driven by that loop, as before, with or without Future::IO.
+    still pending after 5 seconds dies with a timeout message.
   - PAGI::Test::WebSocket's receive_text, receive_bytes and receive_json,
     and PAGI::Test::SSE's receive_event and receive_json, wait up to their
     timeout, driving the event loop, for a message the application sends
