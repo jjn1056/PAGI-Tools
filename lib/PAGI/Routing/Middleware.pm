@@ -53,7 +53,7 @@ sub _wrap {
         $object = $target;
     } else {
         my $class = _resolve_class($target);
-        my $error = PAGI::Utils::_load_class($class, "middleware('$target')", sub { $_[0]->can('new') });
+        my $error = PAGI::Utils::_load_class($class, "middleware('$target')", sub { $_[0]->can('new') }, $target);
         croak $error if defined $error;
 
         $object = $class->new(%{$self->{config}});
@@ -194,9 +194,10 @@ stored configuration, and then wrapped. Factory and C<wrap> results may be a
 native coderef or an app object; compilation always
 returns native code.
 
-Names beginning with C<PAGI::Middleware::> are already fully qualified. Simple
-and nested short names receive that prefix, while a leading C<+> selects an
-exact fully qualified class. Resolution happens once for each compiled
+Names beginning with C<PAGI::Middleware::>, and C<PAGI::Middleware> itself,
+are already fully qualified. Simple and nested short names receive that
+prefix, while a leading C<+> selects an exact fully qualified class; when a
+nested short name has no file, the error suggests the C<+>. Resolution happens once for each compiled
 wrapper, never once per request.
 
 When a descriptor list is folded, the first entry listed is the outermost

@@ -319,7 +319,7 @@ sub _resolve_middleware {
 sub _load_middleware {
     my ($self, $name, $call) = @_;
     my $class = $self->_resolve_middleware($name);
-    my $error = PAGI::Utils::_load_class($class, "$call('$name')", sub { $_[0]->can('new') });
+    my $error = PAGI::Utils::_load_class($class, "$call('$name')", sub { $_[0]->can('new') }, $name);
     croak $error if defined $error;
     return $class;
 }

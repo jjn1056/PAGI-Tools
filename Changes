@@ -477,6 +477,13 @@
     It used to build the class with new and no arguments, ignoring BUILD_APP.
 
   [Fixed]
+  - response('PAGI::Response', ...) builds the base class, and each
+    loader's namespace root resolves to itself (it became
+    PAGI::Response::PAGI::Response). A short name with :: that has no file
+    suggests the leading + instead of listing @INC.
+  - The byte-body refusal says "must be a defined string of encoded bytes,
+    or an object that stringifies to one"; it said "unblessed scalar",
+    though objects that stringify are accepted.
   - PAGI::Test::Client records the disconnect detail PAGI::Server records:
     an SSE app's failure as its first line, without " at FILE line N"; an
     SSE app that returns without starting, "no response was started"; a

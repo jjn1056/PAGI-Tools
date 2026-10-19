@@ -201,8 +201,11 @@ are encoded again.
 
 Builds a Response by class name. A short name is resolved under
 C<PAGI::Response::> (C<'JSON'> is L<PAGI::Response::JSON>), a name already
-under that namespace is kept, and a leading C<+> names an exact package, so a
-Response class from another distribution needs no change here. A class
+under that namespace is kept, C<'PAGI::Response'> is the base class, and a
+leading C<+> names an exact package, so a Response class from another
+distribution needs no change here. A name with C<::> outside the namespace is
+still prefixed (C<'MyApp::XML'> is C<PAGI::Response::MyApp::XML>); when no such
+file exists, the error suggests C<'+MyApp::XML'>. A class
 already defined -- declared in the application file, or loaded before -- is
 used as it is; otherwise its file is loaded, and a name with no file, or a
 file that fails to load, dies C<response('...'): cannot load ...>. The class
@@ -414,6 +417,19 @@ should not be hidden inside an encoder.
 
 Delivery internals used by File and Stream are not a public subclass seam.
 
+=head1 ERRORS FROM A FRAMEWORK
+
+PAGI-Tools croaks, so an error names the line that called it. A framework
+that calls Tools on its users' behalf (building the Response a handler
+chose, say) is that caller, and the error would name the framework's line.
+Marking the framework's own packages as internal to Carp makes it name the
+user's line instead:
+
+    package My::Framework::Response;
+    $Carp::Internal{+__PACKAGE__}++;     # or: our @CARP_NOT = (...);
+
+Carp then skips those packages when it reports where an error came from.
+
 =head1 STREAMING AND FILE RESPONSES
 
 =head2 Stream
@@ -470,7 +486,7 @@ sub response {
         unless defined($name) && !ref($name) && length($name);
     require PAGI::Utils;
     my $class = PAGI::Utils::_resolve_class('PAGI::Response', $name, 'response');
-    my $error = PAGI::Utils::_load_class($class, "response('$name')", sub { $_[0]->isa('PAGI::Response') });
+    my $error = PAGI::Utils::_load_class($class, "response('$name')", sub { $_[0]->isa('PAGI::Response') }, $name);
     croak $error if defined $error;
     croak "response('$name'): $class is not a PAGI::Response"
         unless $class->isa('PAGI::Response');
@@ -749,7 +765,7 @@ sub _parse_options {
 sub _require_bytes {
     my ($name, $value) = @_;
     $value = PAGI::Utils::_stringified($value);
-    croak "$name must be a defined unblessed scalar of encoded bytes"
+    croak "$name must be a defined string of encoded bytes, or an object that stringifies to one"
         unless defined $value && !ref($value);
     defined(my $bytes = PAGI::Utils::_byte_string($value))
         or croak "$name must be encoded bytes: it contains a character above 0xFF; encode text first, or use Text or HTML";

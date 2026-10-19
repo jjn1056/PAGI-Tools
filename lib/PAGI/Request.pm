@@ -1493,6 +1493,10 @@ C<< $scope != $ctx->request->scope >> and rebuilds it when they differ.
 This is how Starlette works: its C<Request.path_params> reads
 C<scope["path_params"]>, and each route match updates the scope in place.
 
+=item * B<Errors name the user's line.> A framework that calls Request on its
+users' behalf marks its own packages for Carp, so a croak from here names
+the user's line (L<PAGI::Response/ERRORS FROM A FRAMEWORK>).
+
 =back
 
 =head1 SEE ALSO
