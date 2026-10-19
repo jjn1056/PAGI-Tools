@@ -489,7 +489,8 @@
     SSE app that returns without starting, "no response was started"; a
     refusal left unfinished, "refusal started but never completed"; a
     WebSocket app that returns without accepting or refusing, "no response
-    was started"; a
+    was started"; a WebSocket app that dies, its first line, as PAGI-Server
+    records it from its HTTP/1.1 failure-path fix; a
     WebSocket app that returns from an accepted socket without a closing
     handshake, "accepted socket left without a closing handshake". It
     recorded the whole exception, or no detail.

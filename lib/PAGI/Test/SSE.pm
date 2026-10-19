@@ -9,6 +9,7 @@ use Carp qw(croak);
 use PAGI::Utils::_SendValidation;
 use PAGI::Test::Response;
 use PAGI::Test::_Drive;
+use PAGI::Test::ConnectionState ();
 
 
 sub new {
@@ -140,10 +141,10 @@ sub _start {
             # response at all.
             my $failed = $future->is_failed;
             my $detail = $self->{started}
-                           ? ($failed ? _detail_from_error(scalar $future->failure)
+                           ? ($failed ? PAGI::Test::ConnectionState::_detail_from_error(scalar $future->failure)
                                       : 'sse.start without sse.close')
                        : $conn->response_started ? 'refusal started but never completed'
-                       : $failed ? _detail_from_error(scalar $future->failure)
+                       : $failed ? PAGI::Test::ConnectionState::_detail_from_error(scalar $future->failure)
                        : 'no response was started';
             $self->_transport_closed(reason => 'server_error', detail => $detail);
         }
@@ -286,17 +287,6 @@ sub is_closed {
     return $self->{closed};
 }
 
-
-# A failure's detail, as PAGI::Server records it: the first line, without
-# Perl's " at FILE line N." tail.
-sub _detail_from_error {
-    my ($error) = @_;
-    my ($first) = split /\n/, ($error // '');
-    return undef unless defined $first;
-    $first =~ s/ at \S+ line \d+\.?\s*\z//;
-    $first =~ s/\s+\z//;
-    return length $first ? $first : undef;
-}
 
 1;
 
