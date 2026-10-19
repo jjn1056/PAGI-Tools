@@ -161,12 +161,34 @@ sub _init {
         if (ref($handler) eq 'CODE') { $self->{handler_code} = $handler }
         else                         { $self->{handler_app} = PAGI::Utils::to_app($handler) }
     }
+    $self->{catch} = _catch_table($config->{catch}) if exists $config->{catch};
     croak "ErrorHandler status $self->{status} must carry "
         . "$FIELD_REQUIRED{$self->{status}}, which the built-in answer cannot "
         . 'supply; a handler is required'
-        if $FIELD_REQUIRED{$self->{status}} && !$self->_has_handler;
+        if $FIELD_REQUIRED{$self->{status}} && !$self->_has_handler
+            && !($self->{catch} && $self->{catch}{$self->{status}});
     PAGI::Utils::_reject_unknown_options('ErrorHandler', $config,
-        qw(development handler on_error status));
+        qw(catch development handler on_error status));
+}
+
+# The catch table, checked: each key a status from 400 to 599 or an exact
+# package name, each entry a code reference. Returns a copy.
+sub _catch_table {
+    my ($catch) = @_;
+    croak 'ErrorHandler catch must be a hash reference of status or class => code'
+        unless ref($catch) eq 'HASH';
+    my %table;
+    for my $key (sort keys %$catch) {
+        unless ($key =~ /\A[45][0-9][0-9]\z/ || $key =~ /\A[A-Za-z_]\w*(?:::\w+)*\z/) {
+            my $hint = $key =~ /\A\+([A-Za-z_]\w*(?:::\w+)*)\z/
+                ? "; a class name is exact, so write '$1'" : '';
+            croak "ErrorHandler catch key '$key' is neither a status from 400 to 599 nor a package name$hint";
+        }
+        croak "ErrorHandler catch entry for '$key' must be a code reference"
+            unless ref($catch->{$key}) eq 'CODE';
+        $table{$key} = $catch->{$key};
+    }
+    return \%table;
 }
 
 sub _has_handler { $_[0]{handler_code} || $_[0]{handler_app} ? 1 : 0 }
