@@ -3,9 +3,12 @@ use warnings;
 use Test2::V0;
 use PAGI::Response ();
 
-subtest 'PAGI::Response exports only the builder, and only on request' => sub {
-    is([@PAGI::Response::EXPORT_OK], ['response'], 'response is the only export');
-    is([@{$PAGI::Response::EXPORT_TAGS{all}}], ['response'], ':all is the builder');
+subtest 'PAGI::Response exports one builder and one predicate, only on request' => sub {
+    # response('Name', ...) is the one builder; status_forbids_body is a
+    # predicate, not another way to build a response.
+    is([@PAGI::Response::EXPORT_OK], ['response', 'status_forbids_body'], 'the exports');
+    is([@{$PAGI::Response::EXPORT_TAGS{all}}], ['response', 'status_forbids_body'], ':all is both');
+    is([grep { /_response$/ } @PAGI::Response::EXPORT_OK], [], 'no NAME_response factory');
     my $default = eval q{
         package T::NoDefaultResponseImports;
         use PAGI::Response;

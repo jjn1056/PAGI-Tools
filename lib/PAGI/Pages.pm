@@ -701,7 +701,7 @@ sub _replace_header {
 sub _response_for {
     my ($self, $scope, $page) = @_;
     my $headers = $self->_assembled_headers($scope, $page);
-    if (PAGI::Response::_status_forbids_body($page->{status})) {
+    if (PAGI::Response::status_forbids_body($page->{status})) {
         return PAGI::Response::Empty->new(
             status => $page->{status}, headers => $headers,
         );
