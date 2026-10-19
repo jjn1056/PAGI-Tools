@@ -34,6 +34,8 @@ single Location remain tied to the buffered HTML body. Mutations that would
 stale those semantics are rejected directly or, for the mutable header
 container, while deriving the invocation's delivery values before emission.
 
+Owned fields: Location (see L<PAGI::Response/Owned fields>).
+
 =cut
 
 my %REDIRECT_STATUS = map { $_ => 1 } qw(301 302 303 307 308);

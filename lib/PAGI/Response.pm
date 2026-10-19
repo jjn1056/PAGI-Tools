@@ -287,13 +287,10 @@ C<header($name, $value)> appends and preserves repeated-field order;
 C<content_type> replaces Content-Type, and C<content_type(undef)> gives back the
 class's default type (Text's C<text/plain; charset=utf-8>, for one), so a typed
 body always says what it is; Empty and File have none, File's coming from the
-file name. However a Content-Type arrives -- the C<content_type> option, a
-Content-Type pair in the C<headers> option, or C<header('Content-Type', ...)>
-later -- it goes through the class's C<content_type>, so it replaces the one
-already there and keeps the class's rule: Text and HTML add their charset,
-Empty refuses one. Given both the option and a pair, the option wins. A
-Content-Type added straight to the container returned by C<headers> bypasses
-the rule. The C<*_try> setters are chainable and
+file name. C<header('Content-Type', ...)> is C<content_type>: it replaces
+the type and keeps the class's rule (L</Owned fields>); one added straight
+to the container returned by C<headers> bypasses the rule. The C<*_try>
+setters are chainable and
 do not overwrite an explicit value. C<body> is read-only encoded bytes for
 buffered responses and croaks for File and Stream. C<is_buffered> reports the
 memory strategy, independently of protocol adaptation.
@@ -316,6 +313,45 @@ Header names are HTTP tokens (RFC 9110): letters, digits and
 C<!#$%&'*+-.^_`|~>. A name with anything else (a space, a colon, a
 character above 0x7E) croaks, naming it; one added straight to the
 container croaks as the response is sent.
+
+=head1 CONSTRUCTOR CONTRACT
+
+Every response class is built the same way:
+
+    Class->new($content, status => $code, headers => $headers,
+        content_type => $type, %class_options)
+    response($name, $content, ...)          # the same, by name
+
+C<$content> is the class's one positional argument: bytes for
+C<PAGI::Response>, characters for Text and HTML, data for JSON, a document
+for Problem, a URL for Redirect, a path for File, a producer for Stream and
+NDJSON. The common options are C<status>, C<headers> (any of the three
+shapes L</new> takes, order kept) and C<content_type>; every class accepts
+them, or refuses one for a reason its documentation gives. Class options
+(File's C<filename>, C<etag> and so on) follow. L<PAGI::Response::Empty> is
+the exception: it takes no content, only options.
+
+So a framework can build whichever class a handler chose with one call,
+the base class included as C<'+PAGI::Response'>. A third-party class keeps
+the contract to be built that way; the shipped classes are tested against
+it in F<t/response/contract.t>.
+
+=head2 Owned fields
+
+Some classes calculate a header themselves and refuse it from the caller:
+
+    Class      Owns                                  Because
+    ---------  ------------------------------------  ----------------------
+    Empty      Content-Type                          it has no content
+    Redirect   Location                              the location is the content
+    File       Content-Length, Content-Range, ETag   calculated from the file
+
+Staged headers handed to such a class must not contain a field it owns:
+building with one croaks, naming it. A Content-Type, however it arrives
+(the C<content_type> option, a pair in C<headers>, or C<header> later), goes
+through the class's own C<content_type>, so Text and HTML keep their
+charset and Empty refuses one; given both the option and a pair, the option
+wins.
 
 =head1 SUBCLASSING
 
