@@ -8,6 +8,7 @@ use lib 'lib';
 use PAGI::Middleware::ErrorHandler;
 use PAGI::Exception::HTTP;
 use PAGI::Response qw(response);
+use Scalar::Util qw(refaddr);
 
 # ErrorHandler's catch: answers by status and exception class, in
 # Starlette's order (an HTTP error's status, then the class and its
@@ -116,8 +117,8 @@ subtest 'a failing entry' => sub {
         my $error = PAGI::Exception::HTTP->new(500);
         my ($status, undef, $failure, $reported, $warnings) = run(error => $error, options => { catch => { 500 => $entry } });
         is($status, 500, "$label: the last-resort 500");
-        ok($reported->[0] == $error, "$label: on_error saw the original");
-        ok($failure == $error, "$label: the original is re-raised");
+        is(refaddr($reported->[0]), refaddr($error), "$label: on_error saw the original");
+        is(refaddr($failure), refaddr($error), "$label: the original is re-raised");
         like($warnings, [ qr/ErrorHandler handler failed/ ], "$label: diagnosed");
     }
 };
