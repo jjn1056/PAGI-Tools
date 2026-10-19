@@ -109,6 +109,35 @@ subtest 'on_close runs once, however the stream ends' => sub {
     ok($served->is_done, 'and the response ends after it');
 };
 
+subtest 'on_close runs when the stream ends before its producer starts' => sub {
+    for my $form ([ source => sub { Local::Source->new(values => ['a']) } ],
+                  [ producer => sub { async sub { await $_[0]->write('a') } } ]) {
+        my ($label, $content) = @$form;
+
+        my $closed = 0;
+        my $conn = PAGI::Test::ConnectionState->new;
+        my $send = sub {
+            my ($event) = @_;
+            $conn->_mark_disconnected('client_closed') if $event->{type} eq 'http.response.start';
+            return Future->done;
+        };
+        my $f = response('Stream', $content->(), on_close => sub { $closed++ })->to_app->(
+            { type => 'http', method => 'GET', headers => [], 'pagi.connection' => $conn },
+            sub { Future->done({ type => 'http.request', body => '', more => 0 }) }, $send);
+        $f->await;
+        is($closed, 1, "$label: the client left as the response started");
+
+        $closed = 0;
+        $f = response('Stream', $content->(), on_close => sub { $closed++ })->to_app->(
+            { type => 'http', method => 'GET', headers => [] },
+            sub { Future->done({ type => 'http.request', body => '', more => 0 }) },
+            sub { $_[0]{type} eq 'http.response.start' ? Future->fail("send broke\n") : Future->done });
+        $f->await;
+        is($closed, 1, "$label: the response start failed");
+        ok($f->is_failed, "$label: and the failure is the invocation's");
+    }
+};
+
 subtest 'on_close with a producer' => sub {
     my ($mine, $option) = (0, 0);
     serve(response('Stream', async sub {

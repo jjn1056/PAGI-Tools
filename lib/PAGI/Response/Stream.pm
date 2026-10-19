@@ -96,18 +96,11 @@ sub new {
     my $producer = @_ >= 2 && ref($content) eq 'CODE' ? $content
         : blessed($content) && $content->can('next_chunk') ? $class->_source_producer($content)
         : croak "$class->new requires a producer coderef or a source object with next_chunk";
-    if ($on_close) {
-        my $inner = $producer;
-        $producer = sub {
-            my ($writer) = @_;
-            $writer->on_close($on_close);
-            return $inner->($writer);
-        };
-    }
 
     my $self = $class->SUPER::new('', @pairs);
     delete $self->{_body};
     $self->{_producer} = $producer;
+    $self->{_on_close} = $on_close if $on_close;
     return $self;
 }
 
@@ -146,6 +139,7 @@ sub _stream_delivery_plan {
     my ($self) = @_;
     return {
         producer => $self->{_producer},
+        on_close => $self->{_on_close},
         status   => $self->status,
         headers  => $self->_stream_wire_headers,
     };
@@ -192,11 +186,25 @@ sub _emit {
 async sub _run_lifecycle {
     my ($self, $plan, $scope, $receive, $send, $cancel_signal) = @_;
 
-    await Future->wrap($send->({
-        type    => 'http.response.start',
-        status  => $plan->{status},
-        headers => $plan->{headers},
-    }));
+    # on_close runs once however the stream ends, so it is armed before
+    # anything that can end it: a failed start runs it here, and from the
+    # Writer's creation on, the Writer's cleanup runs it.
+    my $started = eval {
+        await Future->wrap($send->({
+            type    => 'http.response.start',
+            status  => $plan->{status},
+            headers => $plan->{headers},
+        }));
+        1;
+    };
+    unless ($started) {
+        my $error = $@;
+        if (my $on_close = $plan->{on_close}) {
+            eval { await Future->wrap($on_close->()); 1 }
+                or warn "PAGI::Response::Writer on_close callback error: $@";
+        }
+        die $error;
+    }
 
     my $writer = PAGI::Response::Writer->_new(
         response   => $self,
@@ -204,6 +212,7 @@ async sub _run_lifecycle {
         connection => $scope->{'pagi.connection'},
         transport  => $scope->{'pagi.transport'},
     );
+    $writer->on_close($plan->{on_close}) if $plan->{on_close};
     if ($cancel_signal->is_ready) {
         await $writer->_abort;
         await $writer->_cleanup;
