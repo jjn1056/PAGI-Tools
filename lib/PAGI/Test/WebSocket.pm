@@ -674,7 +674,10 @@ an empty string if still open.
         say "Connection closed";
     }
 
-Returns true if the WebSocket connection has been closed.
+Returns true if the WebSocket connection has been closed: by the test, by
+the application's C<websocket.close>, or by the application returning,
+dying or refusing. Messages it sent before that stay readable. Every
+outcome, with its reason and detail, is in L<PAGI::Test::Client/SEMANTICS>.
 
 =head1 INTERNAL METHODS
 

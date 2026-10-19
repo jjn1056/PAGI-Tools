@@ -490,6 +490,8 @@ An application that returns after C<sse.start> without C<sse.close> has left
 the response incomplete (L<PAGI::Spec::Www/Application Left a Response Incomplete>):
 the connection ends abnormally with reason C<server_error> and detail
 C<sse.start without sse.close>, as PAGI::Server records it.
+Every outcome, with its reason and detail, is in
+L<PAGI::Test::Client/SEMANTICS>.
 
 =head1 INTERNAL METHODS
 

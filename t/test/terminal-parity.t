@@ -91,4 +91,34 @@ subtest 'a WebSocket app that returns without a closing handshake' => sub {
         'accepted socket left without a closing handshake');
 };
 
+subtest 'is_closed is true once the stream is over; sent events stay readable' => sub {
+    my $sse = PAGI::Test::Client->new(app => async sub {
+        my ($scope, $receive, $send) = @_;
+        await $send->({ type => 'sse.start' });
+        await $send->({ type => 'sse.send', data => 'one' });
+        await $send->({ type => 'sse.send', data => 'two' });
+        await $send->({ type => 'sse.close' });
+    })->sse('/');
+    ok($sse->is_closed, 'SSE: closed when the application closed the stream');
+    is([ map { $sse->receive_event->{data} } 1 .. 2 ], [ 'one', 'two' ], 'SSE: both events readable');
+
+    my $returned = PAGI::Test::Client->new(app => async sub {
+        my ($scope, $receive, $send) = @_;
+        await $send->({ type => 'sse.start' });
+        await $send->({ type => 'sse.send', data => 'last' });
+    })->sse('/');
+    ok($returned->is_closed, 'SSE: closed when the application returned without sse.close');
+    is($returned->receive_event->{data}, 'last', 'SSE: its event still readable');
+
+    my $ws = PAGI::Test::Client->new(app => async sub {
+        my ($scope, $receive, $send) = @_;
+        await $receive->();
+        await $send->({ type => 'websocket.accept' });
+        await $send->({ type => 'websocket.send', text => 'hello' });
+        await $send->({ type => 'websocket.close', code => 1000 });
+    })->websocket('/');
+    ok($ws->is_closed, 'WebSocket: closed when the application closed it');
+    is($ws->receive_text, 'hello', 'WebSocket: the message is readable');
+};
+
 done_testing;

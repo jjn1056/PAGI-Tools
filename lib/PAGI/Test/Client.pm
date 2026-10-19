@@ -1497,6 +1497,39 @@ An application that fails after starting the stream fails the test, raised
 once in the same places as for L</websocket>: as C<sse> returns (in either
 style, once the application has failed) or from L<PAGI::Test::SSE/close>.
 
+=head1 SEMANTICS
+
+How an SSE or WebSocket session ends, as PAGI::Server ends it. The reason
+and detail are on the scope's C<pagi.connection> (a
+L<PAGI::Test::ConnectionState>: C<disconnect_reason>, C<disconnect_detail>);
+a clean end records no reason. Events the application sent before the end
+stay readable after C<is_closed> is true.
+
+    SSE outcome                          is_closed  reason        detail
+    -----------------------------------  ---------  ------------  -----------------------------------
+    the app sends sse.close              true       (none)        (none)
+    the app returns after sse.start      true       server_error  sse.start without sse.close
+    the app dies                         true       server_error  the error's first line, no location
+    the app returns without starting     (sse dies) server_error  no response was started
+    the app refuses (http.response.*)    (a PAGI::Test::Response is returned)
+    a refusal left unfinished            true       server_error  refusal started but never completed
+    the test calls close                 true       client_closed (none)
+
+    WebSocket outcome                    is_closed  reason        detail
+    -----------------------------------  ---------  ------------  -----------------------------------
+    the app sends websocket.close        true       (none)        (none); close_code is the app's
+    the app returns, no closing handshake true      server_error  accepted socket left without a
+                                                                  closing handshake; close_code 1011
+    the app dies                         true       server_error  the error
+    the app refuses                      true       (none)        (none); refused and response say so
+    a refusal left unfinished            true       server_error  refusal started but never completed
+    the test calls close                 true       (none)        (none); close_code is the test's
+
+An app that dies or returns before C<sse> or C<websocket> returns makes that
+call die. These are versioned behaviour: a change to any of them gets an
+entry in F<UPGRADING.md>, and F<t/test/terminal-parity.t> pins them against
+PAGI::Server's values.
+
 =head1 LIFESPAN
 
 =head2 start
