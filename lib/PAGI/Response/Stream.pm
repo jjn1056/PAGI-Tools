@@ -4,6 +4,7 @@ use strict;
 use warnings;
 
 use Carp qw(croak);
+use Scalar::Util qw(blessed);
 use Future;
 use Future::AsyncAwait;
 
@@ -72,14 +73,50 @@ one item becomes bytes.
 =cut
 
 sub new {
-    my ($class, $producer, @pairs) = @_;
-    croak "$class->new requires a producer coderef"
-        unless @_ >= 2 && ref($producer) eq 'CODE';
+    my ($class, $content, @pairs) = @_;
+    # on_close is Stream's own option: taken out before the common options
+    # are parsed, and run once however the stream ends.
+    my $on_close;
+    for (my $i = 0; $i < @pairs - 1; $i += 2) {
+        next unless defined $pairs[$i] && !ref($pairs[$i]) && $pairs[$i] eq 'on_close';
+        (undef, $on_close) = splice @pairs, $i, 2;
+        croak 'Stream on_close must be a code reference' unless ref($on_close) eq 'CODE';
+        last;
+    }
+    my $producer = @_ >= 2 && ref($content) eq 'CODE' ? $content
+        : blessed($content) && $content->can('next_chunk') ? $class->_source_producer($content)
+        : croak "$class->new requires a producer coderef or a source object with next_chunk";
+    if ($on_close) {
+        my $inner = $producer;
+        $producer = sub {
+            my ($writer) = @_;
+            $writer->on_close($on_close);
+            return $inner->($writer);
+        };
+    }
 
     my $self = $class->SUPER::new('', @pairs);
     delete $self->{_body};
     $self->{_producer} = $producer;
     return $self;
+}
+
+# A source is pulled one value at a time, each written before the next pull,
+# and nothing but next_chunk is called on it. On a format subclass (one with
+# its own format_item) each value is an item.
+sub _source_producer {
+    my ($class, $source) = @_;
+    my $items = $class->can('format_item') != \&PAGI::Response::Stream::format_item;
+    return async sub {
+        my ($writer) = @_;
+        return await $writer->pipe_from($source) unless $items;
+        while (!$writer->is_disconnected) {
+            my $item = await Future->wrap($source->next_chunk);
+            last unless defined $item;
+            await $writer->write_item($item);
+        }
+        return;
+    };
 }
 
 sub is_buffered { return 0 }
