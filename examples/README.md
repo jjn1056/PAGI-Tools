@@ -17,7 +17,7 @@ Router object; servers accept anything with `to_app`.
 
 - Perl 5.18+ with `Future::AsyncAwait` for the distribution and most examples;
   `large-application`, `starlette-apples`, `gut-check`, `content-negotiation`, `upload-streaming`, `process-streaming`,
-  `webhook-receiver`, `signed-requests`, `framework-on-tools`, `request-class`, `starlette-endpoint`, `endpoint-lifecycle`, `escape-hatches`, `internal-tool`, `auth-cookie-login`, `auth-extensions`, `auth-notes`, `auth-jwt-sandbox`, and `openapi-notes`
+  `webhook-receiver`, `signed-requests`, `framework-on-tools`, `framework-wrap-style`, `request-class`, `starlette-endpoint`, `endpoint-lifecycle`, `escape-hatches`, `internal-tool`, `auth-cookie-login`, `auth-extensions`, `auth-notes`, `auth-jwt-sandbox`, and `openapi-notes`
   require Perl 5.40+
 - A PAGI server to run examples against:
   ```
@@ -76,6 +76,7 @@ Structuring applications:
 - `starlette-endpoint` - Perl 5.40 Starlette's class-based HTTPEndpoint example, ported line for line: `endpoint('MyHttpRoute')` at a route; the Python beside it in the README, with both curl transcripts (PUT 405 with Allow, HEAD, OPTIONS 204)
 - `endpoint-lifecycle` - Perl 5.40 one `endpoint()` spelling for three lifecycles: plain and WebSocket classes built fresh for each request or connection (state on `$self`), a Moo HTTP endpoint whose builder fills a required per-request attribute next to shared route config, and one object shared on purpose with `BUILD_APP`
 - `framework-on-tools` - Perl 5.40 small Sinatra/FastAPI-shaped framework (`lib/Tiny.pm`) built on Tools, and a notes app on it: a Request subclass, plain-value returns, `before` and `around` (call_next) hooks, startup services, typed path parameters, exception mapping, a plugin, a raw escape hatch and an OpenAPI document from the Router; the README lists each seam and its cost
+- `framework-wrap-style` - Perl 5.40 a wrap-style framework (`lib/Mini.pm`), the shape Thunderhorse and Responder have: a Request subclass, a mutable response staged on the empty `PAGI::Response` and built with one call, its own router re-dispatching one request through chained matches, a 401 exception carrying its challenge, a 204 and a bodyless redirect without Empty, and a page turned into a response
 - `openapi-notes` - Perl 5.40 a notes API whose `/openapi.json` comes from `openapi(...)`: typed path parameters, operationIds, security from `Requires` and bodies from route `meta`; a Router part under one PAGI::App::Compose, a mounted static application left out, and generated Python clients driving it end to end
 - `request-class` - Perl 5.40 an application's own Request subclass with two helpers, set once by `middleware('RequestClass')` and received by a plain route, an Endpoint::HTTP method and a route inside a mount, with no handler wrapped
 - `escape-hatches` - Perl 5.40 the easy way, then each step down to raw PAGI in one app: a handler returning a response, one reading the raw scope and connection, one answering with a hand-written application mid-request, a raw application mounted at a route, and raw middleware editing events
