@@ -52,7 +52,12 @@ represent, such as a blessed object.
 
 Also built by name: C<< response('NDJSON', $producer, %options) >> (see
 L<PAGI::Response/response>); C<status>, C<content_type> and C<headers> are the
-usual options.
+usual options, and C<on_close> is Stream's.
+
+The content may instead be a source, an object with C<next_chunk>
+(L<PAGI::Response::Stream/Streaming from a source>): each value it gives is an
+item, C<0> and the empty string included. C<undef> ends the stream, so a
+source cannot send a C<null> record; a producer can.
 
 =cut
 
