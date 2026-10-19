@@ -1435,6 +1435,66 @@ read below them
 
 =back
 
+=head1 SUBCLASSING
+
+A framework may subclass PAGI::Request (Thunderhorse does, with Moo's
+C<extends>). The contract:
+
+=over 4
+
+=item * B<State.> The object is a blessed hash with two PAGI-Tools fields,
+C<scope> and C<receive>. A subclass adds fields under any other name.
+
+=item * B<Caching is in the scope.> What a Request parses is kept in the
+scope under C<pagi.request.*>: the headers, query, cookies, form and uploads,
+and the latches that record the body was read or streamed. Every Request
+object over the same scope shares them, so a second object is cheap and sees
+the body the first one read; a new scope starts fresh.
+
+=item * B<Overridable methods.> Public methods may be overridden; the ones
+other methods call are:
+
+    Method        Also read by
+    ------------  ----------------------------------------------------------
+    path_params   path_param (and its strict mode)
+    query_params  query_param, raw_query_param, raw_query_params
+    headers       content_type, charset, basic_auth, bearer_token,
+                  multipart_stream
+    header        content_length, cookies
+    header_all    accepts, preferred_type
+    content_type  is_json, is_form, is_multipart
+    cookies       cookie
+    body          text, json, form_params
+    form_params   form_param, raw_form_param, raw_form_params
+    uploads       upload, upload_all
+
+C<path_params> is the seam for a framework with its own router. Methods
+whose names start with C<_> are not part of the contract.
+
+=item * B<How the class is chosen.> PAGI-Tools builds the class named by
+C<pagi.request.factory> in the scope, set by
+L<PAGI::Middleware::RequestClass> or a route's C<request_factory>.
+
+=item * B<Re-dispatch through one scope.> A framework whose router passes
+one request through several matches writes each match's parameters into
+the scope in place (C<< $scope->{path_params} = {...} >>, merged or replaced
+as its routing means), relies on the stock C<path_params>, which reads the
+scope live, and builds a new Request only when the scope is new. It does not
+cache path parameters on the object or write the fields above, and it does
+not make a shallow copy of the scope per match: copied scalars such as the
+body latch would split between the copies (L<PAGI::Building>, "The footgun:
+scalars do not propagate").
+
+When something hands a route a copy of the scope (a per-route middleware
+that rewrites it, say), the copy is a new scope and needs a new Request. A
+framework that keeps one Request in its context compares
+C<< $scope != $ctx->request->scope >> and rebuilds it when they differ.
+
+This is how Starlette works: its C<Request.path_params> reads
+C<scope["path_params"]>, and each route match updates the scope in place.
+
+=back
+
 =head1 SEE ALSO
 
 L<PAGI::Stash>, L<PAGI::Request::Upload>, L<PAGI::Request::BodyStream>, L<Hash::MultiValue>
