@@ -214,10 +214,12 @@ C<< PAGI::Response->new($bytes, %options) >>.
 =head2 new
 
     PAGI::Response->new($bytes, %options)
+    PAGI::Response->new                    # the empty value, for staging
 
 Creates a complete buffered response. C<$bytes> is a string of encoded bytes
 (L</BYTES AND CHARACTERS>), or an object that stringifies to one
-(L</VALUES FROM OTHER CODE>). The
+(L</VALUES FROM OTHER CODE>); C<undef>, or no content at all, is an empty
+body. The
 supported options are C<status>,
 C<content_type>, and C<headers>, where C<headers> is a flat
 C<[name =E<gt> value, ...]> list, C<[[name, value], ...]> pairs as the PAGI
@@ -227,7 +229,22 @@ C<headers> argument in PAGI-Tools takes these three shapes.
 Unknown, duplicate, odd, or malformed options
 croak synchronously. Status defaults to 200 and body-bearing construction
 rejects 1xx, 204, 205, and 304. Default Content-Type is
-C<application/octet-stream>.
+C<application/octet-stream>, written only when the body has bytes: an empty
+body has no Content-Type unless one is given, as in Starlette's base
+C<Response>.
+
+C<< PAGI::Response->new >> with no arguments is the empty value: no explicit
+status (C<has_status> is false), no Content-Type, an empty body. As an
+application it sends 200 with an empty body and no Content-Type. A framework
+can stage C<status>, C<header> and C<cookie> on it before it knows the
+final class, then build the class named C<$name> with what was staged:
+
+    response($name // '+PAGI::Response', $body,
+        ($staged->has_status ? (status => $staged->status) : ()),
+        headers => $staged->headers);
+
+How a staged value merges with the final one (which wins, which headers
+add) is the framework's policy; PAGI-Tools adds none.
 
 =head2 to_app
 
@@ -406,8 +423,6 @@ sub response {
 
 sub new {
     my ($class, $value, @pairs) = @_;
-    croak 'PAGI::Response->new requires a body byte scalar'
-        unless @_ >= 2;
     my $options = _parse_options(@pairs);
 
     my $self = bless { _headers => PAGI::Headers->new }, $class;
@@ -421,12 +436,27 @@ sub new {
     }
     $self->content_type($options->{content_type})
         if exists $options->{content_type};
-    $self->content_type_try($self->default_content_type);
+    $self->content_type_try($self->_body_default_content_type);
     return $self;
 }
 
 sub default_content_type { 'application/octet-stream' }
-sub render { $_[1] }
+# No content is an empty body; subclasses with their own render keep their
+# own meaning of undef (JSON's null, Text's refusal).
+sub render { $_[1] // '' }
+
+# The type a response says it is when nothing else was given: the class's
+# default, except that the base class's application/octet-stream describes
+# bytes, so an empty buffered body has none (as Starlette's base Response,
+# whose media type is None).
+sub _body_default_content_type {
+    my ($self) = @_;
+    my $default = $self->default_content_type;
+    return undef
+        if defined $default && $default eq 'application/octet-stream'
+        && $self->is_buffered && defined $self->{_body} && $self->{_body} eq '';
+    return $default;
+}
 
 sub status {
     my ($self, $code) = @_;
@@ -499,7 +529,7 @@ sub content_type {
         croak "header 'Content-Type' value contains a character above 0xFF: encode it first" if $not;
         $value = $bytes;
         $self->{_headers}->set('Content-Type', $value);
-    } elsif (defined(my $default = $self->default_content_type)) {
+    } elsif (defined(my $default = $self->_body_default_content_type)) {
         # Clearing a typed body gives back its default, so it always says
         # what it is; a class with no default (Empty, File) sends none.
         $self->{_headers}->set('Content-Type', $default);

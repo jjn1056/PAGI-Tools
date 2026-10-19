@@ -168,6 +168,14 @@
   - Endpoint::HTTP answers QUERY with a query method. A query helper method
     on an existing subclass now answers QUERY too.
   - PAGI::Test::Client has a query method for the QUERY verb.
+  - PAGI::Response->new with no arguments is the empty value: no explicit
+    status, no Content-Type, an empty body; a framework stages status,
+    headers and cookies on it before it knows the final class (as
+    FastAPI's temporary Response). Undef content is an empty body in the
+    base class (JSON still renders undef as null; Text and HTML still
+    refuse it), and the base class writes its application/octet-stream
+    only when the body has bytes, as Starlette's base Response has no
+    media type: an empty untyped redirect sends no Content-Type.
 
   [Changed]
   - PAGI::Test::Client: an SSE application that returns after sse.start
