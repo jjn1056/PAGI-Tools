@@ -176,6 +176,13 @@
     refuse it), and the base class writes its application/octet-stream
     only when the body has bytes, as Starlette's base Response has no
     media type: an empty untyped redirect sends no Content-Type.
+  - A status that forbids content (1xx, 204, 205, 304) takes an empty body
+    in any buffered response class, not only Empty:
+    response('Text', '', status => 204) is a 204, sent with no default
+    Content-Type and, on 1xx/204/304, no Content-Length. A body with bytes
+    on such a status is still refused, and Stream, NDJSON and File still
+    refuse the status; Empty remains the class that never carries a
+    Content-Type.
 
   [Changed]
   - PAGI::Test::Client: an SSE application that returns after sse.start

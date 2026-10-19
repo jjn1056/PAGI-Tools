@@ -227,11 +227,26 @@ spec writes headers, or a L<PAGI::Headers> object (copied; later changes to
 it do not reach the response), whose values follow C<header> (L</metadata>). Every
 C<headers> argument in PAGI-Tools takes these three shapes.
 Unknown, duplicate, odd, or malformed options
-croak synchronously. Status defaults to 200 and body-bearing construction
-rejects 1xx, 204, 205, and 304. Default Content-Type is
+croak synchronously. Status defaults to 200. Default Content-Type is
 C<application/octet-stream>, written only when the body has bytes: an empty
 body has no Content-Type unless one is given, as in Starlette's base
 C<Response>.
+
+A status whose HTTP semantics forbid content (1xx, 204, 205, 304) takes an
+empty body, in this class and in every buffered class built on it (Text,
+HTML, Problem, Redirect): C<< response('Text', '', status => 204) >> is a
+204. A body with bytes on such a status croaks ("response body is forbidden
+for status N"), at construction or when C<status> is set later; so does JSON,
+whose C<undef> renders as C<null>, and so do Stream, NDJSON and File, which
+always have a body to deliver. L<PAGI::Response::Empty> remains the class for
+a response that must never carry a Content-Type.
+
+On 1xx, 204 and 304 no Content-Length is sent (205 keeps its
+C<Content-Length: 0>), and the class's default Content-Type is not written:
+unlike Starlette, which adds its media type whatever the status. That is
+decided when the value is built: C<< response('Text', '')->status(204) >>
+keeps the C<text/plain; charset=utf-8> it was built with. A Content-Type the
+caller gives is sent.
 
 C<< PAGI::Response->new >> with no arguments is the empty value: no explicit
 status (C<has_status> is false), no Content-Type, an empty body. As an
@@ -452,10 +467,19 @@ sub render { $_[1] // '' }
 sub _body_default_content_type {
     my ($self) = @_;
     my $default = $self->default_content_type;
+    return undef if defined $self->{_status} && _status_forbids_body($self->{_status});
     return undef
         if defined $default && $default eq 'application/octet-stream'
-        && $self->is_buffered && defined $self->{_body} && $self->{_body} eq '';
+        && $self->_has_empty_buffered_body;
     return $default;
+}
+
+# The body is buffered and renders to nothing. An unbuffered class (Stream,
+# NDJSON, File) builds through an empty buffered constructor and then drops
+# the body, so is_buffered, a class constant, keeps it out while it does.
+sub _has_empty_buffered_body {
+    my ($self) = @_;
+    return $self->is_buffered && defined $self->{_body} && $self->{_body} eq '';
 }
 
 sub status {
@@ -633,7 +657,10 @@ sub _wire_headers {
         $name =~ tr/A-Z/a-z/;
         $name ne 'content-length' && $name ne 'transfer-encoding';
     } @$headers;
-    push @$headers, ['content-length', $length];
+    # 1xx, 204 and 304 carry no Content-Length; 205 keeps its 0 (RFC 9110).
+    my $status = $self->status;
+    push @$headers, ['content-length', $length]
+        unless $status >= 100 && $status < 200 || $status == 204 || $status == 304;
     return $headers;
 }
 
@@ -700,7 +727,9 @@ sub _status_forbids_body {
     return $status >= 100 && $status < 200 || $status == 204 || $status == 205 || $status == 304;
 }
 
-sub _allows_body_forbidden_status { 0 }
+# A buffered response with an empty body may carry a no-body status; a body
+# with bytes, or one still to be delivered (Stream, NDJSON, File), may not.
+sub _allows_body_forbidden_status { $_[0]->_has_empty_buffered_body }
 
 sub _validate_uri_reference {
     my ($label, $value) = @_;

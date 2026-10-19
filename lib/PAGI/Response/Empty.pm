@@ -61,14 +61,7 @@ sub content_type {
 sub _wire_headers {
     my ($self, $length) = @_;
     croak 'Empty response does not permit Content-Type' if $self->has_content_type;
-    my $headers = $self->SUPER::_wire_headers($length);
-    my $status = $self->status;
-    return $headers unless $status >= 100 && $status < 200 || $status == 204 || $status == 304;
-    @$headers = grep {
-        my $name = lc $_->[0];
-        $name ne 'content-length' && $name ne 'transfer-encoding';
-    } @$headers;
-    return $headers;
+    return $self->SUPER::_wire_headers($length);
 }
 
 1;
