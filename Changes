@@ -487,6 +487,10 @@
     It used to build the class with new and no arguments, ignoring BUILD_APP.
 
   [Fixed]
+  - A JSON response accepts any JSON value on every JSON::MaybeXS
+    backend: response('JSON', undef) sends null and a string or number
+    is sent as itself. On a backend that does not enable allow_nonref by
+    default, they croaked "hash- or arrayref expected".
   - response('PAGI::Response', ...) builds the base class, and each
     loader's namespace root resolves to itself (it became
     PAGI::Response::PAGI::Response). A short name with :: that has no file
