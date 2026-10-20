@@ -4,7 +4,7 @@ use warnings;
 
 use Future::AsyncAwait;
 use HTTP::MultiPartParser;
-use PAGI::Request::BodyError;
+use PAGI::Exception::RequestBody;
 use Hash::MultiValue;
 use PAGI::Headers;
 use PAGI::Request::Upload;
@@ -75,7 +75,7 @@ async sub parse {
         if (defined $filename) {
             # File upload
             $file_count++;
-            PAGI::Request::BodyError->throw(
+            PAGI::Exception::RequestBody->throw(
                 status_code => 413, reason => 'too_large',
                 message => "Too many files (max $self->{max_files})",
             ) if $file_count > $self->{max_files};
@@ -102,7 +102,7 @@ async sub parse {
         } else {
             # Regular form field
             $field_count++;
-            PAGI::Request::BodyError->throw(
+            PAGI::Exception::RequestBody->throw(
                 status_code => 413, reason => 'too_large',
                 message => "Too many fields (max $self->{max_fields})",
             ) if $field_count > $self->{max_fields};
@@ -150,7 +150,7 @@ async sub parse {
                     ? $self->{max_file_size}
                     : $self->{max_field_size};
                 my $part_type = $current_is_file ? 'File upload' : 'Form field';
-                PAGI::Request::BodyError->throw(
+                PAGI::Exception::RequestBody->throw(
                     status_code => 413, reason => 'too_large',
                     message => "$part_type too large (max $max_size bytes)",
                 ) if $current_size > $max_size;
@@ -179,7 +179,7 @@ async sub parse {
 
             on_error => sub {
                 my ($error) = @_;
-                PAGI::Request::BodyError->throw(
+                PAGI::Exception::RequestBody->throw(
                     reason => 'invalid_multipart',
                     message => 'The multipart request body could not be parsed.',
                     cause => $error,

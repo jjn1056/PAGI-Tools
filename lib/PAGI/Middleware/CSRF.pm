@@ -162,7 +162,7 @@ L<PAGI::Request>'s default limits (for multipart, 1MB a field, 10MB a file, 20
 files, 1000 fields; a urlencoded body has no cap of its own, so the server's
 C<max_body_size> bounds it), and limits that the application later passes to
 C<form_params> or C<uploads> do not apply, because the parse is cached. A body
-the parse rejects throws the same L<PAGI::Request::BodyError> (a 400 or 413) as
+the parse rejects throws the same L<PAGI::Exception::RequestBody> (a 400 or 413) as
 when the application reads it, and it is answered by an ErrorHandler outside
 this middleware: list your own C<ErrorHandler> before CSRF to answer it
 yourself, or Compose's answers it in plain text. A bare C<wrap> without Compose

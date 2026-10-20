@@ -28,7 +28,7 @@ pagi-server --app examples/upload-streaming/app.pl --port 5000
 - **A charset the stream cannot decode is the client's 415**, as for
   `$request->text`: one Encode does not know, or ISO-2022/UTF-7, which
   Encode decodes only line by line. To take another path, catch the
-  `PAGI::Request::BodyError` at the `body_stream` call.
+  `PAGI::Exception::RequestBody` at the `body_stream` call.
 - **A hang-up is not bad input.** A client that disconnects mid-upload ends
   the stream early and `$stream->truncated` is true. The example removes a
   partial or empty file rather than keep it.
@@ -47,7 +47,7 @@ pagi-server --app examples/upload-streaming/app.pl --port 5000
   digits, `-`, `_` and single dots between them: no `/`, no `.` or `..`, no
   leading or trailing dot. Anything else is a 404.
 - **The size cap.** `max_bytes` stops an upload at 50 MB. Going over it is
-  the client's 413 (`PAGI::Request::BodyError`, `too_large`); the example
+  the client's 413 (`PAGI::Exception::RequestBody`, `too_large`); the example
   removes the partial file before rethrowing it, and Compose answers.
 
 ## Try

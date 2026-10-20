@@ -14,7 +14,7 @@ use Scalar::Util qw(blessed);
 use PAGI::Request::MultiPartHandler;
 use PAGI::Request::Upload;
 use PAGI::ContentNegotiation;
-use PAGI::Request::BodyError;
+use PAGI::Exception::RequestBody;
 use PAGI::Request::BodyStream;
 use PAGI::Request::_BodyInput ();
 
@@ -66,12 +66,12 @@ sub _decode_utf8 {
 }
 
 # As _decode_utf8, for request body content: invalid UTF-8 under strict is the
-# client's error, a PAGI::Request::BodyError (400) rather than a croak.
+# client's error, a PAGI::Exception::RequestBody (400) rather than a croak.
 sub _decode_body_utf8 {
     my ($str, $strict) = @_;
     my $text = eval { _decode_utf8($str, $strict) };
     return $text unless $@;
-    PAGI::Request::BodyError->throw(
+    PAGI::Exception::RequestBody->throw(
         reason => 'invalid_encoding',
         message => 'The request body is not valid UTF-8.',
         cause => $@,
@@ -87,7 +87,7 @@ sub _decode_body_text {
     return _decode_body_utf8($body, $strict) unless defined $charset;
 
     my $encoding = find_encoding($charset)
-        or PAGI::Request::BodyError->throw(
+        or PAGI::Exception::RequestBody->throw(
             status_code => 415,
             reason => 'unsupported_charset',
             message => "The request body's charset is not supported.",
@@ -99,7 +99,7 @@ sub _decode_body_text {
         $encoding->decode($body // '', ($strict ? FB_CROAK : FB_DEFAULT) | LEAVE_SRC);
     };
     return $text unless $@;
-    PAGI::Request::BodyError->throw(
+    PAGI::Exception::RequestBody->throw(
         reason => 'invalid_encoding',
         message => "The request body is not valid $charset.",
         cause => $@,
@@ -391,7 +391,7 @@ sub multipart_stream {
 
     my $parameters = $self->headers->content_type_parameters;
     my $boundary = defined($parameters) ? $parameters->{boundary} : undef;
-    PAGI::Request::BodyError->throw(
+    PAGI::Exception::RequestBody->throw(
         reason => 'invalid_multipart', message => 'No boundary found in Content-Type',
     ) unless defined $boundary && length $boundary;
 
@@ -468,12 +468,12 @@ async sub text {
     return $self->_decode_body_text($body, $strict);
 }
 
-# Parse body as JSON (async; a body that is not JSON is a BodyError, 400)
+# Parse body as JSON (async; a body that is not JSON is a PAGI::Exception::RequestBody, 400)
 async sub json {
     my $self = shift;
     my $body = await $self->body;
     my $data = eval { decode_json($body) };
-    PAGI::Request::BodyError->throw(
+    PAGI::Exception::RequestBody->throw(
         reason => 'invalid_json',
         message => 'The request body is not valid JSON.',
         cause => $@,
@@ -567,7 +567,7 @@ async sub _parse_multipart_form {
 
     my $parameters = $self->headers->content_type_parameters;
     my $boundary = defined($parameters) ? $parameters->{boundary} : undef;
-    PAGI::Request::BodyError->throw(
+    PAGI::Exception::RequestBody->throw(
         reason => 'invalid_multipart', message => 'No boundary found in Content-Type',
     ) unless defined($boundary) && length($boundary);
 
@@ -1000,7 +1000,7 @@ chunks is held back until it is complete; an encoding the stream cannot
 decode is a 415 when it is made.
 
 =item * C<strict> - If true, bytes invalid in the C<decode> encoding throw a
-L<PAGI::Request::BodyError> (400). Default: false (they become U+FFFD).
+L<PAGI::Exception::RequestBody> (400). Default: false (they become U+FFFD).
 
 =item * C<strip_bom> - With C<decode>, drops a byte-order mark (U+FEFF) at
 the very start of the text, as Excel's "CSV UTF-8" sends. Default: false (in
@@ -1027,7 +1027,7 @@ something that is not text at all: a binary file posted to a text route
 fails at once instead of turning into garbage.
 
 A charset the stream cannot decode is a 415 when the stream is made, as for
-C<text>; catch the L<PAGI::Request::BodyError> at the call to choose
+C<text>; catch the L<PAGI::Exception::RequestBody> at the call to choose
 another path. A client that disconnects partway through a character ends
 the text early and C<truncated> is true. A byte-order mark is consumed only
 by plain C<UTF-16> and C<UTF-32>; with C<UTF-8> or an explicit byte order
@@ -1143,7 +1143,7 @@ so they fail the same way.
 
 Read the body as text, decoded with the charset the client declared in
 Content-Type (see L</charset>), or as UTF-8 when it declared none. A charset
-L<Encode> does not know throws a L<PAGI::Request::BodyError> (415). With
+L<Encode> does not know throws a L<PAGI::Exception::RequestBody> (415). With
 C<< strict => 1 >>, bytes invalid in the charset throw one (400); without it
 they become U+FFFD. See L</BAD REQUEST BODIES>.
 
@@ -1152,7 +1152,7 @@ they become U+FFFD. See L</BAD REQUEST BODIES>.
     my $data = await $req->json;
 
 Parse body as JSON. A body that is not JSON throws a
-L<PAGI::Request::BodyError> (400); see L</BAD REQUEST BODIES>.
+L<PAGI::Exception::RequestBody> (400); see L</BAD REQUEST BODIES>.
 
 =head2 form_params
 
@@ -1173,7 +1173,7 @@ B<Options:>
 =over 4
 
 =item * C<strict> - If true, invalid UTF-8 sequences throw a
-L<PAGI::Request::BodyError> (400). Default: false.
+L<PAGI::Exception::RequestBody> (400). Default: false.
 
 =item * C<raw> - If true, skip UTF-8 decoding entirely. Default: false.
 
@@ -1184,7 +1184,7 @@ package variable in that module (e.g.
 C<$PAGI::Request::MultiPartHandler::MAX_FILE_SIZE>); C<local>-ize those to
 change a default process-wide. A body over C<max_field_size>,
 C<max_file_size>, C<max_files> or C<max_fields> throws a
-L<PAGI::Request::BodyError> with status 413; a malformed multipart body, 400.
+L<PAGI::Exception::RequestBody> with status 413; a malformed multipart body, 400.
 
 =back
 
@@ -1236,7 +1236,7 @@ When the body itself is wrong -- not JSON, not valid in its charset under
 C<strict>, text in a charset Perl does not know, a multipart body that cannot
 be parsed or has no boundary, or a part over a configured limit -- the
 buffered helpers (C<json>, C<text>, C<form_params>, C<uploads>) throw a
-L<PAGI::Request::BodyError>. It carries C<status_code> (400, 413 for a limit,
+L<PAGI::Exception::RequestBody>. It carries C<status_code> (400, 413 for a limit,
 or 415 for an unknown charset), C<reason>, a client-safe C<message>, and the
 underlying C<cause>.
 
@@ -1251,7 +1251,7 @@ A handler that wants its own response catches it:
     my $data;
     unless (eval { $data = await $request->json; 1 }) {
         my $error = $@;
-        die $error unless ref $error && $error->isa('PAGI::Request::BodyError');
+        die $error unless ref $error && $error->isa('PAGI::Exception::RequestBody');
         return response('JSON', { error => 'Send a JSON object.' }, status => 400);
     }
 

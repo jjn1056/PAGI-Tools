@@ -46,7 +46,7 @@ is($res->status, 401, 'and so is one signed with another secret');
 
 $res = $client->post('/hooks/github', body => 'not json', headers => signed('not json'));
 is($res->status, 400, 'a signed body that is not JSON is a 400');
-like($res->text, qr/not valid JSON/, 'from the BodyError');
+like($res->text, qr/not valid JSON/, 'from the RequestBody exception');
 
 is($client->get('/hooks/github')->status, 405, 'GET on the hook is the router 405');
 

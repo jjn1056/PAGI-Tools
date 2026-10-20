@@ -124,7 +124,7 @@ a C<client_message> method, when present, supplies the client-safe text,
 and a C<headers> method, when present, the headers to send (any shape
 C<new> takes); headers that cannot be sent make the answer a 500 with a
 diagnostic.
-L<PAGI::Request::BodyError> is the in-house example.
+L<PAGI::Exception::RequestBody> is the in-house example.
 
 Exception classes written for Plack, such as L<HTTP::Exception> (which uses
 C<code>) or ones relying on L<Plack::Middleware::HTTPExceptions>' C<as_psgi>
@@ -134,6 +134,6 @@ they implement C<status_code>, and their PSGI rendering is never used.
 =head1 SEE ALSO
 
 L<PAGI::Middleware::ErrorHandler>, L<PAGI::ErrorContext>,
-L<PAGI::Request::BodyError>
+L<PAGI::Exception::RequestBody>
 
 =cut

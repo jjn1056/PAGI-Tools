@@ -34,7 +34,7 @@ ok $cut->truncated, 'and says the body was cut short';
 
 my $long = stream_of(["12345\n"], max_line_length => 4);
 my $error = dies { lines_of($long) };
-isa_ok $error, ['PAGI::Request::BodyError'], 'a line over max_line_length';
+isa_ok $error, ['PAGI::Exception::RequestBody'], 'a line over max_line_length';
 is [$error->status_code, $error->reason], [413, 'too_large'], 'is the client\'s 413';
 
 my $endless = stream_of(['12', '345', '6', '7890'], max_line_length => 4);

@@ -4,7 +4,7 @@ use Test2::V0;
 use lib 'lib';
 use PAGI::ErrorContext qw(error_context);
 use PAGI::Request;
-use PAGI::Request::BodyError;
+use PAGI::Exception::RequestBody;
 
 {
     package Local::Coded;
@@ -35,9 +35,9 @@ subtest 'status, reason and the error classes' => sub {
 };
 
 subtest 'message: a 4xx client_message, never message; a 5xx reason' => sub {
-    my $body = PAGI::Request::BodyError->new(message => 'The request body is not valid JSON.');
+    my $body = PAGI::Exception::RequestBody->new(message => 'The request body is not valid JSON.');
     is error_context(scope_with(exception => $body, status => 400, development => 0))->message,
-        'The request body is not valid JSON.', 'BodyError client_message';
+        'The request body is not valid JSON.', 'RequestBody client_message';
     is error_context(scope_with(exception => Local::Coded->new, status => 404, development => 0))->message,
         'Not Found', 'a plain message method is never shown';
     is error_context(scope_with(exception => Local::Coded->new(client => 'nope'), status => 500,

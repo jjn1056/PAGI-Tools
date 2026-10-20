@@ -2866,13 +2866,13 @@ A route that takes the same data from an API client (JSON) and from a
 browser (a form) reads the body by its Content-Type, and refuses anything
 else as the client's 415:
 
-  use PAGI::Request::BodyError;
+  use PAGI::Exception::RequestBody;
 
   async sub create {
       my ($request) = @_;
       my $data = $request->is_json ? await $request->json
                : $request->is_form ? (await $request->form_params)->as_hashref
-               : PAGI::Request::BodyError->throw(
+               : PAGI::Exception::RequestBody->throw(
                      status_code => 415,
                      reason      => 'unsupported_media_type',
                      message     => 'The request body must be JSON or a form.',
@@ -2892,7 +2892,7 @@ forms.
 =item * C<as_hashref> keeps the last value of a repeated form field; use
 C<as_hashref_mixed> for an array of them.
 
-=item * The thrown L<PAGI::Request::BodyError> is answered like every other
+=item * The thrown L<PAGI::Exception::RequestBody> is answered like every other
 body error: a plain-text 415 from Compose, or your ErrorHandler's rendering.
 
 =item * The data is still only as trustworthy as its checks: a JSON body need
@@ -2912,7 +2912,7 @@ A body the client got wrong -- not JSON, not valid in its charset under
 C<strict>, text in a charset Perl does not know, a multipart body that cannot
 be parsed, a part over a limit -- is the client's error, not the
 application's. L<PAGI::Request>'s buffered helpers throw a
-L<PAGI::Request::BodyError> (status 400, 413 for a limit, or 415 for an
+L<PAGI::Exception::RequestBody> (status 400, 413 for a limit, or 415 for an
 unknown charset), and every
 Compose application answers with that status. Most handlers need no code for
 it; one that wants its own response catches the error:
@@ -2930,12 +2930,12 @@ it; one that wants its own response catches the error:
       return response('JSON', { created => $data }, status => 201);
   }
 
-  # Its own response: catch the BodyError, and rethrow anything else.
+  # Its own response: catch the RequestBody exception, and rethrow anything else.
   async sub create_note_kindly ($request) {
       my $data;
       unless (eval { $data = await $request->json; 1 }) {
           my $error = $@;
-          die $error unless ref $error && $error->isa('PAGI::Request::BodyError');
+          die $error unless ref $error && $error->isa('PAGI::Exception::RequestBody');
           return response('JSON',
               { error => 'Send a JSON object, like {"text": "..."}.' },
               status => 400,
@@ -2950,8 +2950,8 @@ it; one that wants its own response catches the error:
   ]);
 
 To give every route the same shape instead, give ErrorHandler a C<handler>.
-C<error_context($request)> carries the BodyError; its C<message> is the
-BodyError's client-safe sentence, and the BodyError's C<cause> holds the
+C<error_context($request)> carries the RequestBody exception; its C<message>
+is the exception's client-safe sentence, and its C<cause> holds the
 underlying error for logs:
 
   use PAGI::ErrorContext qw(error_context);

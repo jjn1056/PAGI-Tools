@@ -35,7 +35,7 @@ is(text_of("caf\xE9", 'text/plain; charset=ISO-8859-1', strict => 1), 'café',
     'strict accepts what is valid in the declared charset');
 
 my $error = dies { text_of("caf\xE9", 'text/plain; charset=US-ASCII', strict => 1) };
-isa_ok($error, 'PAGI::Request::BodyError');
+isa_ok($error, 'PAGI::Exception::RequestBody');
 is([$error->status_code, $error->reason, $error->message],
     [400, 'invalid_encoding', 'The request body is not valid US-ASCII.'],
     'strict rejects what is invalid in it, naming the charset');

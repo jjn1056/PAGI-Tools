@@ -216,7 +216,7 @@ async sub _form_method {
         $self->{body_buffer} ? (buffer => $self->{body_buffer}->($scope)) : ());
     my $form = await PAGI::Request->new($scope, $reading)->form_params->else(sub {
         my ($error) = @_;
-        return Future->done(undef) if blessed($error) && $error->isa('PAGI::Request::BodyError');
+        return Future->done(undef) if blessed($error) && $error->isa('PAGI::Exception::RequestBody');
         return Future->fail(@_);
     });
     return ($form ? $form->get($self->{param}) : undef, $replaying);
@@ -247,7 +247,7 @@ enabled)
 =back
 
 A body the form parse rejects is not an override: the request stays a POST,
-and the application meets the same error (a L<PAGI::Request::BodyError>)
+and the application meets the same error (a L<PAGI::Exception::RequestBody>)
 when it reads the body.
 
 =head1 READING THE FORM
