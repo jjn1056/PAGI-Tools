@@ -46,7 +46,7 @@ subtest 'max_bytes limit' => sub {
     );
 
     my $error = dies { $stream->next_chunk->get };
-    isa_ok($error, 'PAGI::Request::BodyError');
+    isa_ok($error, 'PAGI::Exception::RequestBody');
     is([$error->status_code, $error->reason, $error->message],
         [413, 'too_large', 'The request body is larger than this route accepts.'],
         "over the limit is the client's 413, in words a client can read");
@@ -238,7 +238,7 @@ subtest 'strict UTF-8 mode' => sub {
     );
 
     my $error = dies { $stream->next_chunk->get };
-    isa_ok($error, 'PAGI::Request::BodyError');
+    isa_ok($error, 'PAGI::Exception::RequestBody');
     is([$error->status_code, $error->reason, $error->message],
         [400, 'invalid_encoding', 'The request body is not valid UTF-8.'],
         "invalid bytes are the client's error, a 400");
@@ -253,7 +253,7 @@ subtest 'strict UTF-8 mode' => sub {
         strict => 1,
     );
     is($stream->next_chunk->get, 'caf', 'the valid part arrives');
-    isa_ok(dies { $stream->next_chunk->get }, 'PAGI::Request::BodyError');
+    isa_ok(dies { $stream->next_chunk->get }, 'PAGI::Exception::RequestBody');
 
     # An invalid byte with more data behind it is reported on that chunk,
     # not held back until the end of the body.
@@ -262,7 +262,7 @@ subtest 'strict UTF-8 mode' => sub {
         decode => 'UTF-8',
         strict => 1,
     );
-    isa_ok(dies { $stream->next_chunk->get }, 'PAGI::Request::BodyError');
+    isa_ok(dies { $stream->next_chunk->get }, 'PAGI::Exception::RequestBody');
 };
 
 subtest 'strict mode accepts a valid character split across chunks' => sub {
@@ -282,7 +282,7 @@ subtest 'strict mode accepts a valid character split across chunks' => sub {
 subtest 'an encoding the stream cannot decode is the client\'s 415, when the stream is made' => sub {
     for my $name ('UFT-8', 'ISO-2022-JP') {
         my $error = dies { PAGI::Request::BodyStream->new(receive => mock_receive(), decode => $name) };
-        isa_ok($error, 'PAGI::Request::BodyError');
+        isa_ok($error, 'PAGI::Exception::RequestBody');
         is([$error->status_code, $error->reason, $error->message],
             [415, 'unsupported_charset', "The request body's charset is not supported."], "$name: a 415");
         like($error->cause, qr/\APAGI::Utils::TextDecoder: /, "$name: the decoder's reason is the cause");
@@ -391,7 +391,7 @@ subtest 'a body that ends inside a character' => sub {
     my ($out, $error) = stream_text('UTF-8', 0, body_events("ok\xE2\x82"));
     is join('', @$out), "ok\x{FFFD}", 'not strict: U+FFFD';
     ($out, $error) = stream_text('UTF-8', 1, body_events("ok\xE2\x82"));
-    isa_ok($error, 'PAGI::Request::BodyError');
+    isa_ok($error, 'PAGI::Exception::RequestBody');
     is $error->status_code, 400, 'strict: the client\'s 400';
 };
 

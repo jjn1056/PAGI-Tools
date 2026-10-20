@@ -1235,7 +1235,7 @@ my $data    = await $request->json;
 
 `$request->json`, `text`/`form_params` with `strict`, and multipart parsing
 used to die with plain strings, which became 500s. They now throw a
-`PAGI::Request::BodyError` with a `status_code`: 400 for a body that cannot be
+`PAGI::Exception::RequestBody` with a `status_code`: 400 for a body that cannot be
 read, 413 for a multipart part over a limit. A Compose application answers
 with that status automatically. The error still stringifies to the same
 message; code that checked `ref $@` sees an object now. See `PAGI::Request`

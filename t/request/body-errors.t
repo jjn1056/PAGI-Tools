@@ -14,7 +14,7 @@ use PAGI::Routing qw(middleware route);
 use PAGI::Test::Client;
 
 # A body the client got wrong is the client's error. The buffered body
-# helpers throw PAGI::Request::BodyError -- status_code 400, or 413 for a
+# helpers throw PAGI::Exception::RequestBody -- status_code 400, or 413 for a
 # part over a limit -- which every Compose application renders as that
 # status, as a handled outcome rather than a server error.
 
@@ -42,7 +42,7 @@ sub part {
     return "--$boundary\r\nContent-Disposition: $disposition\r\n\r\n$content\r\n";
 }
 
-subtest 'each client mistake is a BodyError with a status, a reason and a safe message' => sub {
+subtest 'each client mistake is a RequestBody exception with a status, a reason and a safe message' => sub {
     my @cases = (
         [ 'invalid JSON', 400, 'invalid_json',
           sub { request_with('{not json')->json } ],
@@ -70,7 +70,7 @@ subtest 'each client mistake is a BodyError with a status, a reason and a safe m
     for my $case (@cases) {
         my ($label, $status, $reason, $code) = @$case;
         my $error = error_from($code);
-        isa_ok($error, 'PAGI::Request::BodyError');
+        isa_ok($error, 'PAGI::Exception::RequestBody');
         is([$error->status_code, $error->reason], [$status, $reason], "$label: $status $reason");
         ok(length $error->message, "$label: has a message for the client");
         is("$error", $error->message, "$label: stringifies to its message");
@@ -98,7 +98,7 @@ subtest 'a stream response already started cannot answer 400: it is cut short' =
         });
     }, methods => ['POST'])]);
     my $res = PAGI::Test::Client->new(app => $app)->post('/', body => "caf\xFF");
-    isa_ok($res->exception, 'PAGI::Request::BodyError');
+    isa_ok($res->exception, 'PAGI::Exception::RequestBody');
     isnt($res->status, 400, 'no 400 can follow a started response');
 };
 
@@ -147,7 +147,7 @@ subtest 'an application can render body errors its own way' => sub {
     my $res = PAGI::Test::Client->new(app => $app)->post('/json', body => '{not json',
         headers => { 'Content-Type' => 'application/json' });
     is([$res->status, $res->json], [400, { error => 'The request body is not valid JSON.' }],
-        'an ErrorHandler handler sees the BodyError and chooses the response');
+        'an ErrorHandler handler sees the RequestBody exception and chooses the response');
 };
 
 done_testing;

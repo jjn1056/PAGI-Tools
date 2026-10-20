@@ -1,4 +1,4 @@
-package PAGI::Request::BodyError;
+package PAGI::Exception::RequestBody;
 
 use strict;
 use warnings;
@@ -31,7 +31,7 @@ __END__
 
 =head1 NAME
 
-PAGI::Request::BodyError - A request body the client got wrong
+PAGI::Exception::RequestBody - A request body the client got wrong
 
 =head1 SYNOPSIS
 
@@ -42,7 +42,7 @@ PAGI::Request::BodyError - A request body the client got wrong
     my $data;
     unless (eval { $data = await $request->json; 1 }) {
         my $error = $@;
-        die $error unless ref $error && $error->isa('PAGI::Request::BodyError');
+        die $error unless ref $error && $error->isa('PAGI::Exception::RequestBody');
         return response('JSON', { error => 'Send a JSON object.' }, status => 400);
     }
 
@@ -96,7 +96,7 @@ Undefined when the message says everything.
 
 =head2 new, throw
 
-    PAGI::Request::BodyError->throw(
+    PAGI::Exception::RequestBody->throw(
         status_code => 400, reason => 'invalid_json',
         message => 'The request body is not valid JSON.', cause => $@,
     );

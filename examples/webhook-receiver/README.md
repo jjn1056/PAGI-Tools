@@ -27,7 +27,7 @@ The log defaults to `/tmp/deliveries.jsonl`; set `WEBHOOK_LOG` to move it.
   bytes, and `$request->json` reads through it, so the signature is checked
   on exactly what was sent and the payload is parsed from the same bytes.
 - **Bad input answers itself.** A body that is not JSON is a
-  `PAGI::Request::BodyError`, which Compose's error handler turns into a
+  `PAGI::Exception::RequestBody`, which Compose's error handler turns into a
   plain-text 400 with `Cache-Control: no-store`; the handler has no
   try/catch. `GET /hooks/github` is the router's 405 with `Allow: POST`.
 - **No ceremony for the page.** The status page is an HTML heredoc in a
@@ -264,5 +264,5 @@ func main() {
 ## See also
 
 - `PAGI::Request`, `body` and `json`
-- `PAGI::Middleware::ErrorHandler`, for what a thrown `BodyError` becomes
+- `PAGI::Middleware::ErrorHandler`, for what a thrown `PAGI::Exception::RequestBody` becomes
 - `examples/background-tasks`, for a receiver that does its work after the 202

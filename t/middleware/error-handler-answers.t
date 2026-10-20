@@ -7,7 +7,7 @@ use IO::Async::Loop;
 use lib 'lib';
 use PAGI::Middleware::ErrorHandler;
 use PAGI::ErrorContext qw(error_context);
-use PAGI::Request::BodyError;
+use PAGI::Exception::RequestBody;
 use PAGI::Exception::HTTP;
 use PAGI::Response qw(response);
 use PAGI::Utils qw(as_app_object invoke_app);
@@ -73,15 +73,15 @@ subtest 'the built-in answer is plain text with no-store' => sub {
     is [$status, $h->{'content-type'}, $h->{'cache-control'}, $body],
         [500, 'text/plain; charset=utf-8', 'no-store', 'Internal Server Error'];
     is $failure, "db\n", 'a 5xx is re-raised';
-    ($status, undef, $body, $failure) = run(error => PAGI::Request::BodyError->new(
+    ($status, undef, $body, $failure) = run(error => PAGI::Exception::RequestBody->new(
         message => 'The request body is not valid JSON.'));
     is [$status, $body, $failure], [400, 'The request body is not valid JSON.', undef],
-        'a BodyError shows its client message and is handled';
+        'a RequestBody exception shows its client message and is handled';
 };
 
 subtest 'a Request-handler handler reads the error; a bare Response takes its status' => sub {
     my ($status, $h, $body, $failure) = run(
-        error => PAGI::Request::BodyError->new(message => 'bad'),
+        error => PAGI::Exception::RequestBody->new(message => 'bad'),
         options => { handler => sub { my ($request) = @_;
             response('JSON', { error => error_context($request)->message });
         } },
@@ -100,7 +100,7 @@ subtest 'a Response shared across errors takes each error\'s status' => sub {
     my $page = response('Text', 'Something went wrong');
     my %options = (handler => sub { my ($request) = @_; $page });
     my ($status, undef, undef, $failure) = run(
-        error => PAGI::Request::BodyError->new(message => 'bad'), options => \%options);
+        error => PAGI::Exception::RequestBody->new(message => 'bad'), options => \%options);
     is [$status, $failure], [400, undef], 'the first error: 400, handled';
     ($status, undef, undef, $failure) = run(error => "database down\n", options => \%options);
     is [$status, $failure], [500, "database down\n"], 'the second error: 500, re-raised';
@@ -182,9 +182,9 @@ subtest 'a dying handler: last resort, warning, original re-raised' => sub {
         options => { handler => sub { my ($request) = @_; die "renderer\n" } });
     is [$status, $h->{'cache-control'}, $body, $failure], [500, 'no-store', "Internal Server Error\n", "db\n"];
     like $warnings->[0], qr/PAGI ErrorHandler handler failed: renderer/;
-    (undef, undef, undef, $failure) = run(error => PAGI::Request::BodyError->new(message => 'b'),
+    (undef, undef, undef, $failure) = run(error => PAGI::Exception::RequestBody->new(message => 'b'),
         options => { handler => sub { my ($request) = @_; 'not an app' } });
-    isa_ok($failure, ['PAGI::Request::BodyError'], 'a non-application answer is a handler failure');
+    isa_ok($failure, ['PAGI::Exception::RequestBody'], 'a non-application answer is a handler failure');
     ($status, undef, undef, $failure) = run(error => "db\n",
         options => { handler => as_app_object(async sub { return }) });
     is [$status, $failure], [500, "db\n"], 'an app that sends nothing';
@@ -316,14 +316,14 @@ subtest 'the handler receives the class the scope key builds' => sub {
     my $seen;
     my $handler = sub { my ($request) = @_; $seen = ref $request; return error_context($request)->default };
     my ($status, undef, undef, $failure, $warnings) = run(
-        error   => PAGI::Request::BodyError->new(message => 'bad'),
+        error   => PAGI::Exception::RequestBody->new(message => 'bad'),
         options => { handler => $handler },
         scope   => { type => 'http', method => 'GET', path => '/', headers => [],
             'pagi.request.factory' => sub { Local::AppRequest->new(@_) } },
     );
     is([$seen, $status, $failure, $warnings], ['Local::AppRequest', 400, undef, []],
         'a key: its class');
-    run(error => PAGI::Request::BodyError->new(message => 'bad'), options => { handler => $handler });
+    run(error => PAGI::Exception::RequestBody->new(message => 'bad'), options => { handler => $handler });
     is($seen, 'PAGI::Request', 'no key: PAGI::Request');
 };
 

@@ -37,7 +37,7 @@ package NoteStore {
 package main;
 
 use PAGI::Tools qw(compose middleware mount negotiated_type path_for respond_to response route);
-use PAGI::Request::BodyError;
+use PAGI::Exception::RequestBody;
 use Types::Standard qw(Int);
 
 sub esc ($text) { $text =~ s/([&<>"'])/'&#' . ord($1) . ';'/ger }
@@ -99,7 +99,7 @@ async sub create ($request) {
     # body error.
     my $data = $request->is_json ? await $request->json
              : $request->is_form ? (await $request->form_params)->as_hashref
-             : PAGI::Request::BodyError->throw(
+             : PAGI::Exception::RequestBody->throw(
                    status_code => 415,
                    reason      => 'unsupported_media_type',
                    message     => 'The request body must be JSON or a form.',

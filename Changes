@@ -74,7 +74,7 @@
     write_item is write.
   - PAGI::Pages: negotiated welcome, error and redirect responses.
   - PAGI::ErrorContext (error_context): the error an ErrorHandler handler
-    answers. PAGI::Request::BodyError gains client_message.
+    answers. PAGI::Exception::RequestBody gains client_message.
   - PAGI::Auth (auth, auth_result, unauth_result, www_authenticate)
     and PAGI::Middleware::Authentication. A body its backend
     reads is handed on to the application with record_receive;
@@ -97,18 +97,18 @@
     helpers; PAGI::Authority; PAGI::Utils::Headers; PAGI::Utils
     path_from_root, pagi_env and environment predicates.
   - request_uri and raw_path_info on Request, WebSocket and SSE;
-    PAGI::Request::BodyError (bad bodies answer 400, 413 or 415).
+    PAGI::Exception::RequestBody (bad bodies answer 400, 413 or 415).
   - Request charset: the Content-Type charset parameter, to decode a
     streamed body by (body_stream(decode => $req->charset // 'UTF-8')).
   - body_stream with strict: bytes invalid in the encoding are a
-    BodyError 400 (they were a 500), a valid character split across chunks
+    RequestBody 400 (they were a 500), a valid character split across chunks
     is no longer rejected, an encoding it cannot decode in chunks (unknown,
-    ISO-2022-*, UTF-7) is a BodyError 415 when the stream is made; decoding
+    ISO-2022-*, UTF-7) is a RequestBody 415 when the stream is made; decoding
     no longer holds back the rest of the body after a bad byte; UTF-16 and
     UTF-32 decode correctly across chunks, strict included; and a strict
     error is reported on the chunk that carries it.
   - Request text decodes with the declared charset, UTF-8 when none is
-    declared; a charset Perl does not know is a BodyError 415
+    declared; a charset Perl does not know is a RequestBody 415
     (unsupported_charset).
   - Session warns, once per process, when it falls back to the in-memory
     store because no store was given: those sessions are lost on restart
@@ -271,7 +271,7 @@
   - Request is_json is true for every +json media type
     (application/vnd.api+json, application/problem+json, ...), not only
     application/json.
-  - BodyError documents unsupported_media_type (415) for a body in a media
+  - PAGI::Exception::RequestBody documents unsupported_media_type (415) for a body in a media
     type the route does not take; the Cookbook's "Accept JSON and a form on
     one route" shows the one way to read either and refuse the rest.
   - Encode 3.00 or later is required (perl 5.30 and later ship it).
@@ -403,7 +403,7 @@
     waits and lifespan all run it. While Future::IO is bound to no event
     loop, a test-client timeout says so and points to the new POD section
     TESTING AN APPLICATION THAT COMMITS TO AN EVENT LOOP.
-  - body_stream over max_bytes is a BodyError 413 too_large (it was a plain
+  - body_stream over max_bytes is a RequestBody 413 too_large (it was a plain
     die, so a 500), or 400 invalid_body past the request's own
     Content-Length; the message no longer names the limit, which moves to
     the error's cause.

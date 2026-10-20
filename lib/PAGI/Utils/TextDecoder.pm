@@ -211,7 +211,7 @@ Invalid input dies with a plain string ending in a newline:
     PAGI::Utils::TextDecoder: not valid UTF-8: the input ends inside a character
 
 The owner of the protocol turns it into its own answer:
-L<PAGI::Request::BodyStream> throws a L<PAGI::Request::BodyError> 400; a
+L<PAGI::Request::BodyStream> throws a L<PAGI::Exception::RequestBody> 400; a
 WebSocket handler would close with 1007 (invalid frame payload data).
 
 =head1 LIMITS

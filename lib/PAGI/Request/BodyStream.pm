@@ -7,7 +7,7 @@ use Future;
 use Future::AsyncAwait;
 use PAGI::Utils::TextDecoder;
 use Carp qw(croak);
-use PAGI::Request::BodyError;
+use PAGI::Exception::RequestBody;
 use PAGI::Request::_BodyInput ();
 
 
@@ -100,7 +100,7 @@ Creates a new body stream.
 =item * C<receive> - Required. The PAGI receive callback.
 
 =item * C<max_bytes> - Optional. Maximum bytes to read. More is a
-L<PAGI::Request::BodyError>: 413 (C<too_large>), or 400 (C<invalid_body>) when
+L<PAGI::Exception::RequestBody>: 413 (C<too_large>), or 400 (C<invalid_body>) when
 the limit is the request's own Content-Length, which the body may not
 exceed.
 
@@ -108,13 +108,13 @@ exceed.
 C<'UTF-8'> (or C<< $request->charset // 'UTF-8' >>). Without it, chunks are
 the bytes exactly as sent. An encoding this stream cannot decode (one Encode
 does not know, or ISO-2022-*/UTF-7, which Encode decodes only line by line)
-is a L<PAGI::Request::BodyError> 415 (C<unsupported_charset>) when the
+is a L<PAGI::Exception::RequestBody> 415 (C<unsupported_charset>) when the
 stream is made: the client's charset error, as for C<< $request->text >>,
 which can read ISO-2022 and UTF-7 bodies whole. Built on
 L<PAGI::Utils::TextDecoder>.
 
 =item * C<strict> - Optional. If true, bytes invalid in the C<decode> encoding
-throw a L<PAGI::Request::BodyError> (400, C<invalid_encoding>), the client's
+throw a L<PAGI::Exception::RequestBody> (400, C<invalid_encoding>), the client's
 error. If false (default), they become U+FFFD.
 
 =item * C<strip_bom> - Optional, with C<decode>. Drops a byte-order mark
@@ -124,7 +124,7 @@ L<PAGI::Utils::TextDecoder/new>.
 
 =item * C<max_line_length> - Optional. The longest line L</next_line>
 accepts, in characters when decoding and bytes otherwise (default 65536). A
-longer line is a L<PAGI::Request::BodyError> 413 (C<too_large>).
+longer line is a L<PAGI::Exception::RequestBody> 413 (C<too_large>).
 
 =item * C<limit_name> - Optional. Name to use in error message when max_bytes
 is exceeded (default: 'max_bytes'). It appears in the error's C<cause>, for the
@@ -163,7 +163,7 @@ sub new {
             PAGI::Utils::TextDecoder->new($args{decode},
                 strict => $args{strict}, strip_bom => $args{strip_bom});
         };
-        PAGI::Request::BodyError->throw(
+        PAGI::Exception::RequestBody->throw(
             status_code => 415,
             reason      => 'unsupported_charset',
             message     => "The request body's charset is not supported.",
@@ -187,14 +187,14 @@ stream is exhausted or the client disconnects.
 If C<decode> was specified in the constructor, chunks are decoded from that
 encoding. A character split across chunks is held back until it is complete.
 With C<strict>, bytes invalid in the encoding throw a
-L<PAGI::Request::BodyError> (400). A route that has already started its own
+L<PAGI::Exception::RequestBody> (400). A route that has already started its own
 response by then cannot send that 400: the response is cut short instead.
 
 A client that disconnects partway through a character ends the text at the
 last whole character (in strict UTF-16, one code unit earlier), and
 C<truncated> is true; nothing is reported as invalid.
 
-Throws a L<PAGI::Request::BodyError> (413, or 400 past the Content-Length) if
+Throws a L<PAGI::Exception::RequestBody> (413, or 400 past the Content-Length) if
 C<max_bytes> is exceeded.
 
 =cut
@@ -239,13 +239,13 @@ async sub _read_chunk {
             $self->{_done} = 1;
             # More than the request's own Content-Length is a malformed
             # request; more than a limit the route set is too large.
-            PAGI::Request::BodyError->throw(
+            PAGI::Exception::RequestBody->throw(
                 status_code => 400,
                 reason      => 'invalid_body',
                 message     => 'The request body is longer than its Content-Length.',
                 cause       => $self->{_error},
             ) if $self->{limit_name} eq 'content-length';
-            PAGI::Request::BodyError->throw(
+            PAGI::Exception::RequestBody->throw(
                 status_code => 413,
                 reason      => 'too_large',
                 message     => 'The request body is larger than this route accepts.',
@@ -445,7 +445,7 @@ a last line without a newline is delivered; undef at the end. A client that
 hangs up partway through a line ends the lines there, and C<truncated> is
 true. After a body error (invalid bytes, C<max_bytes>, a line too long) the
 lines end: C<next_line> resolves to undef and C<error> says why. A line longer than C<max_line_length> is a
-L<PAGI::Request::BodyError> 413 (C<too_large>).
+L<PAGI::Exception::RequestBody> 413 (C<too_large>).
 
 Once line reading starts, C<next_chunk>, C<stream_to> and C<stream_to_file>
 die: the partial line held for C<next_line> would be lost.
@@ -510,7 +510,7 @@ sub _line_too_long {
     $self->{_error} = "line longer than max_line_length ($self->{max_line_length})";
     $self->{_done} = 1;
     $self->{_lines} = '';
-    PAGI::Request::BodyError->throw(
+    PAGI::Exception::RequestBody->throw(
         status_code => 413,
         reason      => 'too_large',
         message     => 'A line in the request body is longer than this route accepts.',
@@ -540,7 +540,7 @@ sub _decode_chunk {
     my $cause = $@;
     $self->{_error} = $cause;
     $self->{_done} = 1;
-    PAGI::Request::BodyError->throw(
+    PAGI::Exception::RequestBody->throw(
         reason  => 'invalid_encoding',
         message => "The request body is not valid $self->{decode}.",
         cause   => $cause,
@@ -622,11 +622,11 @@ The stream throws exceptions in these cases:
 
 =over 4
 
-=item * C<max_bytes> exceeded - a L<PAGI::Request::BodyError> 413, or 400
+=item * C<max_bytes> exceeded - a L<PAGI::Exception::RequestBody> 413, or 400
 past the request's own Content-Length
 
 =item * Bytes invalid in the C<decode> encoding (with C<strict>) - a
-L<PAGI::Request::BodyError> 400; an encoding it cannot decode is a 415 when
+L<PAGI::Exception::RequestBody> 400; an encoding it cannot decode is a 415 when
 the stream is made
 
 =item * File I/O errors during C<stream_to_file>
