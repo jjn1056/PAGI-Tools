@@ -43,8 +43,7 @@ sub _keep {
 
 # What a caller gets for a kept value. A ready Future as it is: cancelling it
 # does nothing. A pending one through a Future of the caller's own, settled
-# from the build, so a caller that goes away cancels only its own, and no
-# without_cancel copy is left behind (Future::XS warns of those).
+# from the build, so a caller that goes away cancels only its own.
 sub _shared {
     my ($value, $name) = @_;
     return $value unless _is_future($value) && !$value->is_ready;

@@ -204,6 +204,8 @@
     option is its cleanup, for a source or a producer.
 
   [Changed]
+  - Tests: the Future::XS "lost a sequence Future" warning is tolerated
+    only from Future::XS before 0.16, which fixes it (RT #181389).
   - PAGI::Test::Client: an SSE application that returns after sse.start
     without sse.close ends with disconnect_detail "sse.start without
     sse.close", as PAGI::Server records it (it was undef).
