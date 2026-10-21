@@ -48,27 +48,30 @@ sub _start {
         extensions => $self->{scope}{extensions} // {},
     );
 
-    # Create receive coderef for the app
-    my $receive = async sub {
+    # Create receive coderef for the app. A receive that has to wait returns
+    # the very Future it parks, so an application that cancels it (as
+    # Future->wait_any cancels the loser) cancels the parked one on every perl;
+    # _pump_app then passes it over, and the message goes to the next receive.
+    my $receive = sub {
         if ($self->_end_event_ready) {
-            return { %{$self->{_end_event}} };
+            return Future->done({ %{$self->{_end_event}} });
         }
 
         # First call returns websocket.connect
         if (!$self->{_connect_sent}) {
             $self->{_connect_sent} = 1;
-            return { type => 'websocket.connect' };
+            return Future->done({ type => 'websocket.connect' });
         }
 
         # Return queued message if available
         if (@{$self->{send_queue}}) {
-            return shift @{$self->{send_queue}};
+            return Future->done(shift @{$self->{send_queue}});
         }
 
         # Create a future that will be resolved when data arrives
         my $future = Future->new;
         push @{$self->{_pending_receives}}, $future;
-        return await $future;
+        return $future;
     };
 
     # Create send coderef for the app. Strict: illegal events (per
@@ -198,10 +201,12 @@ sub _pump_app {
 
     # This pumps the app future by checking if it's waiting on a receive
     # If there are pending receives and we have data, resolve them
+    # A parked receive the application cancelled is passed over: it takes no
+    # message (PAGI::Spec::Www, "Meaning per scope").
     while (@{$self->{_pending_receives}} && @{$self->{send_queue}}) {
         my $future = shift @{$self->{_pending_receives}};
-        my $event = shift @{$self->{send_queue}};
-        $future->done($event);
+        next if $future->is_ready;
+        $future->done(shift @{$self->{send_queue}});
     }
 
     $self->_wake_pending_receives if $self->{_end_event};

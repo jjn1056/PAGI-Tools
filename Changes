@@ -498,6 +498,10 @@
     It used to build the class with new and no arguments, ignoring BUILD_APP.
 
   [Fixed]
+  - PAGI::Test::WebSocket: a receive the application cancels while it
+    waits (Future->wait_any cancels the receive that loses a race) no longer
+    swallows the next message the test sends; the next receive gets it, and
+    a second pending receive is unaffected, as on a server.
   - A JSON response accepts any JSON value on every JSON::MaybeXS
     backend: response('JSON', undef) sends null and a string or number
     is sent as itself. On a backend that does not enable allow_nonref by
