@@ -397,6 +397,8 @@
     Tutorial link to one statement of each rule instead of restating it.
 
   [Breaking -- see UPGRADING.md]
+  - Requires Perl 5.24 (was 5.18), as PAGI 0.003001 and PAGI-Server do.
+    See "Perl version support" in PAGI.
   - PAGI::Test::Client no longer runs an application's own event loop
     for an HTTP request: 0.002002's ->get on the app's Future ran an
     IO::Async loop the app waited on, for requests only. An application

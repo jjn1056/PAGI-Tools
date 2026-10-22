@@ -15,7 +15,7 @@ Router object; servers accept anything with `to_app`.
 
 ## Requirements
 
-- Perl 5.18+ with `Future::AsyncAwait` for the distribution and most examples;
+- Perl 5.24+ with `Future::AsyncAwait` for the distribution and most examples;
   `large-application`, `starlette-apples`, `gut-check`, `content-negotiation`, `upload-streaming`, `process-streaming`,
   `webhook-receiver`, `signed-requests`, `framework-on-tools`, `framework-wrap-style`, `request-class`, `starlette-endpoint`, `endpoint-lifecycle`, `escape-hatches`, `internal-tool`, `auth-cookie-login`, `auth-extensions`, `auth-notes`, `auth-jwt-sandbox`, and `openapi-notes`
   require Perl 5.40+

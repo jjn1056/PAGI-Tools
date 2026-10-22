@@ -22,7 +22,7 @@ for my $way (sort keys %path) {
     for my $class ('Text', 'HTML') {
         my $r = $path{$way}->($class, 'x', 'text/csv');
         is($r->content_type, 'text/csv; charset=utf-8', "$class, $way: the charset is kept");
-        is(scalar @{ $r->header_all('Content-Type') }, 1, "$class, $way: one Content-Type");
+        is(scalar $r->header_all('Content-Type')->@*, 1, "$class, $way: one Content-Type");
     }
     my $base = $path{$way}->('+PAGI::Response', 'x', 'image/png');
     is($base->content_type, 'image/png', "base class, $way: stored as given");

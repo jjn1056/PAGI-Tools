@@ -7,7 +7,7 @@ inspectable `PAGI::Compose` description; a conforming server compiles its
 `to_app` boundary once while loading the application.
 
 This example requires Perl 5.40+ and Type::Tiny. Those are example/test
-requirements: the PAGI::Tools distribution itself still supports Perl 5.18
+requirements: the PAGI::Tools distribution itself supports Perl 5.24
 and does not depend on Type::Tiny at runtime.
 
 ## Run it

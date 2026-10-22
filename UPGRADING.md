@@ -3,7 +3,8 @@
 This release breaks most of the 0.002002 API on purpose: routing, the
 Context handler objects, the Response builder and the stock applications
 are replaced. There are no compatibility aliases; every removed form fails
-when used. Upgrade PAGI::Server to **0.003000** or later at the same time.
+when used. Upgrade PAGI::Server to **0.003000** or later at the same time,
+and run on **Perl 5.24** or later.
 
 Start with the table, then the worked port. Each row links to the details
 in [UPGRADING-REFERENCE.md](UPGRADING-REFERENCE.md).
@@ -12,6 +13,7 @@ in [UPGRADING-REFERENCE.md](UPGRADING-REFERENCE.md).
 
 | 0.002002 | Now |
 |---|---|
+| Perl 5.18 or later | Perl 5.24 or later, as PAGI and PAGI::Server (see "Perl version support" in [PAGI](https://metacpan.org/pod/PAGI)) |
 | `PAGI::App::Router` (`get`, `group`, `as`, `uri_for`, `not_found`) | `PAGI::Routing`: `router`, `route`, `mount`, `path_for`, `http_default` ([details](UPGRADING-REFERENCE.md#migrate-app-router-declarations)) |
 | `PAGI::Endpoint::Router` (`routes($self, $r)`, string targets, `$self->state`) | a class whose `routing` returns a Router; lifespan state ([details](UPGRADING-REFERENCE.md#migrate-endpoint-router-classes)) |
 | Handlers receive a Context (`$ctx`) | handlers receive the `PAGI::Request`, `PAGI::WebSocket` or `PAGI::SSE` ([details](UPGRADING-REFERENCE.md#breaking-replace-the-pagi-context-family-with-the-protocol-owner)) |
