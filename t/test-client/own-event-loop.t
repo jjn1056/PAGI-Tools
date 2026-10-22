@@ -3,6 +3,7 @@ use warnings;
 use Test2::V0;
 
 use lib 't/lib';
+use PAGITest::FutureXS qw(known_future_xs_warning);
 use PAGI::Test::Client;
 use PAGITest::OwnLoopApp qw(own_loop_app);
 
@@ -20,9 +21,9 @@ subtest 'an HTTP request' => sub {
     my $error = do { local $SIG{__WARN__} = sub { push @warnings, @_ }; dies { $client->get('/') } };
     like($error, qr/PAGI request did not complete within 0\.3 seconds/, 'times out');
     like($error, $hint, 'and says what to do');
-    # Cancelling the timed-out IO::Async::Future trips Future::XS's
-    # "lost a sequence" warning (RT #181389); nothing else may warn.
-    is([grep { !/lost a sequence Future/ } @warnings], [], 'no other warning');
+    # Cancelling the timed-out IO::Async::Future trips the lost-sequence
+    # warning of Future::XS before 0.16 (RT #181389); nothing else may warn.
+    is([grep { !known_future_xs_warning($_) } @warnings], [], 'no other warning');
 };
 
 subtest 'lifespan startup' => sub {
