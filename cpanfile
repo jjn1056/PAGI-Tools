@@ -1,7 +1,7 @@
 # PAGI-Tools dependencies
 # Install with: cpanm --installdeps .
 
-requires 'perl', '5.018';
+requires 'perl', '5.024';  # see "Perl version support" in PAGI
 
 # body_stream's decoding relies on Encode's stateful decoder behaving
 # alike from 3.00 on (earlier releases differ on UTF-16 and strict).
