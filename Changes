@@ -190,8 +190,9 @@
     ['WWW-Authenticate' => ...])), and ErrorHandler's built-in answer sends
     an HTTP error's headers, from any thrown object with a headers method:
     a 401, 405, 407 or 426 that carries its required field no longer needs
-    a handler. Headers that cannot be sent make the answer a 500 with a
-    diagnostic.
+    a handler. Headers that cannot be sent make the built-in answer a 500
+    with a diagnostic; a handler or catch entry answers with the claimed
+    status whatever the headers are.
   - ErrorHandler catch => { 404 => sub ($request, $error) {...},
     'MyApp::Conflict' => sub {...} }: answers by status and exception
     class before handler, in Starlette's order (an HTTP error's status,
