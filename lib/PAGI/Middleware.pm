@@ -121,6 +121,12 @@ propagate back to outer layers, so to share mutable state across layers you muta
 B<through a reference> (see L<PAGI::Stash>). The full model -- and why it works
 this way -- is in L<PAGI::Building/MIDDLEWARE>.
 
+The copy also carries a L<PAGI::WebSocket> or L<PAGI::SSE> object already
+cached in the scope (C<pagi.websocket>, C<pagi.sse>), held strongly by the
+copy though weakly by the original, and C<new> over the copy returns that
+object, so an application builds them inside the innermost middleware, not
+before it (see L<PAGI::WebSocket/SUBCLASSING>).
+
 =cut
 
 sub modify_scope {

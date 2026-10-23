@@ -103,6 +103,8 @@ subtest 'the default Content-Type is decided at construction' => sub {
         'built, then status(204): keeps the type written when it was built');
     ok(!response('Text', '', status => 204)->status(200)->has_content_type,
         'built with 204, then status(200): still none');
+    ok(!response('Text', '', status => 205)->has_content_type,
+        'built with 205: no default Content-Type either');
 };
 
 subtest 'Empty is unchanged' => sub {

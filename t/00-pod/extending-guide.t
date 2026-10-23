@@ -114,6 +114,16 @@ subtest 'the rules it states are the code\'s' => sub {
     unlike($source{$_}, qr/Also read by/, "$_ does not") for qw(WebSocket SSE);
     like($guide, qr/Request's\s+C<scope> and C<receive>/, "the guide gives Request's own fields");
     like($guide, qr/Request also lists the methods/, 'and says only Request lists methods');
+    unlike($source{Request}, qr/a route's\s+C<request_factory>/, "nor does PAGI::Request call it a route's");
+
+    # What a class owns, what Tiny coerces, and the seams a router-wrapping
+    # or controller framework needs.
+    like($guide, qr/File's\s+C<Content-Length>,\s+C<Content-Range>\s+and\s+C<ETag>/, "it names File's owned fields");
+    like($guide, qr/a hashref or arrayref is JSON/, "it says what Tiny makes JSON");
+    like($guide, qr/C<declaration_package>/, 'it names declaration_package');
+    like($guide, qr/L<PAGI::Endpoint\/BUILD_APP>/, 'and the Endpoint controller seam');
+    unlike($blocks[1], qr/->text\(/, 'the example has no text method') if @blocks > 1;
+    unlike($guide, qr/C<< \$res->status\(201\)->text/, 'so the guide does not chain one');
 
     # The sections it cites for representations and memory say so.
     my $metadata = do { open my $fh, '<', 'lib/PAGI/Response.pm' or die; local $/; <$fh> };
