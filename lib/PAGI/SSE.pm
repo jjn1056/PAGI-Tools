@@ -1778,6 +1778,16 @@ swapping them, above all after C<start>, breaks it. Path parameters reach it
 through the scope, written there in place before it is built (see
 L<PAGI::Request/SUBCLASSING>).
 
+=item * B<Built where the channels are final.> A Request holds no connection
+state, so when a middleware hands the inner application a copy of the scope,
+a new Request over the copy is all it takes. A SSE object I<is> the
+connection: C<new> returns the object already cached in the scope
+(C<pagi.sse>), and a middleware's copy carries that key, so building again over
+the copy hands back the first object, still bound to the first channels.
+Build it inside the innermost middleware, from the channels the handler
+receives. State a framework gathers earlier in a dispatch belongs on its own
+context or in the scope, not on this object.
+
 =item * B<The pattern.> PAGI-FastAPI builds
 C<< PAGI::SSE->new($scope, $receive, $send) >> once per connection, after
 routing, as Starlette builds its C<WebSocket> (see
