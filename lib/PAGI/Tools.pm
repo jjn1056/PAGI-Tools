@@ -387,6 +387,7 @@ a request, such as access logging, works without a connection object.
 =head1 SEE ALSO
 
 L<PAGI::Tutorial>, L<PAGI::Tools::Tutorial>, L<PAGI::Tools::Cookbook>,
+L<PAGI::Tools::Extending> (building frameworks and add-ons on PAGI-Tools),
 L<PAGI::Compose>, L<PAGI::Routing>, L<PAGI::Pages>, L<PAGI::Auth>, L<PAGI::Response>,
 L<PAGI::App::File>, L<PAGI::Utils>, L<PAGI::Spec>,
 L<router frontend upgrade guide|https://github.com/jjn1056/PAGI-Tools/blob/main/UPGRADING-REFERENCE.md>,

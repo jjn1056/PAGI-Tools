@@ -1,0 +1,224 @@
+=pod
+
+=encoding utf8
+
+=head1 NAME
+
+PAGI::Tools::Extending - Building frameworks and add-ons on PAGI-Tools
+
+=head1 DESCRIPTION
+
+This guide is for someone building on PAGI-Tools rather than with it: a web
+framework, a family of response classes, middleware for other people's
+applications. It says what you can rely on and where each rule is written
+down. The rules themselves live in the documentation of the class they
+govern; this guide links to them instead of restating them, so each has one
+place to change.
+
+Two complete frameworks ship with this distribution, one in each style below,
+and each marks the seam every part of it stands on:
+
+=over 4
+
+=item * F<examples/framework-wrap-style>: C<Mini>, whose handlers get a
+request and a mutable response, and whose router re-dispatches one request
+through chained matches.
+
+=item * F<examples/framework-on-tools>: C<Tiny>, whose handlers return plain
+values (a hashref is JSON, a string is HTML) that its handler wrapper turns
+into PAGI values, with its own Request class and error mapping.
+
+=back
+
+Both need Perl 5.40; PAGI-Tools itself needs 5.24.
+
+=head1 FRAMEWORK OR TOOLKIT
+
+Build on PAGI-Tools when your framework wants its request and response
+objects, routing, middleware and test client, and adds its own layer: an API
+style, controllers, dependency injection, templates. Build on PAGI itself
+(L<PAGI::Spec::Www>, L<PAGI::Building>) when you want a different object
+model all the way down; PAGI-Tools is one way to write a PAGI application,
+not a layer every application needs.
+
+Either way, a framework on CPAN is shared code: it stays loop-agnostic,
+using L<Future::IO>, and leaves the event loop to the server that runs the
+application.
+
+=head1 THE VALUE CONTRACT
+
+A handler takes one L<PAGI::Request> and returns a response value, or a
+Future of one. PAGI-Tools never guesses a response from an ordinary Perl
+return value; a framework that accepts strings or hashes from its users
+turns them into a Response itself. Any application value is delivered with
+L<PAGI::Utils/invoke_app>. A value's class is its representation, so C<ref>
+and C<isa> tell representations apart (L<PAGI::Response/CLASS MODEL>), and
+C<is_buffered> says whether it holds its whole body in memory
+(L<PAGI::Response/metadata>). See L<PAGI::Tools/HANDLERS AND APPLICATIONS>
+and L<PAGI::Response/VALUE AND APPLICATION BOUNDARIES> for the boundary
+between handlers and applications.
+
+=head1 BUILDING RESPONSES
+
+Choose the class at the end and build it with one call:
+
+    response($name, $content, status => $code, headers => $headers,
+        content_type => $type)
+
+Every class takes its content and then the same options, so one call builds
+whichever class a handler chose; C<'+PAGI::Response'> is the base class and
+C<'+My::Class'> any class of your own. See
+L<PAGI::Response/CONSTRUCTOR CONTRACT>, and L<PAGI::Response/response> for
+how names resolve.
+
+What a framework needs to know about the values it builds:
+
+=over 4
+
+=item * B<Staging.> C<< PAGI::Response->new >> with no arguments is the
+empty value. Stage C<status>, C<header> and C<cookie> on it while the final
+class is unknown, then build that class from what was staged
+(L<PAGI::Response/new>). How staged and final values merge is your
+framework's policy.
+
+=item * B<Characters and bytes.> Character strings go to Text and HTML,
+which encode them; bytes go to C<PAGI::Response>
+(L<PAGI::Response/BYTES AND CHARACTERS>).
+
+=item * B<Bodyless statuses.> On 1xx, 204, 205 and 304
+(C<status_forbids_body>) the base class, Text and HTML take an empty body,
+and a body with bytes croaks; JSON, Problem and Redirect never take such a
+status. The class's default Content-Type is decided when the value is built
+(L<PAGI::Response/new>).
+
+=item * B<Owned fields.> Some classes calculate a header and refuse it from
+the caller (Empty's Content-Type, Redirect's Location, File's), so staged
+headers must not carry them (L<PAGI::Response/Owned fields>).
+
+=item * B<Your own classes.> Override C<render> and C<default_content_type>
+for a new representation, or C<new> for a new kind of input
+(L<PAGI::Response/SUBCLASSING>).
+
+=back
+
+=head1 TWO STYLES
+
+B<Wrapping.> The framework gives its users its own request and response
+objects and builds one PAGI value at the end. Its response stages metadata
+on the empty value and finalizes into one C<response> call. A framework
+response that delegates to the staged value needs one adjustment: a
+delegated setter returns the staged value, so a chain such as
+C<< $res->status(201)->text(...) >> would continue on PAGI's object instead
+of yours. Return your own object instead:
+
+    package My::Framework::Response;
+    use Moo;
+    use Scalar::Util qw(blessed refaddr);
+    use PAGI::Response qw(response);
+
+    # Errors from response() then name your user's line, not this file's.
+    $Carp::Internal{+__PACKAGE__}++;
+
+    my @metadata = qw(status has_status header headers content_type cookie);
+
+    has _staged => (is => 'ro', default => sub { PAGI::Response->new },
+        handles => \@metadata);
+
+    # A delegated setter returns the staged value; return this response.
+    around @metadata => sub {
+        my ($orig, $self, @args) = @_;
+        my $got = $self->$orig(@args);
+        return blessed($got) && refaddr($got) == refaddr($self->_staged) ? $self : $got;
+    };
+
+    sub finalize {
+        my ($self, $name, $content) = @_;
+        my $staged = $self->_staged;
+        return response($name // '+PAGI::Response', $content,
+            ($staged->has_status ? (status => $staged->status) : ()),
+            headers => $staged->headers);
+    }
+
+F<examples/framework-wrap-style> is the complete framework.
+
+B<Building on.> The framework's users write handlers that return PAGI
+values, or plain values the framework converts, and the framework adds its
+layer around them: its own Request
+subclass, its own response classes built by name, post-processing of the
+returned value (its metadata stays mutable until it is sent), and handler
+wrapping before a route is registered (PAGI routing never inspects a
+coderef). F<examples/framework-on-tools> is the complete framework.
+
+B<The application class.> A framework's application base class can
+subclass L<PAGI::App::Compose>, as FastAPI's subclasses Starlette's: its
+users declare routes, middleware and lifespan hooks in methods, and roles
+add to every application (L<PAGI::App::Compose/EXTENDING>, L<PAGI::App>).
+
+=head1 SUBCLASSING REQUEST, WEBSOCKET AND SSE
+
+Each class says which fields are its own and leaves every other name to a
+subclass: Request's C<scope> and C<receive>; WebSocket's and SSE's C<scope>,
+C<receive>, C<send> and every field starting with C<_>, with one object per
+connection over the same channels. Request also lists the methods other
+methods call, the seams for a framework's own router. See L<PAGI::Request/SUBCLASSING>, L<PAGI::WebSocket/SUBCLASSING>
+and L<PAGI::SSE/SUBCLASSING>. A Request subclass is installed with
+L<PAGI::Middleware::RequestClass> for the whole application, or
+L<PAGI::Routing/request_response>'s C<request_factory> for one handler; a
+framework with its own router writes each match's parameters into the scope
+and builds a new Request only for a new scope.
+
+=head1 ERRORS
+
+PAGI-Tools croaks, so an error names the line that called it. When your
+framework calls PAGI-Tools for its users, mark your packages internal to
+Carp, as the example above does, so the error names their line
+(L<PAGI::Response/ERRORS FROM A FRAMEWORK>).
+
+An HTTP error is any value with a C<status_code> (and, optionally,
+C<headers>); L<PAGI::Middleware::ErrorHandler> answers it, and a framework
+customizes the answer with its C<handler> and C<catch> options
+(L<PAGI::Middleware::ErrorHandler/EXCEPTION HANDLING>). Only the built-in
+answer sends an exception's headers.
+
+=head1 STREAMING
+
+C<response('Stream', ...)> takes a producer, or a source to pull from one
+value at a time (so a slow client slows the source), and stops pulling once
+the client has disconnected
+(L<PAGI::Response::Stream/Streaming from a source>,
+L<PAGI::Response::Stream/DISCONNECTS AND FAILURES>).
+
+=head1 MIDDLEWARE AND WHOLE-APPLICATION FEATURES
+
+Middleware is PAGI middleware, an application that wraps an application, so
+it works under any framework (L<PAGI::Middleware/WRITING MIDDLEWARE>). A
+feature that needs the application's declaration, its route table say, is a
+transform of the Compose application instead, applied in
+L<PAGI::App::Compose>'s C<application> hook. A mount is a barrier to any
+application and transparent only to a Router.
+
+=head1 TESTING
+
+Wrap L<PAGI::Test::Client> for your framework's test helpers. How it ends
+SSE and WebSocket sessions is versioned behaviour, pinned against the
+server's (L<PAGI::Test::Client/SEMANTICS>); a change to it gets an entry in
+F<UPGRADING.md>. It drives L<Future::IO>'s loop, so an application that waits
+on a loop of its own needs one line in its test
+(L<PAGI::Test::Client/TESTING AN APPLICATION THAT COMMITS TO AN EVENT LOOP>).
+
+=head1 SEE ALSO
+
+L<PAGI::Tools>, L<PAGI::Tools::Tutorial>, L<PAGI::Tools::Cookbook>,
+L<PAGI::Response>, L<PAGI::Request>, L<PAGI::App::Compose>,
+L<PAGI::Building>, L<PAGI::Spec::Www>
+
+=head1 AUTHOR
+
+John Napiorkowski E<lt>jjnapiork@cpan.orgE<gt>
+
+=head1 LICENSE
+
+This library is free software; you can redistribute it and/or modify it
+under the same terms as Perl itself.
+
+=cut
