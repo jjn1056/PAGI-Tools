@@ -51,10 +51,12 @@ A handler takes one L<PAGI::Request> and returns a response value, or a
 Future of one. PAGI-Tools never guesses a response from an ordinary Perl
 return value; a framework that accepts strings or hashes from its users
 turns them into a Response itself. Any application value is delivered with
-L<PAGI::Utils/invoke_app>; C<ref> and C<isa> tell representations apart, and
-C<is_buffered> says whether a value holds its whole body in memory. See
-L<PAGI::Tools/HANDLERS AND APPLICATIONS> and
-L<PAGI::Response/VALUE AND APPLICATION BOUNDARIES>.
+L<PAGI::Utils/invoke_app>. A value's class is its representation, so C<ref>
+and C<isa> tell representations apart (L<PAGI::Response/CLASS MODEL>), and
+C<is_buffered> says whether it holds its whole body in memory
+(L<PAGI::Response/metadata>). See L<PAGI::Tools/HANDLERS AND APPLICATIONS>
+and L<PAGI::Response/VALUE AND APPLICATION BOUNDARIES> for the boundary
+between handlers and applications.
 
 =head1 BUILDING RESPONSES
 
@@ -83,9 +85,11 @@ framework's policy.
 which encode them; bytes go to C<PAGI::Response>
 (L<PAGI::Response/BYTES AND CHARACTERS>).
 
-=item * B<Bodyless statuses.> On 1xx, 204 and 304 any buffered class takes
-an empty body (C<status_forbids_body>); the class's default Content-Type is
-decided when the value is built (L<PAGI::Response/new>).
+=item * B<Bodyless statuses.> On 1xx, 204, 205 and 304
+(C<status_forbids_body>) the base class, Text and HTML take an empty body,
+and a body with bytes croaks; JSON, Problem and Redirect never take such a
+status. The class's default Content-Type is decided when the value is built
+(L<PAGI::Response/new>).
 
 =item * B<Owned fields.> Some classes calculate a header and refuse it from
 the caller (Empty's Content-Type, Redirect's Location, File's), so staged
@@ -152,12 +156,14 @@ add to every application (L<PAGI::App::Compose/EXTENDING>, L<PAGI::App>).
 
 =head1 SUBCLASSING REQUEST, WEBSOCKET AND SSE
 
-Each class says what a subclass may add, which methods other methods call
-(the ones worth overriding), and what it must leave alone: the C<_> fields,
-and, for WebSocket and SSE, one object per connection over the same
-channels. See L<PAGI::Request/SUBCLASSING>, L<PAGI::WebSocket/SUBCLASSING>
+Each class says which fields are its own and leaves every other name to a
+subclass: Request's C<scope> and C<receive>; WebSocket's and SSE's C<scope>,
+C<receive>, C<send> and every field starting with C<_>, with one object per
+connection over the same channels. Request also lists the methods other
+methods call, the seams for a framework's own router. See L<PAGI::Request/SUBCLASSING>, L<PAGI::WebSocket/SUBCLASSING>
 and L<PAGI::SSE/SUBCLASSING>. A Request subclass is installed with
-L<PAGI::Middleware::RequestClass> or a route's C<request_factory>; a
+L<PAGI::Middleware::RequestClass> for the whole application, or
+L<PAGI::Routing/request_response>'s C<request_factory> for one handler; a
 framework with its own router writes each match's parameters into the scope
 and builds a new Request only for a new scope.
 
