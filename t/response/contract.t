@@ -62,7 +62,8 @@ subtest "Redirect's statuses" => sub {
     is(response('Redirect', '/x')->status, 302, '302 by default');
     is(response('Redirect', '/x', status => $_)->status, $_, "$_ is accepted")
         for 301, 302, 303, 307, 308;
-    like(dies { response('Redirect', '/x', status => 200) }, qr/./, '200 is refused');
+    like(dies { response('Redirect', '/x', status => 200) },
+        qr/^Redirect status must be one of 301, 302, 303, 307, or 308 at /, '200 is refused');
 };
 
 subtest "Problem's document status agrees with the option" => sub {
