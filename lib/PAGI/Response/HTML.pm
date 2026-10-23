@@ -63,7 +63,7 @@ sub content_type {
 sub render {
     my ($self, $value) = @_;
     $value = PAGI::Utils::_stringified($value);
-    die 'HTML response body must be a defined Unicode scalar'
+    Carp::croak('HTML response body must be a defined Unicode scalar')
         unless defined $value && !ref($value);
     return encode('UTF-8', $value, FB_CROAK);
 }
