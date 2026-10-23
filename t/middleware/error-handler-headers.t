@@ -9,6 +9,7 @@ use PAGI::Middleware::ErrorHandler;
 use PAGI::Exception::HTTP;
 use PAGI::Headers;
 use PAGI::Response qw(response);
+use PAGI::ErrorContext qw(error_context);
 
 # An HTTP exception carries headers: the built-in answer sends them, and a
 # status HTTP says must carry a field (401, 405, 407, 426) is answered by
@@ -149,6 +150,43 @@ subtest "a duck-typed exception's malformed headers give a 500" => sub {
         like($warnings, [ $diagnostic ], "$label: diagnosed");
         ok($reported->[0] == $error, "$label: on_error sees the original exception");
         ok($failure == $error, "$label: the original exception is re-raised");
+    }
+};
+
+subtest "a handler or catch entry answers whatever the exception's headers are" => sub {
+    # Only the built-in answer sends an exception's headers, so only it needs
+    # them sendable: when a handler or a catch entry answers, unsendable
+    # headers neither change the status nor are diagnosed.
+    my @seen;
+    my %answerer = (
+        handler => { handler => sub {
+            push @seen, error_context($_[0])->status;
+            response('JSON', { error => 'unavailable' });
+        } },
+        catch => { catch => { 503 => sub {
+            push @seen, $_[1]->status;
+            response('JSON', { error => 'unavailable' });
+        } } },
+        'handler returning the default' => { handler => sub { error_context($_[0])->default } },
+    );
+    for my $case (
+        [ 'a wrong shape',   { a => 1 } ],
+        [ 'a bad name',      [ 'Bad Name' => 'v' ] ],
+        [ 'a wide value',    [ 'X-Wide' => "\x{263A}" ] ],
+        [ 'a dying method',  undef ],
+    ) {
+        my ($label, $headers) = @$case;
+        for my $by (sort keys %answerer) {
+            @seen = ();
+            my $error = defined $headers
+                ? Local::Unavailable->new(headers => $headers)
+                : Local::DyingHeaders->new;
+            my ($status, $pairs, undef, undef, $warnings) = run(error => $error, options => $answerer{$by});
+            is($status, 503, "$label, $by: the exception's status");
+            is(values_of($pairs, 'X-Wide'), [], "$label, $by: no header from it is sent");
+            is($warnings, [], "$label, $by: nothing diagnosed");
+            is(\@seen, [503], "$label, $by: the answerer is told 503") unless $by =~ /default/;
+        }
     }
 };
 

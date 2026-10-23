@@ -464,13 +464,17 @@ sub _status_for_error {
         $self->_diagnose_rejected_status("status $claimed is outside 400-599");
         return 500;
     }
+    # Only the built-in answer sends an exception's headers, so only it needs
+    # them sendable: a handler or catch entry answers with empty headers.
+    my $answered_elsewhere = $self->_has_handler || $self->_catch_entry($error, $numeric, 1);
     my ($headers, $refused) = _exception_headers($error);
+    ($headers, $refused) = ([], undef) if defined $refused && $answered_elsewhere;
     if (defined $refused) {
         $self->_diagnose_rejected_status($refused, 'exception headers');
         return 500;
     }
     my $field = $FIELD_REQUIRED{$numeric};
-    if ($field && !$self->_has_handler && !$self->_catch_entry($error, $numeric, 1)
+    if ($field && !$answered_elsewhere
         && !grep { lc($_->[0]) eq lc($field) } @$headers) {
         $self->_diagnose_rejected_status(
             "status $claimed must carry $field, which the built-in answer cannot supply",
@@ -609,12 +613,13 @@ exception-safely and kept when it is an integer from 400 to 599 (and, without
 a handler, not one of the statuses that need a field the built-in answer
 lacks, unless its C<headers> carry it; see C<status>). Throwing,
 Future-valued, reference-valued, malformed and out-of-range claims fall back
-to 500 with a diagnostic, without replacing the original exception, as do
-C<headers> that cannot be sent (a wrong shape, a name that is not an HTTP
-token, a character above 0xFF, a C<headers> method that dies). The built-in
-answer shows its C<client_message> for a 4xx and sends its C<headers>; a
-C<handler>'s or C<catch> entry's answer is its own, and reads them from the exception if it
-wants them. Its own C<to_app>, if it has one, is never called.
+to 500 with a diagnostic, without replacing the original exception. The
+built-in answer shows its C<client_message> for a 4xx and sends its
+C<headers>, so under it C<headers> that cannot be sent (a wrong shape, a name
+that is not an HTTP token, a character above 0xFF, a C<headers> method that
+dies) fall back to 500 too. A C<handler>'s or C<catch> entry's answer is its
+own and keeps the claimed status whatever the C<headers> are; it reads them
+from the exception if it wants them. Its own C<to_app>, if it has one, is never called.
 L<PAGI::Exception::HTTP> is the class PAGI-Tools ships:
 
     die PAGI::Exception::HTTP->new(404, 'Resource not found');
