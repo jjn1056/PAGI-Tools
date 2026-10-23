@@ -55,7 +55,8 @@ subtest 'typed and unbuffered classes keep their defaults' => sub {
 
 subtest 'undef keeps its meaning outside the base class' => sub {
     is(response('JSON', undef)->body, 'null', 'JSON renders undef as null');
-    like(dies { response('Text', undef) }, qr/./, 'Text still refuses undef');
+    like(dies { response('Text', undef) }, qr/^Text response body must be a defined Unicode scalar at /,
+        'Text still refuses undef');
 };
 
 subtest 'options given without content say that content comes first' => sub {
