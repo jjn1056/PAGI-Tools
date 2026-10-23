@@ -1453,8 +1453,7 @@ may fail -- correctly.
   that returned.
 - **A dying WebSocket app's detail is the error's first line,** without
   Perl's " at FILE line N", as for SSE; it was the whole exception text.
-  PAGI-Server records the same on HTTP/1.1 and HTTP/2 from the release
-  that fixed its HTTP/1.1 WebSocket and SSE failure paths.
+  PAGI-Server 0.003000 records the same on HTTP/1.1 and HTTP/2.
 - **HTTP responses** are HTTP/1.1-shaped: app-supplied `Transfer-Encoding`
   and `Connection` headers are stripped with a warning, and every scope
   advertises `extensions`.
@@ -1501,3 +1500,11 @@ boundaries:
   manufacture.
 - `PAGI::Test::Response` is a captured-wire decoder for tests, not a
   production Response.
+- A framework that builds its own response API on PAGI-Tools starts from
+  `PAGI::Response`'s CONSTRUCTOR CONTRACT (every class takes its content,
+  then options), its staging value (`PAGI::Response->new` with no arguments,
+  to collect status, headers and cookies before the final class is known),
+  `status_forbids_body`, and its SUBCLASSING and ERRORS FROM A FRAMEWORK
+  sections (mark your own packages `$Carp::Internal` so a refusal names your
+  user's line). `PAGI::Request`, `PAGI::WebSocket` and `PAGI::SSE` each
+  have a SUBCLASSING section saying what a subclass may rely on.

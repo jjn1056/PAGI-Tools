@@ -58,4 +58,10 @@ subtest 'undef keeps its meaning outside the base class' => sub {
     like(dies { response('Text', undef) }, qr/./, 'Text still refuses undef');
 };
 
+subtest 'options given without content say that content comes first' => sub {
+    like(dies { PAGI::Response->new(status => 302) },
+        qr/response options must be name\/value pairs \(the content comes first; undef for none\)/,
+        'new(status => 302)');
+};
+
 done_testing;

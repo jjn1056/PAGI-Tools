@@ -61,8 +61,9 @@ event after request-time preflight. Stream runs a fresh producer per invocation
 and awaits each body send. Choose File or Stream explicitly when the complete
 body should not be buffered.
 
-The base class accepts one defined, unblessed, unflagged byte scalar and never
-guesses an encoding. Unicode belongs to Text or HTML; structured data belongs
+The base class takes a string of encoded bytes, or an object that stringifies
+to one (no content, or C<undef>, is an empty body), and never guesses an
+encoding. Unicode belongs to Text or HTML; structured data belongs
 to JSON or Problem. Use L<PAGI::Response::NDJSON> for a JSON-value stream. For
 another charset, encode explicitly and provide the matching Content-Type.
 
@@ -758,7 +759,8 @@ sub to_app {
 }
 
 sub _parse_options {
-    croak 'response options must be name/value pairs' if @_ % 2;
+    croak 'response options must be name/value pairs (the content comes first; undef for none)'
+        if @_ % 2;
     my %options;
     while (@_) {
         my ($name, $value) = splice @_, 0, 2;
