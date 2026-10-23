@@ -128,9 +128,9 @@ of yours. Return your own object instead:
     };
 
     sub finalize {
-        my ($self, $class, $content) = @_;
+        my ($self, $name, $content) = @_;
         my $staged = $self->_staged;
-        return response($class // '+PAGI::Response', $content,
+        return response($name // '+PAGI::Response', $content,
             ($staged->has_status ? (status => $staged->status) : ()),
             headers => $staged->headers);
     }
