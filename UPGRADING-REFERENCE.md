@@ -1500,11 +1500,7 @@ boundaries:
   manufacture.
 - `PAGI::Test::Response` is a captured-wire decoder for tests, not a
   production Response.
-- A framework that builds its own response API on PAGI-Tools starts from
-  `PAGI::Response`'s CONSTRUCTOR CONTRACT (every class takes its content,
-  then options), its staging value (`PAGI::Response->new` with no arguments,
-  to collect status, headers and cookies before the final class is known),
-  `status_forbids_body`, and its SUBCLASSING and ERRORS FROM A FRAMEWORK
-  sections (mark your own packages `$Carp::Internal` so a refusal names your
-  user's line). `PAGI::Request`, `PAGI::WebSocket` and `PAGI::SSE` each
-  have a SUBCLASSING section saying what a subclass may rely on.
+- `PAGI::Tools::Extending` is the guide for building a framework on
+  PAGI-Tools: what it may rely on (the constructor contract, the staging
+  value, the SUBCLASSING sections, errors that name your user's line), the
+  two ways to build one, and a link to the rule for each.

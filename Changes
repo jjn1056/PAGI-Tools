@@ -7,6 +7,10 @@
   UPGRADING-REFERENCE.md has the details. Needs PAGI::Server 0.003000.
 
   [New]
+  - PAGI::Tools::Extending: a guide for building frameworks and add-ons on
+    PAGI-Tools -- what a framework may rely on, the two ways to build one,
+    and a link to the rule for each; examples/framework-wrap-style and
+    examples/framework-on-tools are the complete frameworks.
   - PAGI::Response exports status_forbids_body($status): true for the
     statuses that carry no content (1xx, 204, 205, 304), the rule every
     response class applies.

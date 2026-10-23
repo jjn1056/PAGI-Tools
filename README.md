@@ -302,6 +302,7 @@ a request, such as access logging, works without a connection object.
 # SEE ALSO
 
 [PAGI::Tutorial](https://metacpan.org/pod/PAGI%3A%3ATutorial), [PAGI::Tools::Tutorial](https://metacpan.org/pod/PAGI%3A%3ATools%3A%3ATutorial), [PAGI::Tools::Cookbook](https://metacpan.org/pod/PAGI%3A%3ATools%3A%3ACookbook),
+[PAGI::Tools::Extending](https://metacpan.org/pod/PAGI%3A%3ATools%3A%3AExtending) (building frameworks and add-ons on PAGI-Tools),
 [PAGI::Compose](https://metacpan.org/pod/PAGI%3A%3ACompose), [PAGI::Routing](https://metacpan.org/pod/PAGI%3A%3ARouting), [PAGI::Pages](https://metacpan.org/pod/PAGI%3A%3APages), [PAGI::Auth](https://metacpan.org/pod/PAGI%3A%3AAuth), [PAGI::Response](https://metacpan.org/pod/PAGI%3A%3AResponse),
 [PAGI::App::File](https://metacpan.org/pod/PAGI%3A%3AApp%3A%3AFile), [PAGI::Utils](https://metacpan.org/pod/PAGI%3A%3AUtils), [PAGI::Spec](https://metacpan.org/pod/PAGI%3A%3ASpec),
 [router frontend upgrade guide](https://github.com/jjn1056/PAGI-Tools/blob/main/UPGRADING-REFERENCE.md),
