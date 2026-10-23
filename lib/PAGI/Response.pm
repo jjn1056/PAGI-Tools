@@ -266,8 +266,9 @@ On 1xx, 204 and 304 no Content-Length is sent (205 keeps its
 C<Content-Length: 0>), and the class's default Content-Type is not written:
 unlike Starlette, which adds its media type whatever the status. That is
 decided when the value is built: C<< response('Text', '')->status(204) >>
-keeps the C<text/plain; charset=utf-8> it was built with. A Content-Type the
-caller gives is sent.
+keeps the C<text/plain; charset=utf-8> it was built with, and
+C<< response('Text', '', status => 204)->status(200) >> keeps having none. A
+Content-Type the caller gives is sent.
 
 C<< PAGI::Response->new >> with no arguments is the empty value: no explicit
 status (C<has_status> is false), no Content-Type, an empty body. As an
