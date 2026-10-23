@@ -91,8 +91,8 @@ subtest 'the rules it states are the code\'s' => sub {
     my @bodyless = grep { status_forbids_body($_) } 100 .. 599;
     is([ grep { $_ >= 200 } @bodyless ], [204, 205, 304], 'status_forbids_body: 1xx, 204, 205, 304');
     like($guide, qr/On 1xx, 204, 205 and 304/, 'the guide names the same statuses');
-    for my $class ('+PAGI::Response', 'Text', 'HTML') {
-        ok(lives { response($class, '', status => $_) for 204, 205 }, "$class takes an empty body on 204 and 205");
+    for my $name ('+PAGI::Response', 'Text', 'HTML') {
+        ok(lives { response($name, '', status => $_) for 204, 205 }, "$name takes an empty body on 204 and 205");
     }
     ok(dies { response('JSON', undef, status => 204) }, 'JSON does not');
     ok(dies { response('Problem', { title => 't' }, status => 204) }, 'nor Problem');
