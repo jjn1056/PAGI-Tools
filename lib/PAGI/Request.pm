@@ -1473,7 +1473,8 @@ whose names start with C<_> are not part of the contract.
 
 =item * B<How the class is chosen.> PAGI-Tools builds the class named by
 C<pagi.request.factory> in the scope, set by
-L<PAGI::Middleware::RequestClass> or a route's C<request_factory>.
+L<PAGI::Middleware::RequestClass> for an application, or by
+L<PAGI::Routing/request_response>'s C<request_factory> for one handler.
 
 =item * B<Re-dispatch through one scope.> A framework whose router passes
 one request through several matches writes each match's parameters into

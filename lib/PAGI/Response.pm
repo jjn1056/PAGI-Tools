@@ -262,9 +262,9 @@ whose C<undef> renders as C<null>, and so do Stream, NDJSON and File, which
 always have a body to deliver. L<PAGI::Response::Empty> remains the class for
 a response that must never carry a Content-Type.
 
-On 1xx, 204 and 304 no Content-Length is sent (205 keeps its
-C<Content-Length: 0>), and the class's default Content-Type is not written:
-unlike Starlette, which adds its media type whatever the status. That is
+On 1xx, 204, 205 and 304 the class's default Content-Type is not written,
+unlike Starlette, which adds its media type whatever the status; on all but
+205 no Content-Length is sent either (205 keeps its C<Content-Length: 0>). That is
 decided when the value is built: C<< response('Text', '')->status(204) >>
 keeps the C<text/plain; charset=utf-8> it was built with, and
 C<< response('Text', '', status => 204)->status(200) >> keeps having none. A

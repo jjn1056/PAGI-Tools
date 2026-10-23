@@ -25,7 +25,7 @@ request and a mutable response, and whose router re-dispatches one request
 through chained matches.
 
 =item * F<examples/framework-on-tools>: C<Tiny>, whose handlers return plain
-values (a hashref is JSON, a string is HTML) that its handler wrapper turns
+values (a hashref or arrayref is JSON, a string is HTML) that its handler wrapper turns
 into PAGI values, with its own Request class and error mapping.
 
 =back
@@ -92,7 +92,8 @@ status. The class's default Content-Type is decided when the value is built
 (L<PAGI::Response/new>).
 
 =item * B<Owned fields.> Some classes calculate a header and refuse it from
-the caller (Empty's Content-Type, Redirect's Location, File's), so staged
+the caller (Empty's Content-Type, Redirect's Location, File's C<Content-Length>,
+C<Content-Range> and C<ETag>), so staged
 headers must not carry them (L<PAGI::Response/Owned fields>).
 
 =item * B<Your own classes.> Override C<render> and C<default_content_type>
@@ -108,7 +109,7 @@ objects and builds one PAGI value at the end. Its response stages metadata
 on the empty value and finalizes into one C<response> call. A framework
 response that delegates to the staged value needs one adjustment: a
 delegated setter returns the staged value, so a chain such as
-C<< $res->status(201)->text(...) >> would continue on PAGI's object instead
+C<< $res->status(201)->header(...) >> would continue on PAGI's object instead
 of yours. Return your own object instead:
 
     package My::Framework::Response;
@@ -139,7 +140,8 @@ of yours. Return your own object instead:
             headers => $staged->headers);
     }
 
-F<examples/framework-wrap-style> is the complete framework.
+F<examples/framework-wrap-style> is the complete framework; its response
+writes its setters out instead of delegating, so it needs no such shim.
 
 B<Building on.> The framework's users write handlers that return PAGI
 values, or plain values the framework converts, and the framework adds its
@@ -147,7 +149,14 @@ layer around them: its own Request
 subclass, its own response classes built by name, post-processing of the
 returned value (its metadata stays mutable until it is sent), and handler
 wrapping before a route is registered (PAGI routing never inspects a
-coderef). F<examples/framework-on-tools> is the complete framework.
+coderef). A framework that calls C<route> for its users passes
+C<declaration_package>, so a compact constraint provider such as
+C<{id:&Int}> is looked up in its user's package rather than the framework's
+(L<PAGI::Routing/"route, websocket, sse">). Controller objects are
+L<PAGI::Endpoint>: C<endpoint('Class', %args)> builds one per request, and
+C<BUILD_APP> chooses another lifetime, one per session say
+(L<PAGI::Endpoint/BUILD_APP>). F<examples/framework-on-tools> is the
+complete framework.
 
 B<The application class.> A framework's application base class can
 subclass L<PAGI::App::Compose>, as FastAPI's subclasses Starlette's: its
