@@ -130,11 +130,10 @@ sub content_length {
     return $self->header('content-length');
 }
 
-# Private cache: the source of truth for header lookups (built once per request).
+# Private cache: the source of truth for header lookups (built once per object).
 sub _header_snapshot {
     my $self = shift;
-    return $self->{scope}{'pagi.request.headers'}
-        //= PAGI::Headers->new($self->{scope}{headers} // []);
+    return $self->{_headers} //= PAGI::Headers->new($self->{scope}{headers} // []);
 }
 
 # Public: the cached PAGI::Headers object used by all Request header lookups.
@@ -146,7 +145,7 @@ sub header     { return $_[0]->_header_snapshot->get($_[1]) }
 # All values for a header
 sub header_all { return $_[0]->_header_snapshot->get_all($_[1]) }
 
-# Query params as Hash::MultiValue (cached in scope)
+# Query params as Hash::MultiValue (cached on the object)
 # Options: strict => 1 (croak on invalid UTF-8), raw => 1 (skip UTF-8 decoding)
 sub query_params {
     my ($self, %opts) = @_;
@@ -154,8 +153,8 @@ sub query_params {
     my $raw    = delete $opts{raw}    // 0;
     croak("Unknown options to query_params: " . join(', ', keys %opts)) if %opts;
 
-    my $cache_key = $raw ? 'pagi.request.query.raw' : ($strict ? 'pagi.request.query.strict' : 'pagi.request.query');
-    return $self->{scope}{$cache_key} if $self->{scope}{$cache_key};
+    my $cache_key = $raw ? '_query_raw' : ($strict ? '_query_strict' : '_query');
+    return $self->{$cache_key} if $self->{$cache_key};
 
     my $qs = $self->query_string;
     my @pairs;
@@ -177,8 +176,8 @@ sub query_params {
         push @pairs, $key_final, $val_final;
     }
 
-    $self->{scope}{$cache_key} = Hash::MultiValue->new(@pairs);
-    return $self->{scope}{$cache_key};
+    $self->{$cache_key} = Hash::MultiValue->new(@pairs);
+    return $self->{$cache_key};
 }
 
 # Raw query params (no UTF-8 decoding)
@@ -199,14 +198,14 @@ sub raw_query_param {
     return $self->query_param($name, raw => 1);
 }
 
-# All cookies as hashref (cached in scope)
+# All cookies as hashref (cached on the object)
 sub cookies {
     my $self = shift;
-    return $self->{scope}{'pagi.request.cookies'} if exists $self->{scope}{'pagi.request.cookies'};
+    return $self->{_cookies} if exists $self->{_cookies};
 
     my $cookie_header = $self->header('cookie') // '';
-    $self->{scope}{'pagi.request.cookies'} = crush_cookie($cookie_header);
-    return $self->{scope}{'pagi.request.cookies'};
+    $self->{_cookies} = crush_cookie($cookie_header);
+    return $self->{_cookies};
 }
 
 # Single cookie value
