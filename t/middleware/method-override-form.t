@@ -124,11 +124,11 @@ sub composed {
     ));
 }
 
-subtest 'the parse is shared with the application, so a form below it cannot be streamed' => sub {
+subtest 'the application parses the replayed form itself; its own Request then cannot stream' => sub {
     my $client = composed(middleware('MethodOverride'));
     is $client->post('/?read=form,stream', body => '_method=DELETE&title=hi', headers => \%urlencoded)->text,
         'DELETE | form=hi | stream=dies: Body already consumed; streaming not available',
-        'form_params reuses the parse; body_stream dies';
+        'form_params parses the replay; body_stream on that same Request dies';
     is composed(middleware('MethodOverride', check_form => 0))
         ->post('/?read=stream', body => 'title=hi', headers => \%urlencoded)->text,
         'POST | stream=streams', 'under check_form => 0 the form streams';

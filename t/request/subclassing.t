@@ -7,8 +7,9 @@ use lib 'lib';
 use Scalar::Util qw(refaddr);
 use PAGI::Request;
 
-# The SUBCLASSING contract in PAGI::Request: two fields, data cached in the
-# scope, path_params as the router seam, re-dispatch through one scope.
+# The SUBCLASSING contract in PAGI::Request: two fields, what is parsed kept
+# on the object (nothing in the scope), path_params as the router seam,
+# re-dispatch through one scope.
 
 {
     package Local::Request;
@@ -45,17 +46,18 @@ sub body_receive {
     };
 }
 
-subtest 'two objects over one scope share what is parsed' => sub {
+subtest 'two objects over one scope each parse for themselves' => sub {
     my $calls = 0;
     my $scope = scope_for();
     my $receive = body_receive(\$calls);
     my $one = PAGI::Request->new($scope, $receive);
     my $two = PAGI::Request->new($scope, $receive);
 
-    is(refaddr($one->headers), refaddr($two->headers), 'the parsed headers are one value');
+    isnt(refaddr($one->headers), refaddr($two->headers), 'each parses the headers itself');
+    is($two->header('X-Note'), 'a', 'to the same values');
     is($one->body->get, 'the body', 'the first object reads the body');
-    is($two->body->get, 'the body', 'the second sees it');
-    is($calls, 1, 'the body was received once: the latch is in the scope');
+    is($two->body->get, 'the body', 'the second reads it from $receive itself');
+    is($calls, 2, 'so $receive is asked twice: pass the one Request on instead');
 };
 
 subtest 'a new scope starts fresh' => sub {

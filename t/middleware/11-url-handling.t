@@ -1103,7 +1103,7 @@ subtest 'ReverseProxy - non-HTTP scopes pass through outside Pages' => sub {
     is \@events, [], 'non-HTTP pass-through emits no Pages response';
 };
 
-subtest 'ReverseProxy - rewritten scope does not inherit stale Request headers' => sub {
+subtest 'ReverseProxy - a Request below sees the rewritten headers' => sub {
     my $proxy = PAGI::Middleware::ReverseProxy->new(
         trusted_proxies => ['127.0.0.1'],
     );
@@ -1115,14 +1115,13 @@ subtest 'ReverseProxy - rewritten scope does not inherit stale Request headers' 
         ],
     );
     my $original_request = PAGI::Request->new($scope, async sub { {} });
-    $original_request->headers;
-    my $original_cache = $scope->{'pagi.request.headers'};
+    my $original_cache = $original_request->headers;
     my $input_headers = $scope->{headers};
 
     my $wrapped = $proxy->wrap(async sub {
         my ($rewritten_scope) = @_;
-        ok !exists($rewritten_scope->{'pagi.request.headers'}),
-            'rewritten scope starts without the inherited Request header cache';
+        ok !(grep { /^pagi\.request\./ } keys %$rewritten_scope),
+            'rewritten scope carries no Request state';
         my $downstream_request = PAGI::Request->new(
             $rewritten_scope,
             async sub { {} },
@@ -1135,10 +1134,10 @@ subtest 'ReverseProxy - rewritten scope does not inherit stale Request headers' 
 
     run_async { $wrapped->($scope, async sub { {} }, async sub { }) };
 
-    is refaddr($scope->{'pagi.request.headers'}), refaddr($original_cache),
-        'original scope retains ownership of its cached snapshot';
-    is $scope->{'pagi.request.headers'}->get('host'), 'internal.example',
-        'original cached snapshot retains its original Host';
+    is refaddr($original_request->headers), refaddr($original_cache),
+        'the original Request keeps its own snapshot';
+    is $original_request->header('host'), 'internal.example',
+        'which retains its original Host';
     is refaddr($scope->{headers}), refaddr($input_headers),
         'original scope retains its raw header array';
     is $scope->{headers}, [

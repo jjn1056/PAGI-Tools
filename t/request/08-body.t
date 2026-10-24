@@ -133,8 +133,7 @@ subtest 'body croaks on mid-body disconnect, not silent EOF' => sub {
     like $err1, qr/Request body incomplete: client disconnected mid-body \(client_closed\)/,
         'body croaks naming the disconnect reason instead of returning the partial body';
     is $calls, 2, 'receive called exactly twice (partial chunk + disconnect)';
-    ok !$scope->{'pagi.request.body.read'}, 'the partial body is never cached as a complete read';
-    ok $scope->{'pagi.request.body.truncated'}, 'truncation is recorded on the scope';
+    is [ grep { /^pagi\.request\./ } keys %$scope ], [], 'the Request records the truncation itself, not in the scope';
 
     my $err2;
     eval { (async sub { await $req->body })->()->get; 1 } or $err2 = $@;

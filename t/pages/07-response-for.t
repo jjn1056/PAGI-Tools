@@ -203,16 +203,14 @@ subtest 'negotiated HTTP materialization preserves source scopes and header cach
                     ['Accept' => 'application/problem+json;q=0.9'],
                 ], "$label call $call preserves raw header values");
                 if ($cached) {
-                    is(refaddr($scope->{'pagi.request.headers'}), refaddr($cache),
-                        "$label call $call preserves cache identity");
+                    is(refaddr($request->headers), refaddr($cache),
+                        "$label call $call preserves the Request's own header cache");
                     is([$cache->get_all('accept')], [
                         'text/html;q=0.1', 'application/problem+json;q=0.9',
                     ], "$label call $call preserves cached header values");
                 }
-                else {
-                    ok(!exists $scope->{'pagi.request.headers'},
-                        "$label call $call leaves source uncached");
-                }
+                ok(!exists $scope->{'pagi.request.headers'},
+                    "$label call $call leaves source uncached");
                 is(refaddr($descriptor_scopes[-1]), refaddr($scope),
                     "$label call $call descriptor retains original scope identity");
                 my $metadata = $Local::CountingPages::RESPONSE_SCOPES[-1];

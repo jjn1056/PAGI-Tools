@@ -204,7 +204,6 @@ sub wrap {
             } @{$scope->{headers} // []};
             push @new_headers, ['host', $safe_forwarded_host];
             $new_scope{headers} = \@new_headers;
-            delete $new_scope{'pagi.request.headers'};
         }
 
         # X-Forwarded-Port
@@ -299,9 +298,8 @@ When headers are processed from a trusted proxy:
 =item * scheme - Updated to 'https' if X-Forwarded-Proto indicates
 
 =item * headers - A valid trusted X-Forwarded-Host atomically removes every
-existing Host pair and appends exactly one lowercase C<host> pair. The copied
-C<pagi.request.headers> cache is removed so later request lookups use the
-rewritten header array. The input scope and its header pairs are not mutated.
+existing Host pair and appends exactly one lowercase C<host> pair. The input
+scope and its header pairs are not mutated.
 
 =item * server - Port updated if X-Forwarded-Port present
 

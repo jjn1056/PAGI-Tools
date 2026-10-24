@@ -476,8 +476,8 @@ subtest 'headers returns the exact cached object used by Request lookups' => sub
 
     is $req->header('host'), 'x.com', 'ordinary lookup initializes the header cache';
     my $headers = $req->headers;
-    is refaddr($headers), refaddr($scope->{'pagi.request.headers'}),
-        'headers returns the cached PAGI::Headers object';
+    ok !exists $scope->{'pagi.request.headers'},
+        'the cache is the Request\'s own, not in the scope';
     is refaddr($req->headers), refaddr($headers),
         'later headers calls return the same object';
 
