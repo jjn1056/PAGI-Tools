@@ -160,8 +160,8 @@ form body of an unsafe request that passed the origin check and has a token to
 match, and a missing or wrong value is refused like a header. The parse uses
 L<PAGI::Request>'s default limits (for multipart, 1MB a field, 10MB a file, 20
 files, 1000 fields; a urlencoded body has no cap of its own, so the server's
-C<max_body_size> bounds it), and limits that the application later passes to
-C<form_params> or C<uploads> do not apply, because the parse is cached. A body
+C<max_body_size> bounds it); the application reads the body again from the
+replay, under the limits it passes to C<form_params> or C<uploads>. A body
 the parse rejects throws the same L<PAGI::Exception::RequestBody> (a 400 or 413) as
 when the application reads it, and it is answered by an ErrorHandler outside
 this middleware: list your own C<ErrorHandler> before CSRF to answer it

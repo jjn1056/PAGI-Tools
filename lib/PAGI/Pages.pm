@@ -1193,8 +1193,8 @@ See L<PAGI::Pages::Application/response_for>.
 
 Factory C<headers> options take the shapes in L</"HEADERS AND CACHE POLICY">. For request
 negotiation, Pages builds an isolated metadata view and reads repeated request
-fields through L<PAGI::Headers>; it does not reuse or mutate the source scope's
-C<pagi.request.headers> cache.
+fields through L<PAGI::Headers>; it does not reuse or mutate a header cache a
+WebSocket or SSE helper keeps in the source scope.
 
 Pages rejects lifespan and unknown scopes before receive, rendering, or send.
 Pages does not handle lifespan. At a bare server root,

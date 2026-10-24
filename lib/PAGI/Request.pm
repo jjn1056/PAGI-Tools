@@ -823,8 +823,8 @@ Get all values for a header.
 
 Returns the exact cached L<PAGI::Headers> object used by C<header>,
 C<header_all>, and header-derived accessors. Deliberate mutation through this
-object therefore affects later Request, WebSocket, or SSE header reads on the
-same scope. All three helpers share C<< $scope->{'pagi.request.headers'} >>.
+object therefore affects later header reads through this Request, and no
+other object: each Request parses the scope's headers itself.
 Call C<< $req->headers->clone >> when an isolated copy is required.
 
 =head1 QUERY PARAMETERS
@@ -1441,14 +1441,17 @@ C<extends>). The contract:
 
 =over 4
 
-=item * B<State.> The object is a blessed hash with two PAGI-Tools fields,
-C<scope> and C<receive>. A subclass adds fields under any other name.
+=item * B<State.> The object is a blessed hash. PAGI-Tools uses the fields
+C<scope> and C<receive> and fields whose names start with C<_>. A subclass
+adds fields under any other name.
 
-=item * B<Caching is in the scope.> What a Request parses is kept in the
-scope under C<pagi.request.*>: the headers, query, cookies, form and uploads,
-and the latches that record the body was read or streamed. Every Request
-object over the same scope shares them, so a second object is cheap and sees
-the body the first one read; a new scope starts fresh.
+=item * B<What is parsed is kept on the object.> A Request keeps the
+headers, query, cookies, body, form and uploads it parses, and the latches
+that record the body was read or streamed, on itself; it only reads the
+scope and writes nothing to it. Two Request objects over one scope each
+parse for themselves, and since the body arrives through C<$receive> once, a
+second object cannot read a body the first one read: pass the one Request on,
+as L<PAGI::Endpoint> passes its builder's Request to the handler.
 
 =item * B<Overridable methods.> Public methods may be overridden; the ones
 other methods call are:

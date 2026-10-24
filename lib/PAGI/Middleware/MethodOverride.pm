@@ -205,10 +205,10 @@ async sub _get_override_method {
 }
 
 # The param field of a urlencoded or multipart body, and the receive that
-# delivers that body again. The form is read through PAGI::Request on the
-# application's scope, so the application's form_params reuse the parse. A
-# body the parse rejects is no override: the application meets the same
-# error when it reads the body.
+# delivers that body again. The form is read through a PAGI::Request of the
+# middleware's own; the application parses the replay itself. A body the
+# parse rejects is no override: the application meets the same error when
+# it reads the body.
 async sub _form_method {
     my ($self, $scope, $receive) = @_;
     return (undef, $receive) unless PAGI::Request->new($scope, $receive)->is_form;

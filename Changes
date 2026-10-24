@@ -170,8 +170,10 @@
     fresh object with new for each request (each connection for WebSocket
     and SSE), so $self belongs to that request. A BUILD_APP that returns an
     object shares it across every request; one that returns a coderef is a
-    builder, called per request (it may be async). Moose endpoint classes
-    need MooseX::NonMoose, and endpoint() says so.
+    builder, called per request (it may be async); for HTTP the handler
+    gets the Request the builder was given, so a Request class's new runs
+    once per request. Moose endpoint classes need MooseX::NonMoose, and
+    endpoint() says so.
   - Endpoint::HTTP answers QUERY with a query method. A query helper method
     on an existing subclass now answers QUERY too.
   - PAGI::Test::Client has a query method for the QUERY verb.
@@ -403,6 +405,15 @@
     Tutorial link to one statement of each rule instead of restating it.
 
   [Breaking -- see UPGRADING.md]
+  - PAGI::Request writes nothing to the scope: the headers, query,
+    cookies, body, form and uploads it parses, and its body latches, are
+    kept on the object, as Starlette's Request keeps them (0.002002 kept
+    them in the scope under pagi.request.*). A middleware that rewrites
+    headers, the query string or cookies on a copy of the scope no longer
+    leaves a stale parse for the Request below it. Two Requests over one
+    scope each parse for themselves, and the second cannot read a body the
+    first one read: pass the one Request on. An application below
+    MethodOverride or CSRF may now stream a body they read (it was a 500).
   - Requires Perl 5.24 (was 5.18), as PAGI 0.003001 and PAGI-Server do.
     See "Perl version support" in PAGI.
   - PAGI::Test::Client no longer runs an application's own event loop
