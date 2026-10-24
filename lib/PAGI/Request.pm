@@ -351,8 +351,8 @@ sub body_stream {
     my ($self, %opts) = @_;
     my $scope_type = $self->_require_body_scope;
 
-    croak "Body already consumed; streaming not available" if $self->{scope}{'pagi.request.body.read'};
-    croak "Body streaming already started" if $self->{scope}{'pagi.request.body.stream.created'};
+    croak "Body already consumed; streaming not available" if $self->{_body_read};
+    croak "Body streaming already started" if $self->{_body_stream_created};
 
     my $max_bytes = $opts{max_bytes};
     my $limit_name = defined $max_bytes ? 'max_bytes' : undef;
@@ -376,7 +376,7 @@ sub body_stream {
         max_line_length => $opts{max_line_length},
         _scope_type => $scope_type,
     );
-    $self->{scope}{'pagi.request.body.stream.created'} = 1;
+    $self->{_body_stream_created} = 1;
     return $stream;
 }
 
@@ -385,8 +385,8 @@ sub multipart_stream {
     my ($self, %opts) = @_;
     my $scope_type = $self->_require_body_scope;
     croak "Body already consumed; multipart_stream() not available"
-        if $self->{scope}{'pagi.request.body.read'}
-        || $self->{scope}{'pagi.request.body.stream.created'};
+        if $self->{_body_read}
+        || $self->{_body_stream_created};
     croak "multipart_stream() requires a multipart/form-data request" unless $self->is_multipart;
 
     my $parameters = $self->headers->content_type_parameters;
@@ -395,7 +395,7 @@ sub multipart_stream {
         reason => 'invalid_multipart', message => 'No boundary found in Content-Type',
     ) unless defined $boundary && length $boundary;
 
-    $self->{scope}{'pagi.request.body.stream.created'} = 1;  # latch: lock out buffered readers
+    $self->{_body_stream_created} = 1;  # latch: lock out buffered readers
 
     require PAGI::Request::MultipartStream;
     return PAGI::Request::MultipartStream->new(
@@ -413,19 +413,19 @@ async sub body {
     my $scope_type = $self->_require_body_scope;
 
     croak "Body streaming already started; buffered helpers unavailable"
-        if $self->{scope}{'pagi.request.body.stream.created'};
+        if $self->{_body_stream_created};
 
     # Return cached body if already read. A multipart parse streams the body
     # to its parts and keeps no copy of it.
-    if ($self->{scope}{'pagi.request.body.read'}) {
+    if ($self->{_body_read}) {
         croak 'The raw body of a multipart request is not kept; read it with form_params and uploads'
-            unless exists $self->{scope}{'pagi.request.body'};
-        return $self->{scope}{'pagi.request.body'};
+            unless exists $self->{_body};
+        return $self->{_body};
     }
 
     # A prior call already hit a mid-body disconnect: fail identically instead
     # of re-awaiting a receive that will never resolve normally again.
-    if ($self->{scope}{'pagi.request.body.truncated'}) {
+    if ($self->{_body_truncated}) {
         my $connection = $self->connection;
         my $reason = $connection ? $connection->disconnect_reason : undef;
         $reason //= 'disconnect';
@@ -441,7 +441,7 @@ async sub body {
         my $kind = PAGI::Request::_BodyInput::event_kind($scope_type, $message);
         if ($kind eq 'disconnect') {
             last unless length $body;  # no bytes ever arrived -- an empty body, not a truncation
-            $self->{scope}{'pagi.request.body.truncated'} = 1;
+            $self->{_body_truncated} = 1;
             my $connection = $self->connection;
             my $reason = $connection ? $connection->disconnect_reason : undef;
             $reason //= 'disconnect';
@@ -452,8 +452,8 @@ async sub body {
         last unless $message->{more};
     }
 
-    $self->{scope}{'pagi.request.body'} = $body;
-    $self->{scope}{'pagi.request.body.read'} = 1;
+    $self->{_body} = $body;
+    $self->{_body_read} = 1;
     return $body;
 }
 
@@ -496,16 +496,16 @@ async sub form_params {
     }
     croak("Unknown options to form_params: " . join(', ', keys %opts)) if %opts;
 
-    my $cache_key = $raw ? 'pagi.request.form.raw' : ($strict ? 'pagi.request.form.strict' : 'pagi.request.form');
+    my $cache_key = $raw ? '_form_raw' : ($strict ? '_form_strict' : '_form');
 
     # Return cached if available
-    return $self->{scope}{$cache_key} if $self->{scope}{$cache_key};
+    return $self->{$cache_key} if $self->{$cache_key};
 
     # For multipart, delegate to uploads handling
     if ($self->is_multipart) {
         # Multipart always parses to default cache, then copy
         my $form = await $self->_parse_multipart_form(%multipart_opts);
-        $self->{scope}{$cache_key} = $form;
+        $self->{$cache_key} = $form;
         return $form;
     }
 
@@ -530,8 +530,8 @@ async sub form_params {
         push @pairs, $key_final, $val_final;
     }
 
-    $self->{scope}{$cache_key} = Hash::MultiValue->new(@pairs);
-    return $self->{scope}{$cache_key};
+    $self->{$cache_key} = Hash::MultiValue->new(@pairs);
+    return $self->{$cache_key};
 }
 
 # Singular accessor for form params
@@ -559,11 +559,11 @@ async sub _parse_multipart_form {
     my $scope_type = $self->_require_body_scope;
 
     croak "Body streaming already started; buffered helpers unavailable"
-        if $self->{scope}{'pagi.request.body.stream.created'};
+        if $self->{_body_stream_created};
 
     # Already parsed?
-    return $self->{scope}{'pagi.request.form'}
-        if $self->{scope}{'pagi.request.form'} && $self->{scope}{'pagi.request.uploads'};
+    return $self->{_form}
+        if $self->{_form} && $self->{_uploads};
 
     my $parameters = $self->headers->content_type_parameters;
     my $boundary = defined($parameters) ? $parameters->{boundary} : undef;
@@ -585,9 +585,9 @@ async sub _parse_multipart_form {
 
     my ($form, $uploads) = await $handler->parse;
 
-    $self->{scope}{'pagi.request.form'} = $form;
-    $self->{scope}{'pagi.request.uploads'} = $uploads;
-    $self->{scope}{'pagi.request.body.read'} = 1;  # Body has been consumed
+    $self->{_form} = $form;
+    $self->{_uploads} = $uploads;
+    $self->{_body_read} = 1;  # Body has been consumed
 
     return $form;
 }
@@ -597,16 +597,16 @@ async sub uploads {
     my ($self, %opts) = @_;
     $self->_require_body_scope;
 
-    return $self->{scope}{'pagi.request.uploads'} if $self->{scope}{'pagi.request.uploads'};
+    return $self->{_uploads} if $self->{_uploads};
 
     if ($self->is_multipart) {
         await $self->_parse_multipart_form(%opts);
-        return $self->{scope}{'pagi.request.uploads'};
+        return $self->{_uploads};
     }
 
     # Not multipart - return empty
-    $self->{scope}{'pagi.request.uploads'} = Hash::MultiValue->new();
-    return $self->{scope}{'pagi.request.uploads'};
+    $self->{_uploads} = Hash::MultiValue->new();
+    return $self->{_uploads};
 }
 
 # Get single upload by field name

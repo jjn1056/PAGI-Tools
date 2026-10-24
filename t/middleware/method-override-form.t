@@ -134,6 +134,12 @@ subtest 'the parse is shared with the application, so a form below it cannot be 
         'POST | stream=streams', 'under check_form => 0 the form streams';
 };
 
+subtest 'an application below it may stream the body MethodOverride read' => sub {
+    is composed(middleware('MethodOverride'))
+        ->post('/?read=stream', body => '_method=DELETE&title=hi', headers => \%urlencoded)->text,
+        'DELETE | stream=streams', 'body_stream works: the replay is the body, not a cache in the scope';
+};
+
 subtest 'a form the parse rejects is not an override; the application meets the error itself' => sub {
     my $client = composed(middleware('MethodOverride'));
     my $res = $client->post('/?read=form', body => '', headers => \%multipart);
