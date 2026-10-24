@@ -106,9 +106,17 @@ sub to_app {
         croak "PAGI::Endpoint::HTTP requires HTTP scope; received '$type'"
             unless $type eq 'http';
         my $request = PAGI::Request::_Factory::request_for_scope($scope, $receive);
-        my $application = await $endpoint->dispatch($request);
-        await invoke_app($application, $scope, $receive, $send);
+        await $endpoint->_run_with_request($request, $scope, $receive, $send);
     };
+}
+
+# Answers with $request, a Request already made for this scope: the one an
+# endpoint's BUILD_APP builder was given, so the builder and the handler share
+# one Request (and what it has read) for the request.
+async sub _run_with_request {
+    my ($endpoint, $request, $scope, $receive, $send) = @_;
+    my $application = await $endpoint->dispatch($request);
+    await invoke_app($application, $scope, $receive, $send);
 }
 
 1;

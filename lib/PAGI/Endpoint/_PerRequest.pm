@@ -39,6 +39,10 @@ sub to_app {
         croak "$made_by must return an app object (one with to_app);"
             . ' a native PAGI application goes through as_app_object()'
             unless blessed($app) && $app->can('to_app');
+        # An HTTP endpoint answers with the Request its builder was given, so
+        # the body the builder read is the handler's too.
+        return await $app->_run_with_request($request, $scope, $receive, $send)
+            if $request && $app->isa('PAGI::Endpoint::HTTP');
         await invoke_app($app, $scope, $receive, $send);
     };
 }

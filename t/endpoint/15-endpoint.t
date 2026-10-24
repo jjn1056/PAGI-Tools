@@ -285,6 +285,22 @@ package Local::AsyncBuilt {
 }
 
 # Its builder reads the body, so the handler gets it from the cache.
+package Local::SameRequest {
+    use parent 'PAGI::Endpoint::HTTP';
+    use Scalar::Util qw(refaddr);
+
+    sub BUILD_APP {
+        my ($class, %args) = @_;
+        return sub { my ($request) = @_; return $class->new(%args, built_with => $request) };
+    }
+
+    sub post {
+        my ($self, $request) = @_;
+        return PAGI::Response::Text->new(
+            refaddr($self->{built_with}) == refaddr($request) ? 'same Request' : 'a different Request');
+    }
+}
+
 package Local::BodyPeeker {
     use parent 'PAGI::Endpoint::HTTP';
     use Future::AsyncAwait;
@@ -586,7 +602,7 @@ subtest 'the default path builds no Request of its own' => sub {
     is($made, 1, 'no BUILD_APP: one Request, the endpoint\'s own');
     $made = 0;
     $client->get('/built', headers => { 'X-Token' => 'yes' });
-    is($made, 2, 'a builder: the builder\'s and the endpoint\'s, as before');
+    is($made, 1, 'a builder: one Request, the builder\'s, which the endpoint answers with');
 };
 
 subtest 'a class that cannot be loaded' => sub {
@@ -769,12 +785,19 @@ subtest 'a builder may be async' => sub {
     is([$res->status, $res->text], [401, 'not yet'], 'or a refusal');
 
     is($client->post('/peek', json => { text => 'milk' })->text, 'milk/milk',
-        'a builder that read the body leaves the handler json from the cache');
+        'a builder that read the body leaves the handler json: the same Request');
     my $streamed;
     like(warnings { $streamed = $client->put('/peek', json => { text => 'milk' }) },
         [qr/\Aexception after response completed: Body already consumed; streaming not available/],
         'but not body_stream');
     is($streamed->status, 500, '... a 500');
+};
+
+subtest "the handler gets the Request its builder was given" => sub {
+    my $client = PAGI::Test::Client->new(app => compose(routes => [
+        route('/same' => endpoint('Local::SameRequest')),
+    ]));
+    is($client->post('/same', body => '')->text, 'same Request', 'one Request per request');
 };
 
 subtest 'a builder that fails answers that request with a 500' => sub {
