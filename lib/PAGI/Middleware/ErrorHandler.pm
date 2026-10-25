@@ -9,7 +9,6 @@ use Future;
 use Future::AsyncAwait;
 use Scalar::Util 'blessed';
 use mro ();
-use PAGI::Request::_Factory ();
 use PAGI::Routing::HeadBoundary ();
 use PAGI::ErrorContext ();
 use PAGI::Utils ();
@@ -337,7 +336,7 @@ async sub _handle_exception {
     my $context = PAGI::ErrorContext->new($error_scope);
     my $answered = eval {
         if ($entry) {
-            $request //= PAGI::Request::_Factory::request_for_scope($error_scope, \&_no_body);
+            $request //= PAGI::Utils::request_for_scope($error_scope, \&_no_body);
             my $answer = await Future->wrap($entry->($request, $context));
             await _send_answer($answer, $context, 'ErrorHandler catch entry', $error_scope, $receive, $send);
         }
@@ -529,7 +528,7 @@ async sub _answer_server_error {
         $error->{answered_by} = 'catch entry';    # names it if it fails
         my $context = PAGI::ErrorContext->new($scope);
         my $answer = await Future->wrap($entry->(
-            PAGI::Request::_Factory::request_for_scope($scope, \&_no_body), $context));
+            PAGI::Utils::request_for_scope($scope, \&_no_body), $context));
         return await _send_answer($answer, $context, 'ErrorHandler catch entry', $scope, $receive, $send);
     }
     if (my $app = $self->{handler_app}) {
@@ -537,7 +536,7 @@ async sub _answer_server_error {
     }
     my $context = PAGI::ErrorContext->new($scope);
     if (my $handler = $self->{handler_code}) {
-        my $answer = await Future->wrap($handler->(PAGI::Request::_Factory::request_for_scope($scope, \&_no_body)));
+        my $answer = await Future->wrap($handler->(PAGI::Utils::request_for_scope($scope, \&_no_body)));
         return await _send_answer($answer, $context, 'ErrorHandler handler', $scope, $receive, $send);
     }
     $error->{answered_by} = 'built-in answer';

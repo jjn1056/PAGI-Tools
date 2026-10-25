@@ -8,7 +8,6 @@ use Future;
 use Future::AsyncAwait;
 use Scalar::Util qw(blessed);
 use PAGI::Auth qw(auth);
-use PAGI::Request::_Factory ();
 use PAGI::Utils::Middleware qw(clone_scope);
 use PAGI::Utils ();
 
@@ -51,7 +50,7 @@ sub wrap {
 
         # The backend reads the request's headers and cookies; the body is
         # the application's, so the backend's Request has none to read.
-        my $request = PAGI::Request::_Factory::request_for_scope($scope, \&_no_body);
+        my $request = PAGI::Utils::request_for_scope($scope, \&_no_body);
         my $returned = ref($backend) eq 'CODE'
             ? $backend->($request)
             : $backend->authenticate($request);

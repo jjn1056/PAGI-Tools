@@ -7,7 +7,6 @@ use Carp qw(croak);
 use Future;
 use Future::AsyncAwait;
 use Scalar::Util qw(blessed);
-use PAGI::Request::_Factory ();
 use PAGI::Utils qw(invoke_app);
 
 sub new {
@@ -61,7 +60,7 @@ sub to_app {
                 unless blessed($request) && $request->isa('PAGI::Request');
         }
         else {
-            $request = PAGI::Request::_Factory::request_for_scope($scope, $receive);
+            $request = PAGI::Utils::request_for_scope($scope, $receive);
         }
         my $run = async sub {
             my ($send) = @_;

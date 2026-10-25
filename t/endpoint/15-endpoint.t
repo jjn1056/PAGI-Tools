@@ -2,6 +2,7 @@
 use strict;
 use warnings;
 use Test2::V0;
+use PAGI::Utils ();
 use File::Temp qw(tempdir);
 use Scalar::Util qw(refaddr);
 
@@ -593,8 +594,8 @@ subtest 'WebSocket and SSE classes without BUILD_APP get one object per connecti
 subtest 'the default path builds no Request of its own' => sub {
     my $made = 0;
     no warnings 'redefine';
-    my $original = \&PAGI::Request::_Factory::request_for_scope;
-    local *PAGI::Request::_Factory::request_for_scope = sub { $made++; goto &$original };
+    my $original = \&PAGI::Utils::request_for_scope;
+    local *PAGI::Utils::request_for_scope = sub { $made++; goto &$original };
     my $client = PAGI::Test::Client->new(app => compose(routes => [
         route('/plain' => endpoint('Local::Greeter')),
         route('/built' => endpoint('Local::Guarded', greeting => 'hi')),

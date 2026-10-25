@@ -174,7 +174,10 @@ and L<PAGI::SSE/SUBCLASSING>. A Request subclass is installed with
 L<PAGI::Middleware::RequestClass> for the whole application, or
 L<PAGI::Routing/request_response>'s C<request_factory> for one handler; a
 framework with its own router writes each match's parameters into the scope
-and builds a new Request only for a new scope.
+and builds a new Request only for a new scope. To build the application's
+class outside a route handler -- in a framework's dispatch or a middleware --
+call L<PAGI::Utils/request_for_scope>, which honours C<RequestClass>. That is
+a limited-use Request: not the handler's, and it does not own the body.
 
 =head1 ERRORS
 

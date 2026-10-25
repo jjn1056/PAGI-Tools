@@ -25,7 +25,7 @@ my @PATH_EXPORTS = qw(
 
 our @EXPORT_OK = (
     qw(handle_lifespan to_app as_app_object invoke_app
-       request_ended_abnormally),
+       request_ended_abnormally request_for_scope),
     @ENV_EXPORTS,
     @PATH_EXPORTS,
 );
@@ -348,6 +348,25 @@ sub as_app_object {
 async sub invoke_app {
     my ($value, $scope, $receive, $send) = @_;
     return await Future->wrap(to_app($value)->($scope, $receive, $send));
+}
+
+# A new Request of the application's class for this scope: the one the
+# scope's 'pagi.request.factory' builds (set by RequestClass), or a plain
+# PAGI::Request when the key is absent or undef. The factory is called with
+# ($scope, $receive), synchronously, and must return a PAGI::Request
+# instance or subclass. PAGI::Request is loaded here, not at compile time,
+# so PAGI::Utils stays light for code that never builds one.
+sub request_for_scope {
+    my ($scope, $receive) = @_;
+    require PAGI::Request;
+    my $factory = $scope->{'pagi.request.factory'};
+    return PAGI::Request->new($scope, $receive) unless defined $factory;
+    croak("scope key 'pagi.request.factory' must be a coderef")
+        unless ref($factory) eq 'CODE';
+    my $request = $factory->($scope, $receive);
+    croak("scope key 'pagi.request.factory' must return a PAGI::Request instance or subclass")
+        unless blessed($request) && $request->isa('PAGI::Request');
+    return $request;
 }
 
 # Resolve a short class name the way middleware() does: a leading '+' names
@@ -935,5 +954,43 @@ native triplet boundary instead of a Response-specific emission method.
 
 Middleware positions have a separate explicit class-loading contract; pass a
 middleware class name there, not in an application position.
+
+=head2 request_for_scope
+
+    use PAGI::Utils qw(request_for_scope);
+
+    # In middleware: read a header the way the application would
+    sub _no_body { die "this middleware reads headers, not the body\n" }
+
+    my $request = request_for_scope($scope, \&_no_body);
+    my $token   = $request->header('Authorization');
+
+B<This is a limited-use Request.> It builds a I<new> Request for C<$scope>,
+of the application's class: the one the scope key C<pagi.request.factory>
+builds (set by L<PAGI::Middleware::RequestClass>), or a plain
+L<PAGI::Request> when the key is absent or undef. It is for code outside a
+route handler -- middleware, an error handler, a framework's own dispatch --
+that needs to read what the scope already holds: headers, cookies, the query
+string, the path. Know what it is not:
+
+=over 4
+
+=item * It is not the route handler's Request. A handler gets its own,
+built for its route's scope; the two share no parse and no state, and
+nothing set on this one reaches the handler.
+
+=item * It does not own the body. The body belongs to the application:
+reading it here drains C<$receive>, and the application then reads an empty
+body, unless you hand the application a receive that delivers the body
+again (see L<PAGI::Middleware/Reading the request body>). Code that must not
+read the body passes a C<$receive> that dies, as above, so a mistaken read
+fails loudly at once instead of waiting for a body that never comes.
+
+=back
+
+A factory is called with C<($scope, $receive)>, synchronously, and must
+return a C<PAGI::Request> instance or subclass; a key that is not a coderef,
+or a factory that returns anything else (a Future, as an async sub would),
+croaks naming the key.
 
 =cut

@@ -168,6 +168,12 @@
     middleware that rewrites a form POST, beside the same application in
     Starlette). examples/signed-requests checks a signature over the body
     as the routes read it, as Starlette's body-size limit does.
+  - PAGI::Utils exports request_for_scope($scope, $receive): a new Request
+    of the application's class (RequestClass's, else PAGI::Request), for
+    middleware, error handlers and a framework's own dispatch to read what
+    the scope holds. A limited-use Request: not the route handler's, and
+    it does not own the body; code that must not read the body passes a
+    receive that dies, as Authentication and ErrorHandler do.
   - Cookbook: "Linking inside a mounted app"; PAGI::Routing::URL's
     path_for shows absolute, sibling and parent references in a Mount.
   - examples/gut-check: everyday applications next to their Starlette

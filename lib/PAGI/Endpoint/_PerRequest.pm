@@ -15,7 +15,6 @@ use Future;
 use Future::AsyncAwait;
 use Carp qw(croak);
 use Scalar::Util qw(blessed);
-use PAGI::Request::_Factory ();
 use PAGI::Utils qw(invoke_app);
 
 sub new {
@@ -32,7 +31,7 @@ sub to_app {
     return async sub {
         my ($scope, $receive, $send) = @_;
         my $request = $wants_request
-            ? PAGI::Request::_Factory::request_for_scope($scope, $receive)
+            ? PAGI::Utils::request_for_scope($scope, $receive)
             : undef;
         # A builder returns an app object, or a Future of one (an async builder).
         # A builder given the Request shares it with the handler, so its error

@@ -100,12 +100,16 @@ C<class> object instead of a plain L<PAGI::Request>: route and
 C<http_default> coderefs, L<PAGI::Endpoint::HTTP> methods, C<refuse> and
 Maintenance C<response> handlers, the handlers given to
 L<PAGI::WebSocket/deny> and L<PAGI::SSE/decline>, an
-L<PAGI::Middleware::ErrorHandler> C<handler> (when this middleware is
-listed before the ErrorHandler), and an L<PAGI::Middleware::Authentication>
-C<backend>. It sets the scope key
+L<PAGI::Middleware::ErrorHandler> C<catch> entry answering a route's error
+(it gets that route's Request), and an L<PAGI::Middleware::Authentication>
+C<backend> listed after this middleware. An ErrorHandler C<handler> gets a
+plain L<PAGI::Request> in Compose, which places it outside every application
+middleware; in a stack you build yourself it gets the class when this
+middleware wraps the ErrorHandler. It sets the scope key
 C<pagi.request.factory> to C<< sub { $class->new($scope, $receive) } >> on a
 shallow copy of HTTP, WebSocket and SSE scopes; other scope types pass
-through unchanged.
+through unchanged. Code of your own builds the same class from the scope with
+L<PAGI::Utils/request_for_scope>.
 
 Use it when many handlers want the same few helpers. For one or two, a
 function that takes the request is simpler and needs no middleware.

@@ -8,8 +8,8 @@ use lib 'lib', "$FindBin::Bin/../lib";
 use PAGI::Test::Client;
 use PAGI::Tools qw(compose middleware mount response route router sse websocket);
 use PAGI::Auth qw(unauth_result);
+use PAGI::Utils ();
 use PAGI::Utils::Middleware qw(clone_scope);
-use PAGI::Request::_Factory ();
 use PAGI::Middleware::RequestClass;
 
 # PAGI::Middleware::RequestClass: every handler below it receives the
@@ -122,7 +122,7 @@ subtest 'HTTP, WebSocket and SSE scopes get the key on a copy; others pass throu
         my $inner = pop @seen;
         ok($inner != $outer, "$type: a copy");
         ok(!exists $outer->{'pagi.request.factory'}, "$type: the outer scope is unchanged");
-        is(ref(PAGI::Request::_Factory::request_for_scope($inner, $receive)), 'Local::AppRequest',
+        is(ref(PAGI::Utils::request_for_scope($inner, $receive)), 'Local::AppRequest',
             "$type: the key builds the class");
     }
     my $lifespan = { type => 'lifespan' };
@@ -134,7 +134,7 @@ subtest 'HTTP, WebSocket and SSE scopes get the key on a copy; others pass throu
 subtest 'mounts, http_default and a route of its own' => sub {
     my $native = async sub {
         my ($scope, $receive, $send) = @_;
-        my $request = PAGI::Request::_Factory::request_for_scope($scope, $receive);
+        my $request = PAGI::Utils::request_for_scope($scope, $receive);
         await response('Text', ref $request)->to_app->($scope, $receive, $send);
     };
     my $client = PAGI::Test::Client->new(app => compose(

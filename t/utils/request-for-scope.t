@@ -3,11 +3,11 @@ use warnings;
 use Test2::V0;
 use Future;
 use lib 'lib';
-use PAGI::Request::_Factory ();
+use PAGI::Utils ();
 
-# PAGI::Request::_Factory::request_for_scope: the Request this scope's
-# application code receives, built by the scope key pagi.request.factory or
-# a plain PAGI::Request.
+# PAGI::Utils::request_for_scope: the Request this scope's application code
+# receives, built by the scope key pagi.request.factory (set by
+# RequestClass) or a plain PAGI::Request.
 
 {
     package Local::AppRequest;
@@ -23,8 +23,16 @@ sub scope_with {
 
 sub request_for {
     my ($scope) = @_;
-    return PAGI::Request::_Factory::request_for_scope($scope, $receive);
+    return PAGI::Utils::request_for_scope($scope, $receive);
 }
+
+subtest 'exported on request and in :all' => sub {
+    package Local::Importer {
+        use PAGI::Utils qw(request_for_scope);
+        main::is(ref(request_for_scope({ type => 'http', headers => [] }, $receive)), 'PAGI::Request', 'imported by name');
+    }
+    ok((grep { $_ eq 'request_for_scope' } @{ $PAGI::Utils::EXPORT_TAGS{all} }), 'in :all');
+};
 
 subtest 'no factory gives a plain PAGI::Request' => sub {
     is(ref(request_for(scope_with())), 'PAGI::Request', 'an absent key');
