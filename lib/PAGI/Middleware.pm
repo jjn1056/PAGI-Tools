@@ -219,12 +219,28 @@ sub intercept_send {
 Collect all request body chunks into a single string.
 Returns the complete body and the final http.request event.
 
-Croaks if the client disconnects mid-body rather than returning the partial
-body as if it were complete.
+This is the read half of the read-ahead pattern
+(L<PAGI::Utils::Middleware/Why this helper exists>): the loop that collects
+C<http.request> events until one has no C<more>. It croaks if the client
+disconnects mid-body rather than returning the partial body as if it were
+complete. A disconnect before any byte arrived returns C<''> with the
+C<http.disconnect> event as C<$final_event>: check its C<type> to tell a
+client that left from a POST with an empty body.
 
 The body is consumed: an inner app given the same C<$receive> afterwards
-receives none of it. A middleware that calls this answers the request
-itself; see L</Reading the request body>.
+receives none of it. Complete the pattern by handing the app a receive that
+delivers a body (see L</Reading the request body>). To pass on the same
+body, read through L<PAGI::Utils::Middleware/record_receive>:
+
+    my ($reading, $replaying) = record_receive($receive);
+    my ($body) = await $self->buffer_request_body($reading);
+    ...
+    await $app->($scope, $replaying, $send);
+
+To pass on a different one, write the receive yourself, delivering the new
+body once and then the client's receive, with a C<Content-Length> to match
+(examples/modify-form-post). A middleware that answers the request itself
+needs neither.
 
 =cut
 

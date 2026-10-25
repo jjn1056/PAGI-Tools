@@ -156,6 +156,18 @@
     PAGI::Tools qw(compose response route path_for) -- or by the :routes,
     :urls and :all tags. Each is its source module's own function, so
     importing from the modules themselves still works the same.
+  - Reading the request body in middleware, documented as one rule --
+    a body arrives once, so whoever reads it hands the application a
+    receive that delivers a body -- in PAGI::Middleware's "Reading the
+    request body", with its three shapes: wrap the receive to watch or
+    change the body as it streams (Starlette's documented pattern; the
+    Cookbook's new "Watching or changing the request body", a size logger
+    and a gzip decoder); read ahead with record_receive to pass on the
+    same body (buffer_request_body is the read half); or write the receive
+    yourself to pass on a different one (examples/modify-form-post, a
+    middleware that rewrites a form POST, beside the same application in
+    Starlette). examples/signed-requests checks a signature over the body
+    as the routes read it, as Starlette's body-size limit does.
   - Cookbook: "Linking inside a mounted app"; PAGI::Routing::URL's
     path_for shows absolute, sibling and parent references in a Mount.
   - examples/gut-check: everyday applications next to their Starlette
@@ -416,8 +428,9 @@
     headers, the query string or cookies on a copy of the scope no longer
     leaves a stale parse for the Request below it. Two Requests over one
     scope each parse for themselves, and the second cannot read a body the
-    first one read: pass the one Request on. An application below
-    MethodOverride or CSRF may now stream a body they read (it was a 500).
+    first one read: pass the one Request on. PAGI-Tools' own middleware
+    never reads the body (CSRF, MethodOverride and Authentication: see
+    their entries), so a route below them may stream it.
   - Requires Perl 5.24 (was 5.18), as PAGI 0.003001 and PAGI-Server do.
     See "Perl version support" in PAGI.
   - PAGI::Test::Client no longer runs an application's own event loop
@@ -477,10 +490,12 @@
     dies, and its cleanup is skipped (the error is logged).
   - PAGI::Middleware::CSRF's enforce is removed: refuse => 0 replaces
     enforce => 'app', and passing enforce dies.
-  - PAGI::Middleware::CSRF reads the body of a header-less unsafe form
-    request, so body_stream and multipart_stream on such a request die; a
-    route that streams a form upload configures its own CSRF and sits
-    outside every CSRF that reads the body (see the Cookbook).
+  - PAGI::Middleware::CSRF accepts a plain HTML form only with
+    form_field => 'csrf_token' and csrf_protect around each form route's
+    handler (0.002002's enforce => 'app' with the handler's verify);
+    without form_field, an unsafe request without the X-CSRF-Token header
+    is refused. It never reads the body, so a route that streams an upload
+    checks the token from the stream itself (see the Cookbook).
   - PAGI::Middleware::CSRF's secret is removed (tokens are random; passing
     it dies); its cookie is no longer HttpOnly unless httponly => 1;
     cross-origin unsafe requests are refused. PAGI::CSRF's verify fails a
