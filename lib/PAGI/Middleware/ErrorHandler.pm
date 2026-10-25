@@ -231,10 +231,13 @@ A key that is an integer from 400 to 599 is a status; any other key is an
 exact package name (no leading C<+>: nothing is loaded). An entry is called
 with a Request and the L<PAGI::ErrorContext>, and returns what a C<handler>
 returns; a Response that set no status of its own is sent with the error's
-status. An entry answers in full: an HTTP error's C<headers> (the C<Allow>
-of a routing 405, a C<Retry-After>) are sent only if it passes them on, as
+status. An entry answers in full: an HTTP error's C<headers> (a
+C<Retry-After>, say) are sent only if it passes them on, as
 C<< headers => $error->exception->headers >>, as a Starlette exception
-handler replaces the default one that sends them.
+handler replaces the default one that sends them. The one exception is
+C<Allow>, which a 405 must carry: an entry's 405 that sends none gets the
+error's (for a routing 405, the router's method union), wherever the
+ErrorHandler is placed.
 
 An entry answering an error a route's handler threw gets that route's own
 Request, as Starlette's C<request_response> hands an exception handler the
@@ -265,7 +268,8 @@ re-raised.
 With no entry, an HTTP error gets the built-in answer, and anything else
 C<handler> or the built-in 500. A thrown page or Response is an answer, not
 an error, and never reaches C<catch>. An entry for a status that must carry a
-field (see C<status>) is responsible for the field. An entry that dies, or
+field (see C<status>) is responsible for the field, except a 405's C<Allow>
+(above). An entry that dies, or
 returns something that is not an application, fails as itself: its failure
 goes on outward as the error -- to the server-error boundary, which answers
 and re-raises it -- and one warning names the error it was answering
@@ -432,7 +436,8 @@ async sub _handle_exception {
         if ($entry) {
             $request //= PAGI::Utils::request_for_scope($error_scope, \&_no_body);
             my $answer = await Future->wrap($entry->($request, $context));
-            await _send_answer($answer, $context, 'ErrorHandler catch entry', $error_scope, $receive, $send);
+            await _send_answer($answer, $context, 'ErrorHandler catch entry', $error_scope, $receive,
+                _sending_allow($send, $headers));
         }
         else {
             await PAGI::Utils::invoke_app($context->default, $error_scope, $receive, $send);
@@ -600,6 +605,23 @@ sub _wrap_server_errors {
             await $self->_send_last_resort($wrapped_send);
         }
         _reraise($error);
+    };
+}
+
+# A 405 must carry Allow: an entry's 405 that sends none gets the error's
+# (the router's method union, for a routing 405), whatever the entry's
+# placement. Any other header of the error is the entry's to pass on.
+sub _sending_allow {
+    my ($send, $headers) = @_;
+    my ($allow) = map { $_->[1] } grep { lc($_->[0]) eq 'allow' } @{ $headers // [] };
+    return $send unless defined $allow;
+    return async sub {
+        my ($event) = @_;
+        if (($event->{type} // '') eq 'http.response.start' && ($event->{status} // 0) == 405
+                && !grep { lc($_->[0]) eq 'allow' } @{ $event->{headers} // [] }) {
+            $event = { %$event, headers => [ @{ $event->{headers} // [] }, ['allow', $allow] ] };
+        }
+        await Future->wrap($send->($event));
     };
 }
 

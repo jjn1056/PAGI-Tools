@@ -221,7 +221,8 @@
     a catch entry. Headers that cannot be sent make the built-in answer a
     500 with a diagnostic; a catch entry answers in full, with the claimed
     status whatever the headers are, and sends them only if it passes them
-    on.
+    on -- except a 405's Allow, which an entry's 405 that sends none gets
+    from the error, wherever the ErrorHandler is placed.
   - ErrorHandler catch => { 404 => sub ($request, $error) {...},
     'MyApp::Conflict' => sub {...} }: the errors the application expects,
     answered by status and exception class in Starlette's order (an HTTP

@@ -548,7 +548,7 @@ catch => {
     'PAGI::Exception::HTTP' => sub {
         my ($request, $error) = @_;
         return response('JSON', { error => $error->message },
-            headers => $error->exception->headers);   # a 405's Allow, say
+            headers => $error->exception->headers);   # a Retry-After, say
     },
 },
 handler => sub {
@@ -1043,7 +1043,7 @@ use PAGI::Response qw(response);
 
 enable 'ErrorHandler',
     # HTTP errors. An entry answers in full: it passes on the error's
-    # headers (a 405's Allow).
+    # headers (a Retry-After); a 405's Allow is added if it sends none.
     catch => {
         'PAGI::Exception::HTTP' => sub {
             my ($request, $error) = @_;

@@ -14,7 +14,8 @@
 # A path no route matches, or a method a matched path does not allow, reaches
 # the entry too: with catch entries, the router raises its 404 and 405, as
 # Starlette's does. The entry answers in full, as a Starlette exception
-# handler does, so it passes on the error's headers: the Allow a 405 must have.
+# handler does, so it passes on the error's headers; a 405's Allow, which a
+# 405 must carry, ErrorHandler adds if an entry sends none.
 #
 # The Starlette version is in README.md.
 #

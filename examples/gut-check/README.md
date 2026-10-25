@@ -231,7 +231,7 @@ Each pair's Starlette version, as measured and run during the gut check
 
 ### 01-errors-as-responses
 
-Both send a routing 404 and 405 through the same exception handler as a thrown error. Run on Starlette 1.10.0, this version answers `POST /notes/1` with a JSON 405 and no `Allow` header, because its handler does not pass on `exc.headers`; PAGI's entry passes on the error's headers.
+Both send a routing 404 and 405 through the same exception handler as a thrown error. Run on Starlette 1.10.0, this version answers `POST /notes/1` with a JSON 405 and no `Allow` header, because its handler does not pass on `exc.headers`; PAGI's entry passes on the error's headers, and ErrorHandler adds a 405's `Allow` when an entry sends none.
 
 ```python
 from starlette.applications import Starlette

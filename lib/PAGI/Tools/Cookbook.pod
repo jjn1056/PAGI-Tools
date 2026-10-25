@@ -788,8 +788,9 @@ pages answer as they are without one:
   })
 
 An entry answers in full, as a Starlette exception handler does: the error's
-headers -- the C<Allow> of the router's 405, a C<Retry-After> -- are sent only
-if it passes them on.
+headers -- a C<Retry-After>, say -- are sent only if it passes them on. The
+exception is a 405's C<Allow>: an entry's 405 that sends none gets the
+router's.
 
 A thrown page answers as itself, whatever its status, and never reaches
 C<catch>. A thrown object ErrorHandler cannot read as a page -- one with

@@ -8,7 +8,7 @@ use lib 'lib';
 use lib 't/lib';
 use PAGITest::Invoke qw(invoke);
 use PAGI::Middleware::ErrorHandler;
-use PAGI::Tools qw(compose middleware response route router);
+use PAGI::Tools qw(compose middleware mount response route router);
 
 # With exception handling active (an ErrorHandler with catch entries), the
 # router raises its 404 and 405 to it, as Starlette's router raises
@@ -83,6 +83,29 @@ subtest 'HEAD to an unknown path, with catch{404}: headers, no body' => sub {
         my @bodies = grep { $_->{type} eq 'http.response.body' } @{ $r->{events} };
         ok !(grep { length($_->{body} // '') } @bodies), "$label: no body bytes in any event";
     }
+};
+
+subtest "an entry's 405 without Allow gets the router's Allow, in every placement" => sub {
+    my $bare_entry = { 405 => sub { response('Text', 'nope', status => 405) } };
+    my %apps = (
+        'Compose'               => compose(routes => \@routes, middleware => [middleware('ErrorHandler', catch => $bare_entry)])->to_app,
+        'bare, around a Router' => PAGI::Middleware::ErrorHandler->new(catch => $bare_entry)->wrap(router(routes => \@routes)->to_app),
+        'on a Mount'            => compose(routes => [mount('/m', routes => \@routes,
+            middleware => [middleware('ErrorHandler', catch => $bare_entry)])])->to_app,
+    );
+    for my $placement (sort keys %apps) {
+        my $path = $placement eq 'on a Mount' ? '/m/notes' : '/notes';
+        my $r = invoke($apps{$placement}, path => $path, method => 'DELETE');
+        is [$r->{status}, $r->{body}], [405, 'nope'], "$placement: the entry's answer";
+        is header_of($r, 'Allow'), 'GET, HEAD, POST', "$placement: with the router's Allow";
+        is scalar(grep { lc($_->[0]) eq 'allow' } @{ $r->{headers} }), 1, "$placement: once";
+    }
+};
+
+subtest "an entry's own Allow is kept" => sub {
+    my $app = compose(routes => \@routes, middleware => [middleware('ErrorHandler',
+        catch => { 405 => sub { response('Text', 'nope', status => 405, headers => [Allow => 'GET']) } })])->to_app;
+    is header_of(invoke($app, path => '/notes', method => 'DELETE'), 'Allow'), 'GET';
 };
 
 done_testing;
