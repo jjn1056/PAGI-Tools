@@ -238,7 +238,10 @@ then dies "Body already consumed".
 
 For HTTP the handler's C<$request> is the builder's object: one Request per
 request, so what the builder read is the handler's too, and a Request class's
-C<new> runs once.
+C<new> runs once. That holds only for the Request the builder was given: one
+it makes itself over the same scope finds a body the other read already
+consumed. The first parse is the one kept, so C<form_params> options the
+handler passes after the builder parsed the form do not apply.
 
 =head1 METHODS AND 405
 
