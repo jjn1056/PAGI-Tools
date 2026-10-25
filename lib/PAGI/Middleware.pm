@@ -334,11 +334,35 @@ returning, and answers that itself when nothing was sent yet, as
 Starlette's body-size limit does. examples/signed-requests checks a
 signature over the body that way. A check made this way runs only as far
 as the application reads: a route that reads no body is not checked.
-A middleware may also read the whole body before the application runs --
-to rewrite a small form, say -- and then hand the application a receive of
-its own that delivers the new body once and carries on with the client's
-(examples/modify-form-post). L<PAGI::Tools::Cookbook/Watching or changing
-the request body> has more.
+A middleware may also read the whole body before the application runs, and
+then hand the application a receive that delivers a body:
+
+=over 4
+
+=item * B<The same body>, after reading it to decide something: read
+through L<PAGI::Utils::Middleware/record_receive> and give the application
+its replay. It keeps the events (in memory unless you give it a buffer),
+delivers them once, and then carries on with the client's receive, so the
+application still gets the disconnect.
+
+    my ($reading, $replaying) = record_receive($receive);
+    my $form = await PAGI::Request->new($scope, $reading)->form_params;
+    return await $self->{refuse}->($scope, $replaying, $send)
+        unless defined $form->get('ticket');
+    await $app->($scope, $replaying, $send);
+
+=item * B<A different body>, to rewrite a small form, say: write the
+receive yourself, delivering the new body once and then the client's
+receive, with a C<Content-Length> to match (examples/modify-form-post).
+
+=back
+
+Reading ahead holds the body before the application starts, so the
+application cannot stream it as it arrives; wrap the receive instead when
+it should. Where this pattern comes from, and the mistakes the usual
+hand-written versions make, is in
+L<PAGI::Utils::Middleware/Why this helper exists>.
+L<PAGI::Tools::Cookbook/Watching or changing the request body> has more.
 
 =head2 Example: Logging Middleware
 

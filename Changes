@@ -54,12 +54,15 @@
     (Encode's stateful decoder), strict or with U+FFFD; body_stream's decode
     is built on it.
   - PAGI::Utils::Middleware record_receive (also from PAGI::Tools): for
-    middleware that reads the request body, a receive to read through and
-    one that delivers what was read again, then the rest, to the
-    application. The events are kept in a
-    PAGI::Utils::ReceiveBuffer::TempFile -- 64KB in memory, the rest in a
-    temporary file -- or in any buffer with its append and take methods. PAGI::Middleware's WRITING MIDDLEWARE
-    says when to use it.
+    middleware that reads the request body before the application runs, a
+    receive to read through and one that delivers what was read again,
+    then the client's receive (so the disconnect still arrives). The
+    events are kept in memory, or in a buffer given with buffer: a
+    PAGI::Utils::ReceiveBuffer::TempFile (64KB in memory, the rest in a
+    temporary file) or any object with append and take. Its POD cites the
+    Starlette write-ups of this read-ahead pattern and the mistakes their
+    hand-written receives make; PAGI::Middleware's "Reading the request
+    body" says when to use it and when to wrap the receive instead.
   - PAGI::ContentNegotiation's handler side: respond_to, negotiated_type
     and content_negotiation (also from PAGI::Tools) read the
     ContentNegotiation middleware's choice; respond_to calls the branch for

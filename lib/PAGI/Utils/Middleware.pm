@@ -8,7 +8,6 @@ use Future;
 use Future::AsyncAwait;
 use Scalar::Util qw(blessed);
 use PAGI::Headers ();
-use PAGI::Utils::ReceiveBuffer::TempFile ();
 
 our @EXPORT_OK = qw(clone_scope wrap_send wrap_receive wrap_response_headers record_receive);
 
@@ -78,7 +77,7 @@ sub record_receive {
     croak 'record_receive receive must be a coderef' unless ref($receive) eq 'CODE';
     my $buffer = delete $options{buffer};
     croak "record_receive has unknown option '$_'" for sort keys %options;
-    $buffer //= PAGI::Utils::ReceiveBuffer::TempFile->new;
+    $buffer //= PAGI::Utils::Middleware::_EventList->new;
     croak 'record_receive buffer must be an object with append and take'
         unless blessed($buffer) && $buffer->can('append') && $buffer->can('take');
 
@@ -100,6 +99,13 @@ sub record_receive {
         return await $receive->();
     };
     return ($reading, $replaying);
+}
+
+# record_receive's default buffer: the events, in memory, in order.
+package PAGI::Utils::Middleware::_EventList {
+    sub new    { return bless [], $_[0] }
+    sub append { push @{$_[0]}, $_[1]; return Future->done }
+    sub take   { return Future->done(shift @{$_[0]}) }
 }
 
 1;
@@ -213,31 +219,32 @@ return a Future. Other events pass through unchanged.
     my ($reading, $replaying) = record_receive($receive);
     my ($reading, $replaying) = record_receive($receive, buffer => $buffer);
 
-For middleware that reads the request body. A body can be received only
-once, so a middleware that reads it and then gives the application the
-same C<$receive> leaves the application nothing to read: an application
-that reads it waits for an event the client will never send. Read through
-C<$reading> instead, and give the application C<$replaying>:
+For middleware that reads the request body before the application runs --
+to decide something from it, say -- and then hands the application the same
+body. A body can be received only once, so a middleware that reads it and
+then gives the application the same C<$receive> leaves the application
+nothing to read: an application that reads it waits for an event the client
+will never send. Read through C<$reading> instead, and give the application
+C<$replaying>:
 
     my ($reading, $replaying) = record_receive($receive);
-    my $request = PAGI::Request->new($scope, $reading);
-    my $form = await $request->form_params;
+    my $form = await PAGI::Request->new($scope, $reading)->form_params;
     ...
     await $app->($scope, $replaying, $send);
 
 C<$reading> receives from C<$receive> and keeps each event it delivers.
 C<$replaying> delivers the kept events, in order, then continues with
-C<$receive>. So the application receives the whole body however much the
+C<$receive> -- so the application also gets the C<http.disconnect> when the
+client goes. The application receives the whole body however much the
 middleware read: all of it, part of it, or none. A disconnect the middleware
 read is delivered again too. Each kept event is released as it is
 delivered. Calling C<$reading> once C<$replaying> has been called fails: the
 two would interleave.
 
-The events are kept in a L<PAGI::Utils::ReceiveBuffer::TempFile>, which
-holds 64KB in memory and spools the rest to a temporary file. C<buffer>
-gives another: a C<PAGI::Utils::ReceiveBuffer::TempFile> with other options,
-or any object with its C<append> and C<take> methods, such as one that keeps
-the events in Redis (see
+The events are kept in memory. C<buffer> gives somewhere else: a
+L<PAGI::Utils::ReceiveBuffer::TempFile>, which holds 64KB in memory and
+spools the rest to a temporary file, or any object with its C<append> and
+C<take> methods, such as one that keeps the events in Redis (see
 L<PAGI::Utils::ReceiveBuffer::TempFile/WRITING A BUFFER>). Give each request
 a buffer of its own.
 
@@ -247,5 +254,42 @@ body is held once however many middleware record it; spooled events are
 copies. When the application never calls C<$replaying> to the end -- it
 reads the form a L<PAGI::Request> already parsed, say -- the buffer is
 released when the request is over.
+
+To hand the application a I<different> body, write the receive yourself
+(examples/modify-form-post); to watch or change the body as it streams,
+wrap C<$receive> instead of reading ahead
+(L<PAGI::Middleware/Reading the request body>).
+
+=head3 Why this helper exists
+
+Reading the whole body in middleware and then handing the application a
+new receive is the pattern the Starlette community teaches for changing or
+checking a request body in pure ASGI middleware. Two write-ups of it, kept
+here so the reason for this helper is not lost:
+
+=over 4
+
+=item * Aditya Raj, "How to use middleware in FastAPI and Starlette",
+Honeybadger Developer Blog, 2026-08-28,
+L<https://www.honeybadger.io/blog/starlette-middleware/>: "Pure ASGI
+middlewares are also the preferred choice when you want to modify the
+request or response body"; it buffers the body "via C<receive>, then
+supplies a C<receive_wrapper> that replays the modified body downstream".
+
+=item * John Napiorkowski's Starlette C<ModifyFormPostMiddleware>, ported as
+examples/modify-form-post (its C<app.py> is the Starlette version).
+
+=back
+
+Both hand-written receives got the details wrong, which is what this helper
+does for you: each returned the body on every call, so an application
+waiting for C<http.disconnect> got the body again; the article's never
+passes on the client's receive, so the disconnect never arrives; and it
+leaves C<Content-Length> stale after changing the body. Starlette's own
+documentation shows the other shape, a receive wrapped to watch or change
+the events as the application reads them ("Inspecting or modifying the
+request" in its middleware guide, citing msgpack-asgi); its
+C<RequestBodyLimitMiddleware> checks the body that way. The PAGI-Tools
+ruling (2026-10-24) keeps both: the request-state ledger, Q13 and Q14.
 
 =cut
