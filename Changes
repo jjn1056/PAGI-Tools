@@ -551,14 +551,11 @@
     (response('Text', $s, headers => ['Content-Type' => 'text/csv']) sent
     text/csv with no charset), Empty refuses one, and header() replaces
     the type rather than adding a second.
-  - PAGI::Middleware::MethodOverride reads the _method field of a
-    urlencoded or multipart POST body, as its documentation always said
-    (and as Rails and Laravel do); it read only the header and the query
-    string, so an HTML form's hidden _method did nothing. Order: header,
-    form field, query. The body is handed on with record_receive and its
-    parse shared with the application, so a form below it cannot be
-    streamed; check_form => 0 never reads the body. New body_buffer
-    option, as CSRF has.
+  - PAGI::Middleware::MethodOverride's documentation said it read a
+    _method field in a POST body; it reads only the header and the query
+    string, as Plack::Middleware::MethodOverride does, and never the body,
+    and the documentation now says so: an HTML form puts the method in its
+    action URL (action="/tasks/1?_method=DELETE").
   - PAGI::Middleware::Builder's enable no longer ignores a middleware
     that fails to load: a file that did not compile, or died while
     loading, was used half-defined, and a missing one failed later at

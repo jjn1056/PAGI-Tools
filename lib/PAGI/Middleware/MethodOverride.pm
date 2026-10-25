@@ -3,12 +3,8 @@ package PAGI::Middleware::MethodOverride;
 use strict;
 use warnings;
 use parent 'PAGI::Middleware';
-use Future;
 use Future::AsyncAwait;
-use Scalar::Util qw(blessed);
-use PAGI::Request ();
 use PAGI::Utils ();
-use PAGI::Utils::Middleware qw(record_receive);
 
 =head1 NAME
 
@@ -44,15 +40,15 @@ Plack::Builder does.
 
 =head1 DESCRIPTION
 
-PAGI::Middleware::MethodOverride allows overriding the HTTP method
-using a form field, query parameter, or header. This enables HTML
-forms (which only support GET and POST) to submit PUT, PATCH, and
-DELETE requests.
+PAGI::Middleware::MethodOverride allows overriding the HTTP method of a
+POST using a header or a query parameter. This enables HTML forms (which
+only support GET and POST) to submit PUT, PATCH, and DELETE requests: the
+form puts the method in its action URL (see L</HTML FORM USAGE>).
 
-The form field is read from a urlencoded or multipart POST body that came
-without the header, as Rails (Rack) and Laravel (Symfony) read it, and
-ASP.NET Core can. The application still receives that body (see
-L</READING THE FORM>).
+It never reads the body, which is the application's and reaches it
+untouched, so a route below it can stream a form. A C<_method> field in the
+body is not an override; Plack::Middleware::MethodOverride reads only the
+header and the query for the same reason.
 
 =head1 CONFIGURATION
 
@@ -62,7 +58,7 @@ An option not listed here dies at construction.
 
 =item * param (default: '_method')
 
-Form field and query parameter name for method override.
+Query parameter name for method override.
 
 =item * header (default: 'X-HTTP-Method-Override')
 
@@ -77,23 +73,9 @@ for security reasons.
 
 Check the X-HTTP-Method-Override header.
 
-=item * check_form (default: 1)
-
-Check the C<param> field of a urlencoded or multipart POST body. C<0> never
-reads the body, so a route below this middleware can stream a form; then an
-override needs the header or the query parameter.
-
 =item * check_param (default: 1)
 
 Check the C<param> query parameter.
-
-=item * body_buffer (default: a L<PAGI::Utils::ReceiveBuffer::TempFile>)
-
-Where a form body this middleware reads is kept until the application
-receives it: a coderef, called with the scope of each request whose body is
-read, returning a buffer for that request, as for
-L<PAGI::Middleware::CSRF>'s C<body_buffer>. The default holds 64KB in memory
-and the rest in a temporary file.
 
 =back
 
@@ -107,17 +89,15 @@ sub _init {
     $self->{allowed_methods} = $config->{allowed_methods} // [qw(PUT PATCH DELETE)];
     $self->{check_header} = $config->{check_header} // 1;
     $self->{check_param} = $config->{check_param} // 1;
-    $self->{check_form} = $config->{check_form} // 1;
-    die 'MethodOverride check_form must be 0 or 1'
-        unless !ref($self->{check_form}) && ($self->{check_form} eq '0' || $self->{check_form} eq '1');
-    $self->{body_buffer} = $config->{body_buffer};
-    die 'MethodOverride body_buffer must be a coderef that returns a buffer, like PAGI::Utils::ReceiveBuffer::TempFile->new'
-        if defined($self->{body_buffer}) && ref($self->{body_buffer}) ne 'CODE';
+    die "MethodOverride 'check_form' was removed: it never reads the body; put the method in the form's action URL (?_method=DELETE)"
+        if exists $config->{check_form};
+    die "MethodOverride 'body_buffer' was removed: it never reads the body"
+        if exists $config->{body_buffer};
 
     # Build allowed method lookup
     $self->{allowed_lookup} = { map { uc($_) => 1 } @{$self->{allowed_methods}} };
     PAGI::Utils::_reject_unknown_options('MethodOverride', $config,
-        qw(allowed_methods body_buffer check_form check_header check_param header param));
+        qw(allowed_methods check_header check_param header param));
 }
 
 sub wrap {
@@ -136,7 +116,7 @@ sub wrap {
             return;
         }
 
-        my ($override_method, $downstream) = await $self->_get_override_method($scope, $receive);
+        my $override_method = $self->_get_override_method($scope);
 
         if ($override_method) {
             # Validate method is allowed
@@ -147,35 +127,28 @@ sub wrap {
                     method => $upper_method,
                     'pagi.original_method' => $scope->{method},
                 });
-                await $app->($new_scope, $downstream, $send);
+                await $app->($new_scope, $receive, $send);
                 return;
             }
         }
 
-        await $app->($scope, $downstream, $send);
+        await $app->($scope, $receive, $send);
     };
 }
 
-# The method the request asks for, from the header, the form field or the
-# query, in that order, and the receive to give the application: a form
-# read here is delivered again.
-async sub _get_override_method {
-    my ($self, $scope, $receive) = @_;
+# The method the request asks for, from the header or the query, in that
+# order; undef when it asks for none.
+sub _get_override_method {
+    my ($self, $scope) = @_;
 
     # Check header first (most secure)
     if ($self->{check_header}) {
         my $header_name = lc($self->{header});
         for my $h (@{$scope->{headers} // []}) {
             if (lc($h->[0]) eq $header_name) {
-                return ($h->[1], $receive);
+                return $h->[1];
             }
         }
-    }
-
-    # Then the form field, which is what an HTML form sends
-    if ($self->{check_form}) {
-        (my $value, $receive) = await $self->_form_method($scope, $receive);
-        return ($value, $receive) if defined($value) && length($value);
     }
 
     # Check query parameter
@@ -188,7 +161,6 @@ async sub _get_override_method {
             my ($key, $value) = split /=/, $pair, 2;
             $key //= '';
             $value //= '';
-
             # URL decode
             $key =~ s/\+/ /g;
             $key =~ s/%([0-9A-Fa-f]{2})/chr(hex($1))/ge;
@@ -196,30 +168,12 @@ async sub _get_override_method {
             $value =~ s/%([0-9A-Fa-f]{2})/chr(hex($1))/ge;
 
             if ($key eq $param_name) {
-                return ($value, $receive);
+                return $value;
             }
         }
     }
 
-    return (undef, $receive);
-}
-
-# The param field of a urlencoded or multipart body, and the receive that
-# delivers that body again. The form is read through a PAGI::Request of the
-# middleware's own; the application parses the replay itself. A body the
-# parse rejects is no override: the application meets the same error when
-# it reads the body.
-async sub _form_method {
-    my ($self, $scope, $receive) = @_;
-    return (undef, $receive) unless PAGI::Request->new($scope, $receive)->is_form;
-    my ($reading, $replaying) = record_receive($receive,
-        $self->{body_buffer} ? (buffer => $self->{body_buffer}->($scope)) : ());
-    my $form = await PAGI::Request->new($scope, $reading)->form_params->else(sub {
-        my ($error) = @_;
-        return Future->done(undef) if blessed($error) && $error->isa('PAGI::Exception::RequestBody');
-        return Future->fail(@_);
-    });
-    return ($form ? $form->get($self->{param}) : undef, $replaying);
+    return undef;
 }
 
 1;
@@ -233,40 +187,17 @@ When a POST request is received:
 =over 4
 
 =item 1. Check X-HTTP-Method-Override header (if enabled). If it is sent,
-it decides, and the body is not read.
+it decides.
 
-=item 2. Check the _method field of a urlencoded or multipart body (if
-enabled)
+=item 2. Check _method query parameter (if enabled)
 
-=item 3. Check _method query parameter (if enabled)
+=item 3. If found and method is allowed, override scope->{method}
 
-=item 4. If found and method is allowed, override scope->{method}
-
-=item 5. Original method preserved in scope->{'pagi.original_method'}
+=item 4. Original method preserved in scope->{'pagi.original_method'}
 
 =back
 
-A body the form parse rejects is not an override: the request stays a POST,
-and the application meets the same error (a L<PAGI::Exception::RequestBody>)
-when it reads the body.
-
-=head1 READING THE FORM
-
-A request body can be received only once, so the middleware reads the form
-through L<PAGI::Utils::Middleware/record_receive> and gives the application
-a receive that delivers the whole body again. The form is parsed by
-L<PAGI::Request> and the parse stays in the scope, as
-L<PAGI::Middleware::CSRF>'s does: the application's C<form_params>,
-C<uploads> and, for a urlencoded form, C<body> return it without reading the
-body again.
-
-The cost: below this middleware a form POST can no longer be streamed.
-C<body_stream> and C<multipart_stream> die "Body already consumed" for a
-request whose form was read here. A route that streams form uploads sits
-outside this middleware, or the middleware runs with C<< check_form => 0 >>
-and the application overrides with the header or the query parameter
-(C<< action="/items/7?_method=DELETE" >>). A body that is not a form (JSON,
-say) is never read, and streams as usual.
+The body is never read.
 
 =head1 SECURITY NOTES
 
@@ -283,8 +214,8 @@ never allowed as override targets.
 
 =item * Header takes precedence
 
-The X-HTTP-Method-Override header is checked before the form field and the
-query parameter, as it's harder to inject via CSRF attacks. A form that
+The X-HTTP-Method-Override header is checked before the query parameter, as
+it's harder to inject via CSRF attacks. A form that
 changes the method is still a POST from the browser's point of view, so put
 L<PAGI::Middleware::CSRF> on it as on any other form; the two work in
 either order.
@@ -293,8 +224,7 @@ either order.
 
 =head1 HTML FORM USAGE
 
-    <form method="POST" action="/resource/123">
-        <input type="hidden" name="_method" value="DELETE">
+    <form method="POST" action="/resource/123?_method=DELETE">
         <button type="submit">Delete</button>
     </form>
 

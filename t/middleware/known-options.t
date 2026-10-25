@@ -17,6 +17,7 @@ my %required = (
 my %rejected = (
     CSRF               => ['enforce', 'secret'],
     ContentNegotiation => ['strict', 'default_type'],
+    MethodOverride     => ['check_form', 'body_buffer'],
     RateLimit          => ['backend'],
 );
 my @classes = qw(AccessLog Authentication ConditionalGet ContentLength ContentNegotiation
