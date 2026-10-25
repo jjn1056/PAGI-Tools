@@ -28,7 +28,7 @@ in [UPGRADING-REFERENCE.md](UPGRADING-REFERENCE.md).
 | ErrorHandler `content_type`; errors swallowed after start | a Request-handler `handler` reading `error_context($request)`; 5xx re-raised to the server ([details](UPGRADING-REFERENCE.md#breaking-errorhandler-re-raises-server-errors)) |
 | an unknown middleware option | now dies; check spelling and renamed options (`invalid` → `refuse`) |
 | Session `secret`, `cookie_name`, `cookie_options`; `State::Bearer` | `state => session_state('Cookie', ...)`; no secret ([details](UPGRADING-REFERENCE.md#breaking-the-session-cookie-is-configured-on-statecookie-not-on-the-middleware)) |
-| CSRF `enforce => 'header'` / `enforce => 'app'` | the default / remove it: the middleware reads the form's `csrf_token` field; `enforce` now dies ([details](UPGRADING-REFERENCE.md#breaking-csrf-enforce-is-replaced-by-refuse)) |
+| CSRF `enforce => 'header'` / `enforce => 'app'` | the default / remove it: `form_field => 'csrf_token'` and `csrf_protect` on each form route; `enforce` now dies ([details](UPGRADING-REFERENCE.md#breaking-csrf-enforce-is-replaced-by-refuse)) |
 | CSRF `secret`; its `HttpOnly` cookie | remove `secret` (tokens are random; passing it dies); `httponly => 1` keeps the flag; `session => 1` binds the token to the session ([details](UPGRADING-REFERENCE.md#breaking-csrf-secret-removed-cookie-readable-origin-checked)) |
 | cross-origin unsafe requests through CSRF | refused; list legitimate callers in `trusted_origins` ([details](UPGRADING-REFERENCE.md#breaking-csrf-secret-removed-cookie-readable-origin-checked)) |
 | RateLimit `backend` | removed (it was never used); passing it dies ([details](UPGRADING-REFERENCE.md#breaking-ratelimit-backend-is-removed-limiters-no-longer-share-buckets)) |

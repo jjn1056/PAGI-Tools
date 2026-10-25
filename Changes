@@ -129,12 +129,12 @@
     and replaces it when the session is regenerated (at login);
     an origin check (Sec-Fetch-Site, then Origin vs Host) on unsafe
     requests and on WebSocket handshakes (cross-site WebSocket hijacking),
-    with trusted_origins; httponly. It reads the token from the form's
-    csrf_token field (form_field) when no header is sent, from urlencoded
-    and multipart bodies; a sent header decides and the body is then
-    never read; form_field => undef reads only the header. A body it reads
-    is handed on with record_receive, so an application reading $receive
-    still receives it; body_buffer chooses where it is kept meanwhile.
+    with trusted_origins; httponly. It never reads the body. With
+    form_field set, a urlencoded or multipart post without the header is
+    left to PAGI::CSRF's new csrf_protect, which wraps a form route's
+    handler and reads the field from the handler's own Request (as
+    starlette-wtf's csrf_protect does), so one token serves every form on
+    a page and the handler's form_params is the same parse.
   - PAGI::FutureOwner: own the Futures you start until they settle; await
     settled for all of them (in lifespan.shutdown, say). Replaces ->retain
     for background work.

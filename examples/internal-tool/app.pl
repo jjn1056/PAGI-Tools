@@ -19,7 +19,7 @@ use File::Basename qw(dirname);
 use Future::AsyncAwait;
 use Template;
 use PAGI::App::File;
-use PAGI::CSRF qw(csrf);
+use PAGI::CSRF qw(csrf csrf_protect);
 use PAGI::Session qw(session);
 use PAGI::Tools qw(app_state compose middleware mount path_for response route);
 
@@ -93,16 +93,18 @@ async sub remove ($request) {
 compose(
     routes => [
         route('/' => \&index, name => 'index'),
-        route('/tasks' => \&create, methods => ['POST'], name => 'create'),
-        route('/tasks/{id}/toggle' => \&toggle, methods => ['POST'], name => 'toggle'),
-        route('/tasks/{id}/delete' => \&remove, methods => ['POST'], name => 'delete'),
+        # Each form route checks the form's csrf_token field before its
+        # handler runs: a missing or wrong token is refused with a 403.
+        route('/tasks' => csrf_protect(\&create), methods => ['POST'], name => 'create'),
+        route('/tasks/{id}/toggle' => csrf_protect(\&toggle), methods => ['POST'], name => 'toggle'),
+        route('/tasks/{id}/delete' => csrf_protect(\&remove), methods => ['POST'], name => 'delete'),
         mount('/static', app => PAGI::App::File->from_app_path('public'), name => 'static'),
     ],
     middleware => [
         middleware('Session'),
-        # Every POST is a form carrying csrf_token, which the middleware reads:
-        # a missing or wrong token is refused with a 403.
-        middleware('CSRF', session => 1),
+        # The token lives in the session; a cross-site POST is refused here,
+        # and a form's token is left to csrf_protect on its route.
+        middleware('CSRF', session => 1, form_field => 'csrf_token'),
     ],
     lifespan => {
         startup => sub ($state, $scope) { $state->{board} = { next => 1, list => [] } },

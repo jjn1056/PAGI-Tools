@@ -400,7 +400,7 @@ subtest 'CSRF on a streamed upload recipe executes as published' => sub {
     my $checks = <<'PERL';
 use PAGI::Test::Client;
 my $client = PAGI::Test::Client->new(app => $app);
-my ($token) = $client->get('/notes/')->text =~ /name="csrf_token" value="([^"]+)"/;
+my ($token) = $client->get('/notes')->text =~ /name="csrf_token" value="([^"]+)"/;
 die 'no token on the page' unless $token;
 my $boundary = 'XyZ';
 my %multipart = ('Content-Type' => "multipart/form-data; boundary=$boundary");

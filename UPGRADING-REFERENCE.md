@@ -875,7 +875,7 @@ its own buckets.
 | 0.002002 | Now |
 |---|---|
 | `enforce => 'header'` (the default) | the default; remove the option |
-| `enforce => 'app'` | remove it: the middleware reads the token from the form's `csrf_token` field (`form_field` names another) and refuses like a header; drop the handler's `verify` |
+| `enforce => 'app'` | remove it, set `form_field => 'csrf_token'`, and wrap each form route's handler in `csrf_protect` (PAGI::CSRF), which reads the field from the handler's Request and refuses like a header; or keep the handler's `verify` under `refuse => 0` |
 
 Passing `enforce` dies, so a form application that relied on
 `enforce => 'app'` cannot silently start refusing its posts. The default
@@ -887,20 +887,13 @@ middleware('CSRF',
     refuse => response('JSON', { detail => 'CSRF token validation failed' }, status => 403));
 ```
 
-The middleware now reads a form body (urlencoded or multipart) whenever an
-unsafe request sends no `X-CSRF-Token` header. The handler's `form_params`
-and `uploads` return that parse, as `body` does for a urlencoded form, but
-`body_stream` and `multipart_stream` on such a request die "Body already
-consumed". A route
-that streams a form upload gets its own `middleware('CSRF', form_field =>
-undef, refuse => 0)` and checks the token it streams with
-`csrf($request)->verify`, and it must sit outside every CSRF that reads the
-body: not under Compose's `middleware`, and not inside a mount or Router
-whose `middleware` carries one, because route middleware runs inside both.
-An application with CSRF in Compose's `middleware` moves it onto the form
-routes' mounts first. See "CSRF on a streamed upload" in
-`PAGI::Tools::Cookbook`. A client that sends the header never has its body
-read.
+The middleware never reads the body. Without `form_field` an unsafe request
+without the `X-CSRF-Token` header is refused; with it, a form post without
+the header reaches its route for `csrf_protect` to check, and the handler's
+`form_params` returns the parse `csrf_protect` made. A route that streams a
+form upload skips `csrf_protect` and checks the token it streams with
+`csrf($request)->verify`; see "CSRF on a streamed upload" in
+`PAGI::Tools::Cookbook`.
 
 ## Breaking: CSRF secret removed, cookie readable, origin checked
 

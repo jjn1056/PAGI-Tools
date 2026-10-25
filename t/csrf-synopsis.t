@@ -21,12 +21,12 @@ subtest 'the middleware handles it' => sub {
     is($saved->status, 200, 'matching header: reaches the application');
 };
 
-subtest 'the middleware reads the form' => sub {
+subtest 'csrf_protect reads the form' => sub {
     my $client = PAGI::Test::Client->new(app => $form);
     my ($token) = $client->get('/')->text =~ /name="csrf_token" value="([^"]+)"/;
     ok($token, 'the page hands over the token');
     is($client->post('/', form => { csrf_token => $token })->text, 'Saved', 'the posted field verifies');
-    is($client->post('/', form => {})->status, 403, 'no field: the middleware refuses');
+    is($client->post('/', form => {})->status, 403, 'no field: refused');
 };
 
 done_testing;

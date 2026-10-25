@@ -307,9 +307,8 @@ and pass on its replay:
     await $app->($scope, $replaying, $send);
 
 Every middleware that reads the body does this, each from the C<$receive> it
-was given. L<PAGI::Middleware::CSRF>, which reads a form's token, and
-L<PAGI::Middleware::Authentication>, whose backend may read the body, are
-examples.
+was given. L<PAGI::Middleware::Authentication>, whose backend may read the
+body, is an example.
 
 =head2 Example: Logging Middleware
 
