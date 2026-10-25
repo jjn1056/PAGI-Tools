@@ -142,6 +142,16 @@ The handler sees the request as this layer sees it: scope keys added further
 in (C<path_params>, CSRF's token) are not there, and its
 answer does not pass through inner middleware's send wrappers.
 
+The handler's Request has no body to read: the body was the application's,
+which may have read it before it failed, and on a real server reading it
+again would wait for an event that never comes. So C<body>, C<form_params>,
+C<json> and the rest die at once, naming the handler's line -- as
+Starlette's C<ServerErrorMiddleware> hands its handler C<Request(scope)>,
+with no receive. Headers, cookies, the query and the method read as usual.
+The same holds for a C<catch> entry's Request. An application given as the
+handler gets the C<$receive> this layer was given, and owns what it does
+with it.
+
 =item * catch (default: none)
 
 Answers by status and by exception class, before C<handler>:
@@ -321,6 +331,16 @@ sub wrap {
     };
 }
 
+# The receive behind a handler's or catch entry's Request: the body was the
+# application's, and on a real server reading it again would wait for an
+# event that never comes, so reading it dies at once -- as Starlette's
+# ServerErrorMiddleware hands its handler a Request with no receive. The
+# message names the handler's line, not PAGI::Request's.
+our @CARP_NOT = ('PAGI::Request');
+sub _no_body {
+    croak "ErrorHandler handlers read the request's headers, not its body: the body was the application's";
+}
+
 async sub _answer {
     my ($self, $scope, $receive, $send) = @_;
     my $error = $scope->{'pagi.error'};
@@ -328,7 +348,7 @@ async sub _answer {
         $error->{answered_by} = 'catch entry';    # names it if it fails
         my $context = PAGI::ErrorContext->new($scope);
         my $answer = await Future->wrap($entry->(
-            PAGI::Request::_Factory::request_for_scope($scope, $receive), $context));
+            PAGI::Request::_Factory::request_for_scope($scope, \&_no_body), $context));
         return await _send_answer($answer, $context, 'ErrorHandler catch entry', $scope, $receive, $send);
     }
     if (my $app = $self->{handler_app}) {
@@ -336,7 +356,7 @@ async sub _answer {
     }
     my $context = PAGI::ErrorContext->new($scope);
     if (my $handler = $self->{handler_code}) {
-        my $answer = await Future->wrap($handler->(PAGI::Request::_Factory::request_for_scope($scope, $receive)));
+        my $answer = await Future->wrap($handler->(PAGI::Request::_Factory::request_for_scope($scope, \&_no_body)));
         return await _send_answer($answer, $context, 'ErrorHandler handler', $scope, $receive, $send);
     }
     return await PAGI::Utils::invoke_app($context->default, $scope, $receive, $send);

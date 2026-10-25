@@ -421,6 +421,12 @@
     Tutorial link to one statement of each rule instead of restating it.
 
   [Breaking -- see UPGRADING.md]
+  - PAGI::Middleware::ErrorHandler: a handler's or catch entry's Request has
+    no body to read; body, form_params, json and the rest die at once,
+    naming the handler's line (as Starlette's ServerErrorMiddleware hands
+    its handler a Request with no receive). The application may have read
+    the body before it failed, and reading it again waited forever on a
+    real server.
   - PAGI::Request writes nothing to the scope: the headers, query,
     cookies, body, form and uploads it parses, and its body latches, are
     kept on the object, as Starlette's Request keeps them (0.002002 kept
