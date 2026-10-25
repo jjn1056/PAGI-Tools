@@ -248,8 +248,9 @@ For HTTP, a directly compiled Router already installs its own HeadBoundary.
 Compose adds an outer, idempotent application-root HEAD boundary plus
 ErrorHandler and a response-completion guard outside author middleware and the
 target. The Router owns 404 and 405: it answers them in plain text, with the
-authoritative C<Allow> on a 405, or -- with an ErrorHandler that has C<catch>
-entries -- raises them to it, so an entry gives them the house style. An
+authoritative C<Allow> on a 405, or -- when the innermost ErrorHandler around
+it has C<catch> entries -- raises them to it, so an entry gives them the house
+style. An
 explicit C<http_default> answers a missing route itself. A selected native
 app that sends nothing is incomplete output and becomes 500, never an implicit
 miss.

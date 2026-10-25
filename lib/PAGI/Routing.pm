@@ -272,8 +272,9 @@ construction validates it but does not compile it.
 When no child matches, the Router calls C<http_default>, or answers a
 plain-text C<404 Not Found> without one. When a path matches but its method
 does not, it answers the built-in plain-text C<405 Method Not Allowed> with
-one authoritative C<Allow> union. Inside an L<PAGI::Middleware::ErrorHandler>
-that has C<catch> entries, the Router raises the 404 (when there is no
+one authoritative C<Allow> union. When the innermost
+L<PAGI::Middleware::ErrorHandler> around it has C<catch> entries, the Router
+raises the 404 (when there is no
 C<http_default>) and the 405 instead, as HTTP errors -- the 405 carrying
 C<Allow> -- as Starlette's router raises C<HTTPException> inside an
 application: to answer them differently, register a C<catch> entry for the

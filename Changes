@@ -243,10 +243,12 @@
     on_error and the 500 outside them all, so an application middleware's
     error gets handler, never catch, and request identity, access logging
     and response headers that must cover the 500 wrap the compiled
-    application. One per Compose; a subclass is not split. With catch
-    entries, the router raises its 404 and 405 (with Allow) to it, as
-    Starlette's does; with no entry for them they get the router's own
-    plain answers. ErrorHandler's answers to HEAD send no body. A failing
+    application. One per Compose; a subclass is not split. The innermost
+    ErrorHandler answers, as Starlette's innermost ExceptionMiddleware
+    does: an outer catch table never reaches past an inner ErrorHandler or
+    into a mounted Compose. When that innermost one has catch entries, the
+    router raises its 404 and 405 (with Allow) to it, as Starlette's does;
+    with no entry for them they get the router's own plain answers. ErrorHandler's answers to HEAD send no body. A failing
     handler or entry fails as itself, outward, with one warning naming the
     error it displaced. Cookbook: "Re-render a form from an error handler";
     examples/internal-tool raises its board's errors and answers them in

@@ -797,14 +797,17 @@ C<to_app> but no usable status, such as an exception written for Plack -- is
 an ordinary error: the stock 500, and its C<to_app> is never run. A thrown
 page below 400, such as C<die response('Redirect', '/login')>, is sent at once.
 
-Routing misses reach the entry too. With an ErrorHandler that has C<catch>
-entries, the router raises a path nothing matches as a 404 HTTP error and a
+Routing misses reach the entry too. When the innermost ErrorHandler around a
+router has C<catch> entries, the router raises a path nothing matches as a 404 HTTP error and a
 method a matched path does not allow as a 405 carrying C<Allow>, as
 Starlette's router raises C<HTTPException> -- so the entry above answers them
 in JSON, and a C<404> or C<405> status entry answers just those. With no entry
 for them, they get the router's own plain-text answers, unchanged. A Router
-mounted inside raises its misses the same way; a Compose mounted inside
-answers its own. An explicit C<http_default> still answers a path nothing
+mounted inside raises its misses the same way, unless an ErrorHandler nearer
+it decides for it: the innermost ErrorHandler answers, as Starlette's
+innermost C<ExceptionMiddleware> does, so an outer C<catch> table never
+reaches past an inner ErrorHandler, and a Compose mounted inside answers its
+own errors. An explicit C<http_default> still answers a path nothing
 matches, before any entry sees it.
 
 =head3 Re-render a form from an error handler

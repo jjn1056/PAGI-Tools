@@ -97,13 +97,17 @@ exception boundary around the router, inside every application middleware,
 and the server-error boundary outside them all. See L</BOUNDARIES AND
 DATABASE FAILURES>.
 
-A path no route matches, or a method a matched path does not allow: with
-C<catch> entries, a Router inside this ErrorHandler raises them as a 404 HTTP
+A path no route matches, or a method a matched path does not allow: when this
+is the innermost ErrorHandler around a Router and it has C<catch> entries, the
+Router raises them as a 404 HTTP
 error and a 405 carrying C<Allow>, as Starlette's router raises
 C<HTTPException> inside an application, so an entry for the status or for
 C<PAGI::Exception::HTTP> answers them. With no entry for them, the default
 answer is the router's own plain-text response, byte for byte. Without
-C<catch> entries the router answers them itself. A Router's (or Compose's)
+C<catch> entries the router answers them itself. The innermost ErrorHandler
+always answers, as Starlette's innermost C<ExceptionMiddleware> replaces the
+handler table: an outer ErrorHandler's C<catch> entries never reach past an
+inner ErrorHandler, or into a mounted Compose. A Router's (or Compose's)
 explicit C<http_default> answers a missing path before any entry sees it.
 
 The model is Starlette 1.10.0's:
@@ -375,14 +379,22 @@ sub _wrap_exceptions {
 }
 
 # The scope handed inward, carrying this ErrorHandler as pagi.error_handler
-# for the route adapters and the router -- only when it has catch entries, the
-# only thing there is to look up at a route. One without (the default, or a
-# handler-only one) answers what reaches it here, with built-in answers that
-# need no route Request.
+# for the route adapters and the router, in place of any outer one: the
+# innermost ErrorHandler answers, as Starlette's innermost
+# ExceptionMiddleware replaces scope["starlette.exception_handlers"], so an
+# outer catch table never reaches past an inner ErrorHandler or into a
+# mounted Compose.
 sub _publishing_scope {
     my ($self, $scope) = @_;
-    return $scope unless $self->{catch} && %{ $self->{catch} };
     return $self->modify_scope($scope, { 'pagi.error_handler' => $self });
+}
+
+# Whether this ErrorHandler has catch entries: the router raises its 404 and
+# 405 to it only then, so one without (the default, or a handler-only one)
+# keeps the router's own plain answers (internal).
+sub _has_catch_entries {
+    my ($self) = @_;
+    return $self->{catch} && %{ $self->{catch} } ? 1 : 0;
 }
 
 # Handles an expected error with $request (a route's own; undef for one with
@@ -883,7 +895,7 @@ Mount middleware list changes only one mounted occurrence:
 
 ErrorHandler is also useful on a Route: exceptions happen after that Route is
 selected. Router NONE and PARTIAL are 404/405, raised to the nearest
-enclosing ErrorHandler that has C<catch> entries, otherwise answered by the
+enclosing ErrorHandler when it has C<catch> entries, otherwise answered by the
 Router in plain text; an explicit C<http_default> answers NONE itself.
 
 If a database call throws or returns a failed Future before response start,

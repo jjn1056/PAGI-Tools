@@ -151,14 +151,16 @@ sub _compile_router_body {
     };
 }
 
-# With exception handling active -- an ErrorHandler with catch entries in
-# scope (pagi.error_handler) -- the router raises its 404 and 405 to it, as
-# Starlette's router raises HTTPException inside an application; the
-# exception boundary picks an entry or the default answer, the router's own
-# plain response. Otherwise the router answers itself, as before.
+# When the innermost ErrorHandler in scope (pagi.error_handler) has catch
+# entries, the router raises its 404 and 405 to it, as Starlette's router
+# raises HTTPException inside an application; the exception boundary picks
+# an entry or the default answer, the router's own plain response.
+# Otherwise the router answers itself, as before.
 sub _handled_here {
     my ($scope) = @_;
-    return ($scope->{type} // '') eq 'http' && $scope->{'pagi.error_handler'};
+    return 0 unless ($scope->{type} // '') eq 'http';
+    my $error_handler = $scope->{'pagi.error_handler'};
+    return $error_handler && $error_handler->_has_catch_entries;
 }
 
 sub _raising_when_handled {

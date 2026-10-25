@@ -497,8 +497,8 @@ Every compiled Compose root has one unconditional HTTP safety boundary. There
 is no public option to suppress, detect, configure, or disable it. Compose
 looks at its author middleware only to find a stock ErrorHandler to split.
 
-Routing outcomes belong to the root Router. With an ErrorHandler that has
-C<catch> entries, the Router raises its 404 and 405 (with C<Allow>) as HTTP
+Routing outcomes belong to the root Router. When the innermost ErrorHandler
+around it has C<catch> entries, the Router raises its 404 and 405 (with C<Allow>) as HTTP
 errors to the exception boundary, as Starlette's router does; with no entry
 for them they get the Router's own plain answers, unchanged. Compose does not
 inspect routing metadata or turn a silent selected Route or Mount application
