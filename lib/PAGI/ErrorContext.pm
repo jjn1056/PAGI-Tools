@@ -158,7 +158,9 @@ PAGI::ErrorContext - The error an ErrorHandler handler is answering
 
 L<PAGI::Middleware::ErrorHandler> puts the error it is handling in the scope
 it gives its C<handler>, as C<pagi.error>. This class reads it. A C<catch>
-entry is given one as its second argument. It is not an
+entry is given one as its second argument, and reads it from there: an entry
+answering a route's error gets the route's own Request, whose scope does not
+carry the error, so C<error_context($request)> dies there. It is not an
 exception class: nothing throws it.
 
 =head1 FUNCTIONS

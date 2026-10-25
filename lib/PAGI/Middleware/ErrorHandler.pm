@@ -224,7 +224,7 @@ class:
             my ($request, $error) = @_;
             response('JSON', { error => $error->exception->reason }, status => 409);
         },
-        500 => sub { response('Text', 'Sorry.') },
+        500 => sub { response('Text', 'Sorry.') },   # the unhandled errors
     }
 
 A key that is an integer from 400 to 599 is a status; any other key is an
@@ -253,7 +253,10 @@ answers is, in Starlette's order:
 =over 4
 
 =item 1. for an HTTP error (a thrown value whose C<status_code> was accepted,
-see L</EXCEPTION HANDLING>), its status;
+see L</EXCEPTION HANDLING>), its status -- except the configured C<status>
+(500 by default): a thrown HTTP error with that status gets the built-in
+answer, as Starlette's C<HTTPException(500)> does, since the entry for that
+status answers the unhandled errors;
 
 =item 2. for a blessed value, its class, then its ancestors in method
 resolution order;
@@ -271,9 +274,19 @@ an error, and never reaches C<catch>. An entry for a status that must carry a
 field (see C<status>) is responsible for the field, except a 405's C<Allow>
 (above). An entry that dies, or
 returns something that is not an application, fails as itself: its failure
-goes on outward as the error -- to the server-error boundary, which answers
-and re-raises it -- and one warning names the error it was answering
-(C<PAGI ErrorHandler catch entry failed while answering "...": ...>).
+goes on outward as the error, and one warning names the error it was
+answering (C<PAGI ErrorHandler catch entry failed while answering "...":
+...>). An entry answering at a route fails out of the route, so its failure
+meets this ErrorHandler's exception boundary first: an HTTP error or a thrown
+page from it is handled there, and anything else goes on to the server-error
+boundary. An entry answering at the boundary itself fails to the server-error
+boundary, which answers and re-raises it. Starlette does the same: its
+route-level handler raises into C<ExceptionMiddleware>, whose handlers raise
+into C<ServerErrorMiddleware>.
+
+An entry reads the error from its second argument, not with
+C<error_context($request)>: at a route its Request is the route's own, whose
+scope does not carry the error, so C<error_context> dies there.
 
 =back
 
@@ -974,7 +987,11 @@ thrown L<PAGI::Response>. Its own C<status> decides. Below 400 the page is
 sent as it is, with no C<on_error>, no handler and nothing re-raised: a
 thrown redirect. If sending it fails, that failure is handled like any other
 error. From 400 to 599 it is a handled error: C<on_error> is called and the
-page is the answer, never C<catch> or C<handler>, and nothing is re-raised. A page whose C<status>
+page is the answer, never C<catch> or C<handler>, and nothing is re-raised.
+That holds inside the exception boundary -- thrown from a route, or in
+Compose below the application middleware. A page from 400 up thrown by one of
+Compose's application middleware is an unhandled error, as an HTTP error from
+there is: C<handler> answers it and it is re-raised. A page whose C<status>
 is missing, dies, or is not 100-599 is answered with the built-in 500. A
 Response that set no status has status 200, so throwing one sends it as a
 200.
@@ -1019,8 +1036,9 @@ controls its own content and cache headers.
 
 =item * If the handler or a C<catch> entry dies or returns something that is
 not an application, its failure goes on outward as itself, as Starlette lets
-a failing handler's exception escape: the next ErrorHandler out answers it
-(in Compose, the emergency one), or the server does. One warning names the
+a failing handler's exception escape: a handler's to the next ErrorHandler out
+(in Compose, the emergency one), or the server; an entry's as C<catch>
+describes. One warning names the
 error it displaced: C<PAGI ErrorHandler handler failed while answering
 "...": ...> (C<catch entry> for an entry). If the handler answers without
 starting a response, the middleware emits one hardcoded UTF-8 plain-text 500
