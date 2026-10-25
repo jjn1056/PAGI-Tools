@@ -256,10 +256,11 @@ sub to_compose ($self) {
     my @services = @{ $self->{services} };
     my $compose  = compose(
         routes => $self->{routes},
-        # The around hooks wrap the error handler, as Starlette's user middleware
-        # wraps its ExceptionMiddleware, so a mapped error response passes
-        # through them too. An error in a hook itself reaches Compose's own
-        # last-resort ErrorHandler.
+        # The around hooks wrap the error handler's exception boundary, as
+        # Starlette's user middleware wraps its ExceptionMiddleware, so a mapped
+        # error response passes through them too. An unmapped error passes
+        # through them as an exception (call_next raises, as in Starlette) and
+        # is answered outside them, as is an error in a hook itself.
         middleware => [
             middleware('RequestClass', class => 'Tiny::Request'),
             (map { middleware(_around_middleware($_)) } @{ $self->{around} }),

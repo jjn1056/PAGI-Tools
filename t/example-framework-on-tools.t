@@ -135,8 +135,8 @@ subtest 'around middleware branches' => sub {
         'replace', 'saw 200',
         'restatus', 'saw 200',
         'saw 200', 'stream done',
-        'saw 500',
-    ], 'the inner handler never ran for the short circuit, and $next resolved before each body');
+    ], 'the inner handler never ran for the short circuit, and $next resolved before each body; '
+        . 'an unhandled bug reaches the hook as an exception, as call_next raises in Starlette');
 };
 
 # The compact {id:&Int} form: route() looks the provider up in its caller,

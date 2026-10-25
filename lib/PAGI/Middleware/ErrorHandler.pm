@@ -276,7 +276,7 @@ sub _wrap_exceptions {
             await Future->wrap($app->($scope, $receive, $send));
             return;
         }
-        my $inner = $self->modify_scope($scope, { 'pagi.error_handler' => $self });
+        my $inner = $self->_publishing_scope($scope);
         my $started = 0;
         my $watching = async sub {
             my ($event) = @_;
@@ -296,6 +296,17 @@ sub _wrap_exceptions {
         _reraise($error) unless $handled;
         return;
     };
+}
+
+# The scope handed inward, carrying this ErrorHandler as pagi.error_handler
+# for the route adapters and the router -- only when it has catch entries, the
+# only thing there is to look up at a route. One without (the default, or a
+# handler-only one) answers what reaches it here, with built-in answers that
+# need no route Request.
+sub _publishing_scope {
+    my ($self, $scope) = @_;
+    return $scope unless $self->{catch} && %{ $self->{catch} };
+    return $self->modify_scope($scope, { 'pagi.error_handler' => $self });
 }
 
 # Handles an expected error with $request (a route's own; undef for one with
@@ -432,8 +443,7 @@ sub _wrap_server_errors {
             await Future->wrap($send->($event));
         };
 
-        my $inner = $with_exceptions
-            ? $self->modify_scope($scope, { 'pagi.error_handler' => $self }) : $scope;
+        my $inner = $with_exceptions ? $self->_publishing_scope($scope) : $scope;
         my $completed = eval {
             await Future->wrap($app->($inner, $receive, $wrapped_send));
             1;
