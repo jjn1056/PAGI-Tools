@@ -406,7 +406,7 @@ sub multipart_stream {
     );
 }
 
-# Read raw body bytes (async, cached in scope)
+# Read raw body bytes (async; kept on this object, never in the scope)
 async sub body {
     my $self = shift;
     my $scope_type = $self->_require_body_scope;
