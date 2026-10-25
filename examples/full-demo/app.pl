@@ -156,9 +156,13 @@ sse('/events' => async sub {
 # ============================================================================
 
 # How the client's mistakes look: a catch entry gets the Request and the error.
+# An HTTP error carries the headers its status needs (a 405's Allow); the
+# entry passes them on, as it answers in full.
 sub json_error {
     my ($request, $error) = @_;
-    return response('JSON', { error => $error->message });
+    my $exception = $error->exception;
+    my $headers = $exception->can('headers') ? $exception->headers : [];
+    return response('JSON', { error => $error->message }, headers => $headers);
 }
 
 compose(

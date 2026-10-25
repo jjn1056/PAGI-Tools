@@ -390,6 +390,9 @@ subtest 'Thrown pages recipe executes as published' => sub {
             . "die 'a 503 page answers as thrown' unless \$res->status == 503 && \$res->text eq 'down';\n"
             . "\$res = \$client->get('/fact');\n"
             . "die 'a fact gets the house style' unless \$res->status == 404 && \$res->json->{error} eq 'nope';\n"
+            . "\$res = \$client->post('/fact');\n"
+            . "die 'a wrong method gets the house style and keeps Allow' unless \$res->status == 405\n"
+            . "    && \$res->json->{error} eq 'Method Not Allowed' && (\$res->header('Allow') // '') eq 'GET, HEAD';\n"
             . "\$res = \$client->get('/nope');\n"
             . "die 'a routing miss gets it from http_default' unless \$res->status == 404 && \$res->json->{error} eq 'Not Found';\n",
     );

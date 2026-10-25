@@ -749,9 +749,14 @@ pages answer as they are without one:
   middleware('ErrorHandler', catch => {
       'PAGI::Exception::HTTP' => sub {
           my ($request, $error) = @_;
-          return response('JSON', { error => $error->message });
+          return response('JSON', { error => $error->message },
+              headers => $error->exception->headers);
       },
   })
+
+An entry answers in full, as a Starlette exception handler does: the error's
+headers -- the C<Allow> of the router's 405, a C<Retry-After> -- are sent only
+if it passes them on.
 
 A thrown page answers as itself, whatever its status, and never reaches
 C<catch>. A thrown object ErrorHandler cannot read as a page -- one with

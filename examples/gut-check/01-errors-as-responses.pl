@@ -12,7 +12,9 @@
 # stock 500, and the server logs it.
 #
 # A path no route matches is not an error here: http_default answers it, so
-# the entry never sees it (a 405 is the router's too).
+# the entry never sees it. A wrong method is: the router raises its 405, and
+# the entry passes on the error's headers, which carry the Allow a 405 must
+# have (an entry answers in full, as a Starlette exception handler does).
 #
 # The Starlette version is in README.md.
 #
@@ -43,9 +45,9 @@ async sub boom ($request) {
 }
 
 # The errors the app expects become JSON. A response with no status of its
-# own takes the error's.
+# own takes the error's; its headers are passed on.
 sub json_errors ($request, $error) {
-    return response('JSON', { error => $error->message });
+    return response('JSON', { error => $error->message }, headers => $error->exception->headers);
 }
 
 compose(

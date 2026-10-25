@@ -41,6 +41,7 @@ my %res;
             headers => { 'Content-Type' => 'application/json' });
         $res{bad_note} = $client->post('/notes', body => '{nope',
             headers => { 'Content-Type' => 'application/json' });
+        $res{wrong_method} = $client->get('/notes');
         $client->websocket('/ws/echo', sub {
             my ($ws) = @_;
             $ws->send_text('hi');
@@ -70,6 +71,9 @@ is($res{note}->status, 201, 'a JSON note is saved');
 is([$res{bad_note}->status, $res{bad_note}->json],
     [400, { error => 'The request body is not valid JSON.' }],
     'a body that is not JSON answers 400 in JSON through the ErrorHandler');
+is([$res{wrong_method}->status, $res{wrong_method}->json, $res{wrong_method}->header('Allow')],
+    [405, { error => 'Method Not Allowed' }, 'POST'],
+    "a wrong method: the router's 405 in JSON, keeping its Allow");
 
 like($res{routes}->json->{export_url}, qr{\Ahttps?://[^/]+/export\z},
     'and url_for gives an absolute URL');
