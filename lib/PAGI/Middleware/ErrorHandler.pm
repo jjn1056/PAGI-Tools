@@ -306,14 +306,14 @@ sub _wrap_exceptions {
 # other error returns false, unreported, for the server-error boundary. An
 # entry's own failure propagates.
 async sub _handle_exception {
-    my ($self, $error, $request, $scope, $receive, $send) = @_;
+    my ($self, $error, $request, $scope, $receive, $send, $quiet) = @_;
     # A thrown page answers as itself when its status is 400 or more; one
     # below 400 (a redirect) is an answer the server-error boundary sends,
     # and one without a usable status is an unhandled error.
     my $page_status = PAGI::ErrorContext::_is_page($error)
         ? PAGI::ErrorContext::_page_status($error) : undef;
     return 0 if defined($page_status) && $page_status < 400;
-    my ($status, $headers, $http_error) = $self->_status_for_error($error);
+    my ($status, $headers, $http_error) = $self->_status_for_error($error, $quiet);
     my $entry = $self->_catch_entry($error, $status, $http_error, 'exceptions');
     return 0 unless $entry || $http_error || defined $page_status;
 
@@ -329,6 +329,34 @@ async sub _handle_exception {
         await PAGI::Utils::invoke_app($context->default, $error_scope, $receive, $send);
     }
     return 1;
+}
+
+# Runs a route's work -- $run->($send), returning a Future -- so that an error
+# it throws is handled at the route with the route's own $request (spec D2):
+# a coderef route, an Endpoint method, a builder given a Request. Called on
+# the ErrorHandler the scope carries as pagi.error_handler. Returns
+# (1, $result) when the work completed, (0) when its error was handled and
+# answered; an error it does not handle, or one after the response started,
+# is rethrown unchanged for the boundaries outside.
+async sub _run_at_route {
+    my ($self, $request, $scope, $receive, $send, $run) = @_;
+    my $started = 0;
+    my $watched = async sub {
+        my ($event) = @_;
+        $started = 1 if ($event->{type} // '') eq 'http.response.start';
+        await Future->wrap($send->($event));
+    };
+    my $result;
+    my $completed = eval {
+        $result = await Future->wrap($run->($watched));
+        1;
+    };
+    return (1, $result) if $completed;
+    my $error = $@;
+    _reraise($error) if $started;
+    my $handled = await $self->_handle_exception($error, $request, $scope, $receive, $watched, 'quiet');
+    _reraise($error) unless $handled;
+    return (0);
 }
 
 # The scope an answer is given: this one, with the error as pagi.error.
@@ -548,7 +576,9 @@ async sub _development_for_request {
 }
 
 sub _status_for_error {
-    my ($self, $error) = @_;
+    my ($self, $error, $quiet) = @_;
+    # Quiet at a route: the error may go on to a boundary, which diagnoses it.
+    my $diagnose = $quiet ? sub { } : sub { $self->_diagnose_rejected_status(@_) };
     return $self->{status} unless blessed($error);
 
     my ($has_status, $claimed);
@@ -558,7 +588,7 @@ sub _status_for_error {
         1;
     };
     unless ($obtained) {
-        $self->_diagnose_rejected_status('status_code accessor failed');
+        $diagnose->('status_code accessor failed');
         return 500;
     }
     unless ($has_status) {
@@ -566,27 +596,27 @@ sub _status_for_error {
         # A page claims its own status; without a usable one it is a 500.
         my $page_status = PAGI::ErrorContext::_page_status($error);
         return $page_status if defined $page_status;
-        $self->_diagnose_rejected_status(
+        $diagnose->(
             'it is missing or not an integer from 100 to 599',
             "a thrown page's status",
         );
         return 500;
     }
     unless (defined($claimed)) {
-        $self->_diagnose_rejected_status('undefined result');
+        $diagnose->('undefined result');
         return 500;
     }
     if (ref($claimed)) {
-        $self->_diagnose_rejected_status('reference-valued result');
+        $diagnose->('reference-valued result');
         return 500;
     }
     unless ($claimed =~ /\A[0-9]+\z/) {
-        $self->_diagnose_rejected_status('nonnumeric scalar result');
+        $diagnose->('nonnumeric scalar result');
         return 500;
     }
     my $numeric = 0 + $claimed;
     unless ($numeric >= 400 && $numeric <= 599) {
-        $self->_diagnose_rejected_status("status $claimed is outside 400-599");
+        $diagnose->("status $claimed is outside 400-599");
         return 500;
     }
     # Only the built-in answer sends an exception's headers, so only it needs
@@ -596,13 +626,13 @@ sub _status_for_error {
     my ($headers, $refused) = _exception_headers($error);
     ($headers, $refused) = ([], undef) if defined $refused && $answered_elsewhere;
     if (defined $refused) {
-        $self->_diagnose_rejected_status($refused, 'exception headers');
+        $diagnose->($refused, 'exception headers');
         return 500;
     }
     my $field = $FIELD_REQUIRED{$numeric};
     if ($field && !$answered_elsewhere
         && !grep { lc($_->[0]) eq lc($field) } @$headers) {
-        $self->_diagnose_rejected_status(
+        $diagnose->(
             "status $claimed must carry $field, which the built-in answer cannot supply",
         );
         return 500;

@@ -111,8 +111,17 @@ sub to_app {
         croak "PAGI::Endpoint::HTTP requires HTTP scope; received '$type'"
             unless $type eq 'http';
         my $request = $given // PAGI::Request::_Factory::request_for_scope($scope, $receive);
-        my $application = await $endpoint->dispatch($request);
-        await invoke_app($application, $scope, $receive, $send);
+        my $run = async sub {
+            my ($send) = @_;
+            my $application = await $endpoint->dispatch($request);
+            await invoke_app($application, $scope, $receive, $send);
+        };
+        # A handler method's error is answered at the route, with this
+        # Request, by the ErrorHandler the scope carries (if any).
+        my $error_handler = $scope->{'pagi.error_handler'};
+        return await $run->($send) unless $error_handler;
+        await $error_handler->_run_at_route($request, $scope, $receive, $send, $run);
+        return;
     };
 }
 
