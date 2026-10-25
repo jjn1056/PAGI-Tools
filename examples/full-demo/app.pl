@@ -160,21 +160,16 @@ sse('/events' => async sub {
 # as it answers in full. A 405's Allow ErrorHandler adds if none is sent.
 sub json_error {
     my ($request, $error) = @_;
-    my $exception = $error->exception;
-    my $headers = $exception->can('headers') ? $exception->headers : [];
-    return response('JSON', { error => $error->message }, headers => $headers);
+    return response('JSON', { error => $error->message }, headers => $error->exception->headers);
 }
 
 compose(
     routes => \@routes,
     middleware => [
-        # The client's mistakes (an HTTP error, or a body that is not JSON)
-        # answer in JSON like the rest of the API; anything else gets the
-        # built-in plain-text 500, which the server also logs.
-        middleware('ErrorHandler', catch => {
-            'PAGI::Exception::HTTP'        => \&json_error,
-            'PAGI::Exception::RequestBody' => \&json_error,
-        }),
+        # The client's mistakes (an HTTP error, a body that is not JSON
+        # among them) answer in JSON like the rest of the API; anything else
+        # gets the built-in plain-text 500, which the server also logs.
+        middleware('ErrorHandler', catch => { 'PAGI::Exception::HTTP' => \&json_error }),
     ],
     lifespan => {
         startup => async sub {

@@ -66,9 +66,9 @@ curl -X POST -H "Content-Type: application/json" -d '{nope' http://localhost:500
 
 `$request->json` raises a 400 for a body that is not JSON. The ErrorHandler at
 the end of `app.pl` has one `catch` entry, `json_error`, registered for
-`PAGI::Exception::HTTP` and `PAGI::Exception::RequestBody` (a body error is not
-an HTTP exception subclass, only something with a status), which answers the
-client's mistakes in JSON; server errors get the built-in plain-text answer.
+`PAGI::Exception::HTTP` -- a body error, `PAGI::Exception::RequestBody`, is one
+-- which answers the client's mistakes in JSON; server errors get the built-in
+plain-text answer.
 
 ### HTTP Streaming
 

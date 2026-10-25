@@ -81,7 +81,9 @@
     write_item is write.
   - PAGI::Pages: negotiated welcome, error and redirect responses.
   - PAGI::ErrorContext (error_context): the error an ErrorHandler handler
-    answers. PAGI::Exception::RequestBody gains client_message.
+    answers. PAGI::Exception::RequestBody gains client_message, and is a
+    PAGI::Exception::HTTP (with no headers), so one catch entry for
+    PAGI::Exception::HTTP answers a bad body too.
   - PAGI::Auth (auth, auth_result, unauth_result, www_authenticate)
     and PAGI::Middleware::Authentication. Its backend reads the request's
     headers and cookies, never the body (as Starlette's backend gets an

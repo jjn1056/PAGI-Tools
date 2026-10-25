@@ -147,4 +147,27 @@ subtest 'an application can render body errors its own way' => sub {
         'an ErrorHandler catch entry gets the RequestBody exception and chooses the response');
 };
 
+subtest 'a RequestBody error is an HTTP error: one PAGI::Exception::HTTP entry answers it' => sub {
+    require PAGI::Exception::RequestBody;
+    my $error = PAGI::Exception::RequestBody->new(reason => 'invalid_json', message => 'nope');
+    isa_ok $error, ['PAGI::Exception::HTTP'];
+    is $error->headers, [], 'with no headers of its own';
+    is "$error", 'nope', 'and its own text';
+
+    my $json_route = route('/notes' => async sub { my ($request) = @_; await $request->json; response('Text', 'ok') },
+        methods => ['POST']);
+    my %bad = (body => '{not json', headers => { 'Content-Type' => 'application/json' });
+    my $app = compose(routes => [$json_route], middleware => [middleware('ErrorHandler', catch => {
+        'PAGI::Exception::HTTP' => sub { my ($request, $e) = @_; response('JSON', { error => $e->message }) },
+    })]);
+    my $res = PAGI::Test::Client->new(app => $app)->post('/notes', %bad);
+    is [$res->status, $res->json], [400, { error => 'The request body is not valid JSON.' }], 'the HTTP entry answers a bad body';
+
+    $app = compose(routes => [$json_route], middleware => [middleware('ErrorHandler', catch => {
+        'PAGI::Exception::HTTP'        => sub { response('Text', 'http') },
+        'PAGI::Exception::RequestBody' => sub { response('Text', 'body') },
+    })]);
+    is(PAGI::Test::Client->new(app => $app)->post('/notes', %bad)->text, 'body', 'a RequestBody entry, more specific, still wins');
+};
+
 done_testing;
