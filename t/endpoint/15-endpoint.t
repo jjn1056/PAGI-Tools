@@ -284,7 +284,8 @@ package Local::AsyncBuilt {
     }
 }
 
-# Its builder reads the body, so the handler gets it from the cache.
+# Its builder keeps the Request it was given, for the handler to compare
+# with its own.
 package Local::SameRequest {
     use parent 'PAGI::Endpoint::HTTP';
     use Scalar::Util qw(refaddr);
@@ -798,6 +799,34 @@ subtest "the handler gets the Request its builder was given" => sub {
         route('/same' => endpoint('Local::SameRequest')),
     ]));
     is($client->post('/same', body => '')->text, 'same Request', 'one Request per request');
+};
+
+# A subclass whose built object wraps its own to_app: the hand-off of the
+# builder's Request must not skip it.
+package Local::WrappedSameRequest {
+    use parent -norequire, 'Local::SameRequest';
+    use Future::AsyncAwait;
+    our $wrapped = 0;
+    sub to_app {
+        my ($self) = @_;
+        return $self->SUPER::to_app unless ref $self;
+        my $inner = $self->SUPER::to_app;
+        return async sub { $wrapped++; await $inner->(@_) };
+    }
+}
+
+subtest "the builder's Request reaches the handler through the endpoint's own to_app" => sub {
+    my $app = endpoint('Local::SameRequest')->to_app;
+    like(dies { $app->({ type => 'websocket', path => '/', headers => [] },
+            sub { die 'unexpected receive' }, sub { die 'unexpected send' })->get },
+        qr/PAGI::Endpoint::HTTP requires HTTP scope; received 'websocket'/,
+        'a websocket scope is refused, as without a builder');
+    local $Local::WrappedSameRequest::wrapped = 0;
+    my $client = PAGI::Test::Client->new(app => compose(routes => [
+        route('/wrapped' => endpoint('Local::WrappedSameRequest')),
+    ]));
+    is($client->post('/wrapped', body => '')->text, 'same Request', 'still the same Request');
+    is($Local::WrappedSameRequest::wrapped, 1, "and the built object's to_app ran");
 };
 
 subtest 'a builder that fails answers that request with a 500' => sub {

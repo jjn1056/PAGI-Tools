@@ -40,8 +40,9 @@ sub to_app {
             . ' a native PAGI application goes through as_app_object()'
             unless blessed($app) && $app->can('to_app');
         # An HTTP endpoint answers with the Request its builder was given, so
-        # the body the builder read is the handler's too.
-        return await $app->_run_with_request($request, $scope, $receive, $send)
+        # the body the builder read is the handler's too; its own to_app
+        # (scope checks, a subclass's wrapping) still runs and takes it.
+        $app->{_pagi_builder_request} = $request
             if $request && $app->isa('PAGI::Endpoint::HTTP');
         await invoke_app($app, $scope, $receive, $send);
     };

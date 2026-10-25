@@ -100,23 +100,20 @@ sub to_app {
 
     return async sub {
         my ($scope, $receive, $send) = @_;
+        # The Request a BUILD_APP builder was given for this request, left
+        # here by PAGI::Endpoint::_PerRequest, so the builder and the handler
+        # share one Request. Taken before any await, so even a builder that
+        # returns one object for every request hands each its own.
+        my $given = delete $endpoint->{_pagi_builder_request};
         my $type = ref($scope) eq 'HASH' ? $scope->{type} : undef;
         croak 'PAGI::Endpoint::HTTP scope type is required'
             unless defined($type) && !ref($type) && length($type);
         croak "PAGI::Endpoint::HTTP requires HTTP scope; received '$type'"
             unless $type eq 'http';
-        my $request = PAGI::Request::_Factory::request_for_scope($scope, $receive);
-        await $endpoint->_run_with_request($request, $scope, $receive, $send);
+        my $request = $given // PAGI::Request::_Factory::request_for_scope($scope, $receive);
+        my $application = await $endpoint->dispatch($request);
+        await invoke_app($application, $scope, $receive, $send);
     };
-}
-
-# Answers with $request, a Request already made for this scope: the one an
-# endpoint's BUILD_APP builder was given, so the builder and the handler share
-# one Request (and what it has read) for the request.
-async sub _run_with_request {
-    my ($endpoint, $request, $scope, $receive, $send) = @_;
-    my $application = await $endpoint->dispatch($request);
-    await invoke_app($application, $scope, $receive, $send);
 }
 
 1;
