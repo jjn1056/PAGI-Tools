@@ -389,17 +389,23 @@ sub _publishing_scope {
 # no body, built from the error's scope): a catch entry for an HTTP error's
 # status or for the exception's class (or an ancestor), else the built-in
 # answer to an HTTP error or a thrown page. Reports it to on_error, answers it,
-# and returns true; the error ends there, whatever the answer's status. Any
-# other error returns false, unreported, for the server-error boundary. An
-# entry's own failure propagates.
+# and returns true; the error ends there, whatever the answer's status. A
+# thrown page below 400 (a redirect) is sent as it is, unreported, and also
+# returns true. Any other error returns false, unreported, for the
+# server-error boundary. An entry's own failure propagates.
 async sub _handle_exception {
     my ($self, $error, $request, $scope, $receive, $send, $quiet) = @_;
-    # A thrown page answers as itself when its status is 400 or more; one
-    # below 400 (a redirect) is an answer the server-error boundary sends,
-    # and one without a usable status is an unhandled error.
+    # A thrown page answers as itself; one without a usable status is an
+    # unhandled error. One below 400 (a redirect) is an answer, not an error:
+    # it is sent here, inside the middleware this boundary is inside, so a
+    # session it set is saved. If sending it fails, that failure goes on
+    # outward as the error.
     my $page_status = PAGI::ErrorContext::_is_page($error)
         ? PAGI::ErrorContext::_page_status($error) : undef;
-    return 0 if defined($page_status) && $page_status < 400;
+    if (defined($page_status) && $page_status < 400) {
+        await PAGI::Utils::invoke_app($error, $scope, $receive, $send);
+        return 1;
+    }
     my ($status, $headers, $http_error) = $self->_status_for_error($error, $quiet);
     my $entry = $self->_catch_entry($error, $status, $http_error, 'exceptions');
     return 0 unless $entry || $http_error || defined $page_status;

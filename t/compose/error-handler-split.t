@@ -10,6 +10,8 @@ use PAGITest::Invoke qw(invoke);
 use PAGI::Exception::HTTP;
 use PAGI::Middleware::ErrorHandler;
 use PAGI::Test::Client;
+use PAGI::Middleware::Session qw(session_store);
+use PAGI::Session qw(session);
 use PAGI::Tools qw(compose middleware mount response route router);
 use PAGI::Utils qw(as_app_object);
 
@@ -153,6 +155,35 @@ subtest 'nested ErrorHandlers, an unhandled error: answered once; middleware bet
     is scalar(grep { $_->{type} eq 'http.response.start' } @{ $r->{events} }), 1, 'the outer does not answer again';
     isa_ok $seen, ['Local::Conflict'], 'the middleware between them got the original exception';
     isa_ok(($r->{future}->failure)[0], ['Local::Conflict'], 'and so does the server');
+};
+
+subtest 'a thrown redirect is sent inside the application middleware: the session cookie survives' => sub {
+    my (@seen, @reported);
+    my $watcher = middleware(sub {
+        my ($app) = @_;
+        return async sub {
+            my ($scope, $receive, $send) = @_;
+            await $app->($scope, $receive, async sub { push @seen, $_[0]{type}; await $send->(@_) });
+        };
+    });
+    my $app = compose(
+        routes => [route('/' => sub {
+            my ($request) = @_;
+            session($request)->set(user => 'john');
+            die response('Redirect', '/home', status => 303);
+        })],
+        middleware => [
+            middleware('Session', store => session_store('Memory')),
+            $watcher,
+            middleware('ErrorHandler', on_error => sub { push @reported, $_[0]; return }),
+        ],
+    );
+    my $r = invoke($app->to_app);
+    is $r->{status}, 303, 'the redirect';
+    ok((grep { lc($_->[0]) eq 'set-cookie' } @{ $r->{headers} }), 'with the session cookie');
+    ok((grep { $_ eq 'http.response.start' } @seen), 'it passed through the application middleware');
+    is \@reported, [], 'not reported: it is an answer';
+    ok $r->{future}->is_done, 'not re-raised';
 };
 
 done_testing;
