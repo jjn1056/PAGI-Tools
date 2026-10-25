@@ -476,6 +476,12 @@
     their entries), so a route below them may stream it.
   - Requires Perl 5.24 (was 5.18), as PAGI 0.003001 and PAGI-Server do.
     See "Perl version support" in PAGI.
+  - PAGI::Test::Client: a receive after the whole HTTP request body waits,
+    as on PAGI::Server, until the response is complete and then reports
+    http.disconnect (it answered http.disconnect at once). A second read
+    of a consumed body, which hangs on a server, now fails the test after
+    the 5-second drive timeout with a message naming it, instead of
+    reading an empty body.
   - PAGI::Test::Client no longer runs an application's own event loop
     for an HTTP request: 0.002002's ->get on the app's Future ran an
     IO::Async loop the app waited on, for requests only. An application

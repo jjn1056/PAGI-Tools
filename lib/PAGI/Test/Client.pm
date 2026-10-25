@@ -117,15 +117,21 @@ sub _request {
     # Build scope
     my $scope = $self->_build_scope($method, $path, \%opts);
 
-    # Build receive (returns request body)
+    # Build receive: the request body, then -- as on a real server -- a
+    # receive that waits until the response is complete and then reports the
+    # disconnect. An application that reads a consumed body again waits, and
+    # the drive timeout below says so.
     my $body = $opts{body} // '';
     my $receive_called = 0;
+    my ($response_complete, $waiting_after_body) = (0, undef);
     my $receive = async sub {
         if (!$receive_called) {
             $receive_called = 1;
             return { type => 'http.request', body => $body, more => 0 };
         }
-        return { type => 'http.disconnect' };
+        return { type => 'http.disconnect' } if $response_complete;
+        $waiting_after_body //= Future->new;
+        return await $waiting_after_body;
     };
 
     # Build send (captures response). Strict: illegal events (per
@@ -183,6 +189,11 @@ sub _request {
         $response->_capture_event(\%captured);
 
         $scope->{'pagi.connection'}->_mark_complete if $sv->complete;
+        if ($sv->complete && !$response_complete) {
+            $response_complete = 1;
+            $waiting_after_body->done({ type => 'http.disconnect' })
+                if $waiting_after_body && !$waiting_after_body->is_ready;
+        }
     };
 
     # Call app (with exception handling like real server). The app may be
@@ -199,9 +210,16 @@ sub _request {
         $app_future->get unless $timed_out;
     };
     if ($timed_out) {
+        # Whether it was waiting for more body: read before the cancel, which
+        # cancels the receive it awaits too.
+        my $waited_after_body = $waiting_after_body && !$waiting_after_body->is_ready;
         # Cancel the abandoned application so its pending wait cannot resume
         # later, in some other test, with nobody holding its Future.
         $app_future->cancel;
+        croak "PAGI request did not complete within $PAGI::Test::_Drive::TIMEOUT seconds: "
+            . 'the application waited for more of the request body after receiving all of it '
+            . '(a second read of a body already read? Pass the one Request on.)'
+            if $waited_after_body;
         croak "PAGI request did not complete within $PAGI::Test::_Drive::TIMEOUT seconds."
             . PAGI::Test::_Drive::loop_hint();
     }
@@ -1232,6 +1250,15 @@ C<PAGI request did not complete within 5 seconds>.
 The loop driven is L<Future::IO>'s. An application that waits on an event
 loop of its own needs one line in its test; see L</TESTING AN APPLICATION
 THAT COMMITS TO AN EVENT LOOP>.
+
+The request body is delivered once. A receive after the whole body has been
+delivered waits, as on a real server, until the response is complete, and
+then reports C<http.disconnect>; an application that waits for the client to
+go after answering is told at once. So an application that reads a consumed
+body again -- a second Request over the same receive -- fails here as it
+hangs on a server: the request dies with C<PAGI request did not complete
+within 5 seconds: the application waited for more of the request body after
+receiving all of it>. Pass the one Request on instead.
 
 =head2 get
 
