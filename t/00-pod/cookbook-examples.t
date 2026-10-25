@@ -395,6 +395,29 @@ subtest 'Thrown pages recipe executes as published' => sub {
     );
 };
 
+subtest 'Watching or changing the request body recipe executes as published' => sub {
+    my $recipe = first_code_block($cookbook, '=head2 Watching or changing the request body');
+    my $checks = <<'PERL';
+use IO::Compress::Gzip qw(gzip);
+use PAGI::Test::Client;
+my @logged;
+local $SIG{__WARN__} = sub { push @logged, @_ };
+my $client = PAGI::Test::Client->new(app => $app);
+my $text = "hello, " x 1000;
+gzip(\$text => \my $packed) or die 'gzip failed';
+my $res = $client->post('/echo', body => $packed, headers => { 'Content-Encoding' => 'gzip' });
+die 'gzip: got ' . $res->status . ' ' . substr($res->text, 0, 60) . "\n"
+    unless $res->status == 200 && $res->text eq "identity: $text";
+die "logged: @logged" unless "@logged" eq 'request body: ' . length($text) . " bytes\n";
+@logged = ();
+$res = $client->post('/echo', body => 'plain');
+die 'plain: got ' . $res->text . "\n" unless $res->text eq 'identity: plain';
+$res = $client->post('/echo', body => 'not gzip', headers => { 'Content-Encoding' => 'gzip' });
+die 'bad gzip: got ' . $res->status . "\n" unless $res->status == 400;
+PERL
+    perl_script_runs('Watching or changing the request body recipe', $recipe . $checks);
+};
+
 subtest 'CSRF on a streamed upload recipe executes as published' => sub {
     my $recipe = first_code_block($cookbook, '=head2 CSRF on a streamed upload');
     my $checks = <<'PERL';

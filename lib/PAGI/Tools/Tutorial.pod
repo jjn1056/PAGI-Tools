@@ -950,9 +950,9 @@ L</6.2 Using Middleware with Compose>).
 
 =item * B<Helpers.> The base provides C<intercept_send>, C<modify_scope>,
 C<buffer_request_body>, and friends, so each middleware isn't re-implementing
-the protocol plumbing. A middleware that reads the body hands it on to the
-app with L<PAGI::Utils::Middleware/record_receive> (see
-L<PAGI::Middleware/Reading the request body>).
+the protocol plumbing. A middleware that reads the body hands the app a
+C<$receive> that delivers one (see L<PAGI::Middleware/Reading the request
+body>).
 
 =back
 

@@ -222,8 +222,9 @@ Returns the complete body and the final http.request event.
 Croaks if the client disconnects mid-body rather than returning the partial
 body as if it were complete.
 
-The body is consumed: to pass it on to the inner app, read through
-L<PAGI::Utils::Middleware/record_receive> (see L</Reading the request body>).
+The body is consumed: an inner app given the same C<$receive> afterwards
+receives none of it. A middleware that calls this answers the request
+itself; see L</Reading the request body>.
 
 =cut
 
@@ -296,16 +297,48 @@ application and can:
 
 =head2 Reading the request body
 
-A request body can be received only once. A middleware that reads it must
-give the inner app a C<$receive> that delivers it again; given the C<$receive>
-the middleware read from, an app that reads the body waits for an event the
-client will never send. Read through L<PAGI::Utils::Middleware/record_receive>
-and pass on its replay:
+A request body can be received only once. Whoever reads it hands the
+application a C<$receive> that delivers a body: given the C<$receive> a
+middleware read from, an application that reads the body waits for an
+event the client will never send.
 
-    my ($reading, $replaying) = record_receive($receive);
-    my $form = await PAGI::Request->new($scope, $reading)->form_params;
-    await $app->($scope, $replaying, $send);
+To look at the body, or change it as it streams, wrap C<$receive> and give
+the application the wrapper. The application reads the body through it, and the
+middleware sees each C<http.request> event as it goes past -- to count it,
+hash it, or hand on a changed one. This is the pattern Starlette documents
+("wrapping the receive ASGI callable allows you to access or modify the HTTP
+request body").
 
+    async sub wrap_logged_body_size {
+        my ($app) = @_;
+        return async sub {
+            my ($scope, $receive, $send) = @_;
+            return await $app->($scope, $receive, $send) unless $scope->{type} eq 'http';
+            my $size = 0;
+            my $counting = async sub {
+                my $event = await $receive->();
+                if ($event->{type} eq 'http.request') {
+                    $size += length($event->{body} // '');
+                    warn "request body: $size bytes\n" unless $event->{more};
+                }
+                return $event;
+            };
+            await $app->($scope, $counting, $send);
+        };
+    }
+
+A middleware that must refuse on the body does it in the wrapper too: it
+throws from the read of the chunk that decides (an
+L<PAGI::Exception::HTTP>), so the application's read fails instead of
+returning, and answers that itself when nothing was sent yet, as
+Starlette's body-size limit does. examples/signed-requests checks a
+signature over the body that way. A check made this way runs only as far
+as the application reads: a route that reads no body is not checked.
+A middleware may also read the whole body before the application runs --
+to rewrite a small form, say -- and then hand the application a receive of
+its own that delivers the new body once and carries on with the client's
+(examples/modify-form-post). L<PAGI::Tools::Cookbook/Watching or changing
+the request body> has more.
 
 =head2 Example: Logging Middleware
 
