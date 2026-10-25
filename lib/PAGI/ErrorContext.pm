@@ -106,6 +106,9 @@ sub default {
     my ($self) = @_;
     # A thrown page answers as thrown; ErrorHandler took its status from it.
     my $exception = $self->exception;
+    # A routing miss answers as the router would have (internal).
+    return $exception->_default_answer
+        if blessed($exception) && $exception->can('_default_answer');
     return $exception
         if _is_page($exception) && (_page_status($exception) // 0) == $self->status;
     my $body = $self->message;

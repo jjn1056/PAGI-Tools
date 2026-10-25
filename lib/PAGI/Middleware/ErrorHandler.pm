@@ -10,6 +10,7 @@ use Future::AsyncAwait;
 use Scalar::Util 'blessed';
 use mro ();
 use PAGI::Request::_Factory ();
+use PAGI::Routing::HeadBoundary ();
 use PAGI::ErrorContext ();
 use PAGI::Utils ();
 
@@ -330,6 +331,9 @@ async sub _handle_exception {
 
     await $self->_report_error($error, $scope);
     my $error_scope = await $self->_error_scope($scope, $error, $status, $headers, $http_error);
+    # Answered outside a Router's HEAD boundary (a routing miss under a bare
+    # wrap, say), a HEAD answer must still send no body.
+    ($error_scope, $send) = PAGI::Routing::HeadBoundary->prepare($error_scope, $send);
     my $context = PAGI::ErrorContext->new($error_scope);
     my $answered = eval {
         if ($entry) {
@@ -480,6 +484,8 @@ sub _wrap_server_errors {
         _reraise($error) if $started;
 
         my $error_scope = await $self->_error_scope($scope, $error, $self->{status}, [], 0);
+        # A HEAD answer sends no body, inside a HEAD boundary or not.
+        ($error_scope, $wrapped_send) = PAGI::Routing::HeadBoundary->prepare($error_scope, $wrapped_send);
         my $answered = eval {
             await $self->_answer_server_error($error_scope, $receive, $wrapped_send);
             1;
