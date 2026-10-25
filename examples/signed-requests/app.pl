@@ -9,7 +9,8 @@
 #
 # The signature is an HMAC-SHA256, with the shared secret, of the body's
 # SHA-256 (as AWS signs a payload's hash), so the middleware hashes the body
-# as it arrives and never holds it in one string.
+# as it arrives and never holds it in one string. The same application in
+# Starlette is app.py.
 #
 # Run:  SIGNING_SECRET=s3cret pagi-server --app examples/signed-requests/app.pl --port 5000
 # Try:  sign() { openssl dgst -sha256 | sed 's/^.* //' | tr -d '\n' \
@@ -29,10 +30,12 @@ use Digest::SHA ();
 use File::Temp qw(tempdir);
 use PAGI::Tools qw(compose middleware mount response route);
 
-# The middleware's own failure: a 401, which Compose answers like any
-# PAGI::Exception::HTTP, and which the middleware tells from a route's own.
+# The middleware's own failure. Not a PAGI::Exception::HTTP: an HTTP error a
+# route raises is answered at the route, before the middleware could tell
+# its own failure from the route's (app.py's BadSignature is not an
+# HTTPException for the same reason).
 package SignedRequests::BadSignature {
-    use parent 'PAGI::Exception::HTTP';
+    sub throw ($class) { die bless {}, $class }
 }
 
 package SignedRequests::VerifySignature {
@@ -61,7 +64,7 @@ package SignedRequests::VerifySignature {
                 my $event = await $receive->();
                 return $event unless $event->{type} eq 'http.request';
                 $sha->add($event->{body} // '');
-                SignedRequests::BadSignature->throw(401, 'bad signature')
+                SignedRequests::BadSignature->throw
                     if !$event->{more}
                     && !secure_compare($given, 'sha256=' . hmac_sha256_hex($sha->hexdigest, $self->{secret}));
                 return $event;
