@@ -9,7 +9,7 @@ use Future::AsyncAwait;
 use Scalar::Util qw(blessed);
 use PAGI::Auth qw(auth);
 use PAGI::Request::_Factory ();
-use PAGI::Utils::Middleware qw(clone_scope record_receive);
+use PAGI::Utils::Middleware qw(clone_scope);
 use PAGI::Utils ();
 
 sub _init {
@@ -24,11 +24,17 @@ sub _init {
             || (blessed($backend) && $backend->can('authenticate'));
 
     $self->{backend} = $backend;
-    $self->{body_buffer} = $config->{body_buffer};
-    croak 'Authentication body_buffer must be a coderef that returns a buffer, like PAGI::Utils::ReceiveBuffer::TempFile->new'
-        if defined($self->{body_buffer}) && ref($self->{body_buffer}) ne 'CODE';
+    croak "Authentication 'body_buffer' was removed: a backend never reads the body"
+        if exists $config->{body_buffer};
     PAGI::Utils::_reject_unknown_options('Authentication', $config,
-        qw(backend body_buffer));
+        qw(backend));
+}
+
+# The receive behind a backend's Request: reading the body there dies, and
+# the message names the backend's line, not PAGI::Request's.
+our @CARP_NOT = ('PAGI::Request');
+sub _no_body {
+    croak 'Authentication backends read headers and cookies, not the body; check a signed body in the handler';
 }
 
 sub wrap {
@@ -43,11 +49,9 @@ sub wrap {
             return;
         }
 
-        # The backend may read the body (a signed request), so it reads
-        # through a recording receive and the application gets the replay.
-        my ($reading, $replaying) = record_receive($receive,
-            $self->{body_buffer} ? (buffer => $self->{body_buffer}->($scope)) : ());
-        my $request = PAGI::Request::_Factory::request_for_scope($scope, $reading);
+        # The backend reads the request's headers and cookies; the body is
+        # the application's, so the backend's Request has none to read.
+        my $request = PAGI::Request::_Factory::request_for_scope($scope, \&_no_body);
         my $returned = ref($backend) eq 'CODE'
             ? $backend->($request)
             : $backend->authenticate($request);
@@ -57,7 +61,7 @@ sub wrap {
 
         my $inner = clone_scope($scope, { 'pagi.auth' => $results[0] });
         auth($inner);
-        await $app->($inner, $replaying, $send);
+        await $app->($inner, $receive, $send);
         return;
     };
 }
@@ -103,8 +107,7 @@ Plack::Builder does.
 
 Construct with C<new(backend =E<gt> $backend)> and call C<wrap($next)> to get a
 native application. C<backend> is required and must be exactly a coderef or an
-object implementing C<authenticate>; C<body_buffer> is optional (see below);
-unknown constructor options are errors.
+object implementing C<authenticate>; unknown constructor options are errors.
 The same backend is reused across invocations. This middleware constructs one
 L<PAGI::Request>, or the class L<PAGI::Middleware::RequestClass> set when that
 middleware is listed before this one, for each HTTP, WebSocket, or SSE
@@ -115,16 +118,12 @@ that Request as its only argument; an object's C<authenticate($request)> receive
 it after the normal invocant. Either form must return exactly one completed
 L<PAGI::Auth::Result>, directly or through a L<Future>. Bare users, C<undef>,
 and response values are errors.
-A backend may read the request body -- to check a signature over it, say --
-and the application still receives it: the Request reads through
-L<PAGI::Utils::Middleware/record_receive>, and the application is given the
-replay. A body the backend never reads passes straight through. C<body_buffer>
-chooses where a body that was read is kept until the application receives it:
-a coderef, called with the scope of each request (read or not, as the
-middleware cannot know in advance), returning a buffer for that request -- a
-L<PAGI::Utils::ReceiveBuffer::TempFile> with other options, or any object
-with its C<append> and C<take> methods. Make the buffer do no work until
-C<append> is called. The default holds 64KB in memory and the rest in a temporary file.
+A backend reads what the request carries before its body: headers, cookies,
+the query, the session. The body is the application's, and reaches it
+untouched: reading it through the backend's Request dies. A request signed
+over its body is checked in the handler, which reads the body (as
+Starlette's AuthenticationMiddleware hands its backend a connection with no
+body; see examples/signed-requests).
 
 The result is installed under C<pagi.auth> in a shallow child scope and the
 downstream application always continues. Guest and rejected results do not

@@ -306,9 +306,6 @@ and pass on its replay:
     my $form = await PAGI::Request->new($scope, $reading)->form_params;
     await $app->($scope, $replaying, $send);
 
-Every middleware that reads the body does this, each from the C<$receive> it
-was given. L<PAGI::Middleware::Authentication>, whose backend may read the
-body, is an example.
 
 =head2 Example: Logging Middleware
 

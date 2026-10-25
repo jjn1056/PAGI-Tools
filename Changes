@@ -80,9 +80,10 @@
   - PAGI::ErrorContext (error_context): the error an ErrorHandler handler
     answers. PAGI::Exception::RequestBody gains client_message.
   - PAGI::Auth (auth, auth_result, unauth_result, www_authenticate)
-    and PAGI::Middleware::Authentication. A body its backend
-    reads is handed on to the application with record_receive;
-    body_buffer chooses where it is kept meanwhile.
+    and PAGI::Middleware::Authentication. Its backend reads the request's
+    headers and cookies, never the body (as Starlette's backend gets an
+    HTTPConnection); a request signed over its body is checked in the
+    handler.
   - PAGI::Middleware::Requires: the scopes a route, mount or application
     requires, as middleware (Starlette's @requires). Otherwise a plain 403,
     a refuse application, or a redirect 303: to a location as written, or

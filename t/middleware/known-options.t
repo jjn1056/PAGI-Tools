@@ -15,6 +15,7 @@ my %required = (
 );
 # Options _init reads only to reject them with a message of their own.
 my %rejected = (
+    Authentication     => ['body_buffer'],
     CSRF               => ['enforce', 'secret', 'body_buffer'],
     ContentNegotiation => ['strict', 'default_type'],
     MethodOverride     => ['check_form', 'body_buffer'],
