@@ -58,6 +58,20 @@ like($res->text, qr/Rotate the on-call key/, 'and the task');
 like($res->text, qr/2026-10-20/, 'with its due date');
 unlike($client->get('/')->text, qr/class="flash"/, 'the flash is shown once');
 
+# The board's own errors, answered in one place at the route, with the
+# route's own Request.
+$res = $client->post('/tasks', form => { title => 'rotate the ON-CALL key', due => '2026-11-01', csrf_token => $token });
+is($res->status, 409, 'a title already on the board is a conflict');
+like($res->text, qr/There is already a task called &quot;rotate the ON-CALL key&quot;\./, 'with the error');
+like($res->text, qr/value="rotate the ON-CALL key"/, 're-rendered with what was typed');
+like($res->text, qr/value="2026-11-01"/, 'the whole form');
+
+$res = $client->post('/tasks/9/toggle', form => { csrf_token => $token });
+is([$res->status, $res->text], [404, 'No such task: 9.'], 'a missing task, by the id in the path');
+
+$res = $client->get('/nowhere');
+is([$res->status, $res->text], [404, 'No such page: /nowhere.'], "an unknown page: the router's 404, answered by the entry");
+
 is($client->post('/tasks/1/toggle', form => {})->status, 403, 'a toggle without the token is refused');
 is($client->post('/tasks/1/delete', form => { csrf_token => 'forged' })->status, 403,
     'a delete with a wrong token is refused');

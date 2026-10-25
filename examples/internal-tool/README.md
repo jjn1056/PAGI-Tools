@@ -32,6 +32,15 @@ installed; it is not a dependency of PAGI-Tools.
   handler, `get`-then-`delete` in `page`.
 - **Validation errors.** Hand-written: a `validate` returning values and
   errors, and a 422 re-render of the same template.
+- **Errors in one place.** The board raises its own errors --
+  `TaskBoard::TitleTaken` for a duplicate title, `TaskBoard::NoSuchTask`
+  for a missing task --
+  and the routes don't check for them. `middleware('ErrorHandler', catch =>
+  {...})` answers both. A route's error is answered at that route, with that
+  route's own Request, so the conflict entry re-renders the form with what
+  was typed, and the missing-task entry names the id from `path_param`. This is how
+  Starlette's `exception_handlers` work (route-level, with the endpoint's
+  Request) and what Flask's `@app.errorhandler` gives.
 - **CSRF on forms.** `middleware('CSRF', session => 1, form_field =>
   'csrf_token')` keeps the token in the session and refuses a cross-site
   POST. Each POST route is wrapped in `csrf_protect`, which reads the hidden
@@ -47,7 +56,7 @@ installed; it is not a dependency of PAGI-Tools.
   `app_state($request)`.
 
 Measured with the gut-check line counter (code lines, imports in
-parentheses): PAGI-Tools 74 (9), Flask 51 (2). The templates are 47 and 44
+parentheses): PAGI-Tools 97 (11), Flask 74 (2). The templates are 47 and 44
 lines. The difference is the batteries: Flask's `render_template` and
 `flash`/`get_flashed_messages` are the `page` and `flash` helpers here,
 `url_for('static', ...)` is the template's `url('static', ...)`, and Flask's
@@ -55,6 +64,10 @@ module-level `BOARD` is
 Compose's `lifespan` block. CSRF has the same shape in both: the Flask
 version calls `check_csrf` in its three handlers, and PAGI-Tools wraps the
 three routes in `csrf_protect`.
+
+Errors are answered the same way in both: Flask's `@app.errorhandler`
+functions see the same `request`, and so do ErrorHandler's `catch` entries;
+both answer the router's 404 for a page that doesn't exist.
 
 ## Try
 
@@ -66,6 +79,11 @@ curl -c jar -b jar -X POST localhost:5000/tasks --data-urlencode 'title=' \
 curl -c jar -b jar -X POST localhost:5000/tasks --data-urlencode 'title=Rotate the key' \
      --data-urlencode "csrf_token=$tok" -i               # 303 to /
 curl -c jar -b jar localhost:5000/                      # the flash, then the task
+curl -c jar -b jar -X POST localhost:5000/tasks --data-urlencode 'title=Rotate the key' \
+     --data-urlencode "csrf_token=$tok" -i               # 409: that title is taken, re-rendered
+curl -c jar -b jar -X POST localhost:5000/tasks/9/toggle --data-urlencode "csrf_token=$tok"
+                                                         # 404, body: No such task: 9.
+curl localhost:5000/nowhere                              # 404, body: No such page: /nowhere.
 curl -c jar -b jar -X POST localhost:5000/tasks/1/toggle --data-urlencode "csrf_token=$tok" -i
 curl -i localhost:5000/static/style.css
 ```
@@ -117,6 +135,47 @@ def validate(form):
     return {"title": title, "due": due}, errors
 
 
+# The board. It raises its own errors; the routes do not check for them.
+class TitleTaken(Exception):
+    def __init__(self, title):
+        self.title = title
+
+
+class NoSuchTask(Exception):
+    pass
+
+
+def add_task(values):
+    if any(t["title"].lower() == values["title"].lower() for t in BOARD["list"]):
+        raise TitleTaken(values["title"])
+    BOARD["list"].append({"id": BOARD["next"], **values, "done": False})
+    BOARD["next"] += 1
+
+
+def find_task(id):
+    task = next((t for t in BOARD["list"] if t["id"] == id), None)
+    if task is None:
+        raise NoSuchTask()
+    return task
+
+
+@app.errorhandler(TitleTaken)
+def title_taken(error):
+    values, _ = validate(request.form)
+    errors = {"title": f'There is already a task called "{error.title}".'}
+    return render_template("index.html", tasks=BOARD["list"], form=values, errors=errors), 409
+
+
+@app.errorhandler(NoSuchTask)
+def no_such_task(error):
+    return f"No such task: {request.view_args['id']}.", 404
+
+
+@app.errorhandler(404)
+def no_such_page(error):
+    return f"No such page: {request.path}.", 404
+
+
 @app.get("/")
 def index():
     return render_template("index.html", tasks=BOARD["list"], form={}, errors={})
@@ -128,8 +187,7 @@ def create():
     values, errors = validate(request.form)
     if errors:
         return render_template("index.html", tasks=BOARD["list"], form=values, errors=errors), 422
-    BOARD["list"].append({"id": BOARD["next"], **values, "done": False})
-    BOARD["next"] += 1
+    add_task(values)
     flash(f'Added "{values["title"]}".')
     return redirect(url_for("index"), 303)
 
@@ -137,7 +195,7 @@ def create():
 @app.post("/tasks/<int:id>/toggle")
 def toggle(id):
     check_csrf()
-    task = next((t for t in BOARD["list"] if t["id"] == id), None) or abort(404)
+    task = find_task(id)
     task["done"] = not task["done"]
     flash(("Done: " if task["done"] else "Reopened: ") + task["title"] + ".")
     return redirect(url_for("index"), 303)
@@ -146,10 +204,8 @@ def toggle(id):
 @app.post("/tasks/<int:id>/delete")
 def delete(id):
     check_csrf()
-    before = len(BOARD["list"])
-    BOARD["list"] = [t for t in BOARD["list"] if t["id"] != id]
-    if len(BOARD["list"]) == before:
-        abort(404)
+    task = find_task(id)
+    BOARD["list"] = [t for t in BOARD["list"] if t is not task]
     flash("Deleted.")
     return redirect(url_for("index"), 303)
 ```
