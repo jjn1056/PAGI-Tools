@@ -251,33 +251,144 @@ sub _new_compose_failsafe {
     return $self;
 }
 
+# Two boundaries, as Starlette's application stack has: the exception
+# boundary, directly around the application, handles an expected error; the
+# server-error boundary, around that, answers anything else and always
+# rethrows it (PAGI::Middleware::ErrorHandler, "TWO BOUNDARIES").
+# Placed locally, both boundaries run in one frame: an error the exception
+# boundary does not handle goes on to the server-error boundary as itself,
+# never through a Future between them (which could not carry every value).
 sub wrap {
     my ($self, $app) = @_;
+    return $self->_wrap_server_errors($app, 1);
+}
 
-    return async sub  {
+# The exception boundary. It publishes this ErrorHandler in the scope it hands
+# inward, so a route adapter can handle its own error with its own Request
+# (pagi.error_handler, internal), and handles what reaches it here with a
+# Request that has no body: the application below may have read it.
+sub _wrap_exceptions {
+    my ($self, $app) = @_;
+
+    return async sub {
         my ($scope, $receive, $send) = @_;
-        # Only handle HTTP requests
+        if (($scope->{type} // 'http') ne 'http') {
+            await Future->wrap($app->($scope, $receive, $send));
+            return;
+        }
+        my $inner = $self->modify_scope($scope, { 'pagi.error_handler' => $self });
+        my $started = 0;
+        my $watching = async sub {
+            my ($event) = @_;
+            $started = 1 if ($event->{type} // '') eq 'http.response.start';
+            await Future->wrap($send->($event));
+        };
+        my $completed = eval {
+            await Future->wrap($app->($inner, $receive, $watching));
+            1;
+        };
+        return if $completed;
+        my $error = $@;
+        # After the response started nothing more can be answered: the
+        # server-error boundary reports it.
+        _reraise($error) if $started;
+        my $handled = await $self->_handle_exception($error, undef, $inner, $receive, $watching);
+        _reraise($error) unless $handled;
+        return;
+    };
+}
+
+# Handles an expected error with $request (a route's own; undef for one with
+# no body, built from the error's scope): a catch entry for an HTTP error's
+# status or for the exception's class (or an ancestor), else the built-in
+# answer to an HTTP error or a thrown page. Reports it to on_error, answers it,
+# and returns true; the error ends there, whatever the answer's status. Any
+# other error returns false, unreported, for the server-error boundary. An
+# entry's own failure propagates.
+async sub _handle_exception {
+    my ($self, $error, $request, $scope, $receive, $send) = @_;
+    # A thrown page answers as itself when its status is 400 or more; one
+    # below 400 (a redirect) is an answer the server-error boundary sends,
+    # and one without a usable status is an unhandled error.
+    my $page_status = PAGI::ErrorContext::_is_page($error)
+        ? PAGI::ErrorContext::_page_status($error) : undef;
+    return 0 if defined($page_status) && $page_status < 400;
+    my ($status, $headers, $http_error) = $self->_status_for_error($error);
+    my $entry = $self->_catch_entry($error, $status, $http_error, 'exceptions');
+    return 0 unless $entry || $http_error || defined $page_status;
+
+    await $self->_report_error($error, $scope);
+    my $error_scope = await $self->_error_scope($scope, $error, $status, $headers, $http_error);
+    my $context = PAGI::ErrorContext->new($error_scope);
+    if ($entry) {
+        $request //= PAGI::Request::_Factory::request_for_scope($error_scope, \&_no_body);
+        my $answer = await Future->wrap($entry->($request, $context));
+        await _send_answer($answer, $context, 'ErrorHandler catch entry', $error_scope, $receive, $send);
+    }
+    else {
+        await PAGI::Utils::invoke_app($context->default, $error_scope, $receive, $send);
+    }
+    return 1;
+}
+
+# The scope an answer is given: this one, with the error as pagi.error.
+async sub _error_scope {
+    my ($self, $scope, $error, $status, $headers, $http_error) = @_;
+    return {
+        %$scope,
+        (defined($scope->{type}) ? () : (type => 'http')),
+        'pagi.error' => {
+            exception   => $error,
+            status      => $status,
+            headers     => $headers // [],
+            http_error  => $http_error ? 1 : 0,
+            development => await $self->_development_for_request,
+        },
+    };
+}
+
+# The server-error boundary: an error the exception boundary did not handle
+# is answered by catch for the configured status, handler, or the built-in
+# answer, and then always rethrown, so the server logs it -- as Starlette's
+# ServerErrorMiddleware re-raises after its handler answers.
+# With $with_exceptions (a local placement), it is also the exception
+# boundary: it publishes this ErrorHandler inward and first tries to handle
+# the error; one it does not handle, or an entry's own failure, goes on here.
+sub _wrap_server_errors {
+    my ($self, $app, $with_exceptions) = @_;
+
+    return async sub {
+        my ($scope, $receive, $send) = @_;
         if (($scope->{type} // 'http') ne 'http') {
             await Future->wrap($app->($scope, $receive, $send));
             return;
         }
 
-        my ($started, $sent_status) = (0, undef);
+        my $started = 0;
         my $wrapped_send = async sub {
             my ($event) = @_;
-            if (($event->{type} // '') eq 'http.response.start') {
-                $started = 1;
-                $sent_status = $event->{status};
-            }
+            $started = 1 if ($event->{type} // '') eq 'http.response.start';
             await Future->wrap($send->($event));
         };
 
+        my $inner = $with_exceptions
+            ? $self->modify_scope($scope, { 'pagi.error_handler' => $self }) : $scope;
         my $completed = eval {
-            await Future->wrap($app->($scope, $receive, $wrapped_send));
+            await Future->wrap($app->($inner, $receive, $wrapped_send));
             1;
         };
         return if $completed;
         my $error = $@;
+
+        if ($with_exceptions && !$started) {
+            my $handled;
+            my $tried = eval {
+                $handled = await $self->_handle_exception($error, undef, $inner, $receive, $wrapped_send);
+                1;
+            };
+            return if $tried && $handled;
+            $error = $@ unless $tried;    # the entry's own failure, from here on
+        }
 
         # A thrown page with a status below 400 (a redirect, say) is an
         # answer, not an error: it is sent as it is and nothing is reported.
@@ -297,20 +408,9 @@ sub wrap {
         await $self->_report_error($error, $scope);
         _reraise($error) if $started;
 
-        my ($status, $headers, $http_error) = $self->_status_for_error($error);
-        my $error_scope = {
-            %$scope,
-            (defined($scope->{type}) ? () : (type => 'http')),
-            'pagi.error' => {
-                exception   => $error,
-                status      => $status,
-                headers     => $headers // [],
-                http_error  => $http_error ? 1 : 0,
-                development => await $self->_development_for_request,
-            },
-        };
+        my $error_scope = await $self->_error_scope($scope, $error, $self->{status}, [], 0);
         my $answered = eval {
-            await $self->_answer($error_scope, $receive, $wrapped_send);
+            await $self->_answer_server_error($error_scope, $receive, $wrapped_send);
             1;
         };
         my $handler_failure = $answered ? undef : $@;
@@ -324,10 +424,8 @@ sub wrap {
             my $answerer = $error_scope->{'pagi.error'}{answered_by} // 'handler';
             eval { warn "PAGI ErrorHandler $answerer failed: $reason\n"; 1 };
             await $self->_send_last_resort($wrapped_send) unless $started;
-            _reraise($error);
         }
-        # What the client was sent decides whether the server logs it.
-        _reraise($error) if $sent_status >= 500;
+        _reraise($error);
     };
 }
 
@@ -341,10 +439,12 @@ sub _no_body {
     croak "ErrorHandler handlers read the request's headers, not its body: the body was the application's";
 }
 
-async sub _answer {
+# An unhandled error's answer: catch for the configured status, handler, or
+# the built-in answer, each with a Request that has no body.
+async sub _answer_server_error {
     my ($self, $scope, $receive, $send) = @_;
     my $error = $scope->{'pagi.error'};
-    if (my $entry = $self->_catch_entry($error->{exception}, $error->{status}, $error->{http_error})) {
+    if (my $entry = $self->{catch} && $self->{catch}{ $error->{status} }) {
         $error->{answered_by} = 'catch entry';    # names it if it fails
         my $context = PAGI::ErrorContext->new($scope);
         my $answer = await Future->wrap($entry->(
@@ -386,15 +486,20 @@ async sub _send_answer {
 # was given. A thrown page or Response is an answer, not an error, and never
 # reaches catch.
 sub _catch_entry {
-    my ($self, $exception, $status, $http_error) = @_;
+    my ($self, $exception, $status, $http_error, $exceptions_only) = @_;
     my $catch = $self->{catch} or return undef;
     return undef if PAGI::ErrorContext::_is_page($exception);
-    return $catch->{$status} if $http_error && $catch->{$status};
+    # The server-error status (500 by default) belongs to the server-error
+    # boundary, as Starlette moves a 500 handler to ServerErrorMiddleware: an
+    # HTTP error with that status gets the built-in HTTP answer.
+    my $status_entry = $exceptions_only && $status == $self->{status} ? undef : $catch->{$status};
+    return $status_entry if $http_error && $status_entry;
     if (blessed($exception)) {
         for my $class (@{ mro::get_linear_isa(ref $exception) }) {
             return $catch->{$class} if $catch->{$class};
         }
     }
+    return undef if $exceptions_only;    # a plain error's status is the server-error boundary's
     return $catch->{$status} if !$http_error && $catch->{$status};
     return undef;
 }
@@ -485,8 +590,9 @@ sub _status_for_error {
         return 500;
     }
     # Only the built-in answer sends an exception's headers, so only it needs
-    # them sendable: a handler or catch entry answers with empty headers.
-    my $answered_elsewhere = $self->_has_handler || $self->_catch_entry($error, $numeric, 1);
+    # them sendable: a catch entry answers with empty headers. (handler
+    # answers only unhandled errors, never an HTTP error.)
+    my $answered_elsewhere = $self->_catch_entry($error, $numeric, 1);
     my ($headers, $refused) = _exception_headers($error);
     ($headers, $refused) = ([], undef) if defined $refused && $answered_elsewhere;
     if (defined $refused) {

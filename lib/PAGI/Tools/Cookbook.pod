@@ -740,33 +740,26 @@ should capture that warning.
 
 Return responses; throw only from code far from the handler. When you do,
 L<PAGI::Exception::HTTP> says what went wrong and a thrown Response is an
-answer in itself. One ErrorHandler handler can honour thrown pages as they
-are and give every other client error the house style:
+answer in itself. One ErrorHandler C<catch> entry gives HTTP errors the house
+style, as Starlette's C<exception_handlers={HTTPException: ...}> does; thrown
+pages answer as they are without one:
 
-  use Scalar::Util qw(blessed);
-  use PAGI::ErrorContext qw(error_context);
   use PAGI::Response qw(response);
 
-  middleware('ErrorHandler', handler => sub {
-      my ($request) = @_;
-      my $error = error_context($request);
-      my $thrown = $error->exception;
-      # Server errors first: default is a 5xx page itself, or the stock 500
-      # for anything that could not be read as one.
-      return $error->default if $error->is_server_error;
-      # A page: no status_code, a to_app. Facts are checked first.
-      return $thrown
-          if blessed($thrown) && !$thrown->can('status_code') && $thrown->can('to_app');
-      return response('JSON', { error => $error->message });
+  middleware('ErrorHandler', catch => {
+      'PAGI::Exception::HTTP' => sub {
+          my ($request, $error) = @_;
+          return response('JSON', { error => $error->message });
+      },
   })
 
-The server-error line comes first so that a thrown object ErrorHandler could
-not read as a page -- one with C<to_app> but no usable status, such as an
-exception written for Plack -- gets the stock 500 instead of being run. A
-thrown page below 400, such as C<die response('Redirect', '/login')>, never
-reaches the handler: ErrorHandler sends it at once.
+A thrown page answers as itself, whatever its status, and never reaches
+C<catch>. A thrown object ErrorHandler cannot read as a page -- one with
+C<to_app> but no usable status, such as an exception written for Plack -- is
+an ordinary error: the stock 500, and its C<to_app> is never run. A thrown
+page below 400, such as C<die response('Redirect', '/login')>, is sent at once.
 
-Routing misses never reach the handler either: they are answers, not errors.
+Routing misses never reach the entry here: they are answers, not errors.
 The router answers a path nothing matches (404) and a method a matched path
 does not allow (405) itself, in plain text. Give the 404 the house style with
 C<http_default>, beside C<routes>:
@@ -3028,18 +3021,16 @@ it; one that wants its own response catches the error:
       route('/notes/kindly' => \&create_note_kindly, methods => ['POST']),
   ]);
 
-To give every route the same shape instead, give ErrorHandler a C<handler>.
-C<error_context($request)> carries the RequestBody exception; its C<message>
-is the exception's client-safe sentence, and its C<cause> holds the
-underlying error for logs:
-
-  use PAGI::ErrorContext qw(error_context);
+To give every route the same shape instead, give ErrorHandler a C<catch>
+entry for L<PAGI::Exception::RequestBody>. The entry gets the Request and the
+error: its C<message> is the exception's client-safe sentence, and its
+C<cause> holds the underlying error for logs:
 
   my $uniform = compose(
-      middleware => [middleware('ErrorHandler', handler => sub ($request) {
-          my $error = error_context($request);
-          return $error->default if $error->is_server_error;
-          return response('JSON', { error => $error->message });
+      middleware => [middleware('ErrorHandler', catch => {
+          'PAGI::Exception::RequestBody' => sub ($request, $error) {
+              return response('JSON', { error => $error->message });
+          },
       })],
       routes => [route('/notes' => \&create_note, methods => ['POST'])],
   );

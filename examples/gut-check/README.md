@@ -85,7 +85,7 @@ Run any PAGI one with `pagi-server --app examples/gut-check/<file> --port 5000`.
     Starlette has nothing comparable built in.
   - **Throwing (01).** `PAGI::Exception::HTTP->throw(404, ...)` from deep in
     the model answers 404 with no configuration, as Starlette's `HTTPException`
-    does; 01's one small handler only renders the errors it expects as JSON. A
+    does; 01's one small `catch` entry only renders the errors it expects as JSON. A
     thrown response answers itself too: `die response('Redirect', '/login')`
     redirects. Starlette can raise only `HTTPException`; raising a response
     object gives a 500 there (checked).
@@ -128,8 +128,8 @@ Most important first, as found; each now says what PAGI-Tools 0.003000 does.
    error (`PAGI::Exception::HTTP` is the one Tools ships); a response, or
    anything else with `to_app`, answers itself unless a handler renders it: a
    page below 400, such as a redirect, always answers itself. 01 now
-   throws `PAGI::Exception::HTTP` and keeps its handler only for the JSON house
-   style.
+   throws `PAGI::Exception::HTTP` and keeps one `catch` entry only for the JSON
+   house style.
 
 3. **The query accessors disagreed across Request, WebSocket and SSE.**
    Changed: all three have exactly `query_param`, `query_params`,

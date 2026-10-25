@@ -4,14 +4,15 @@
 # right HTTP answer.
 #
 # Throw a PAGI::Exception::HTTP (what went wrong), and let one ErrorHandler
-# handler decide how errors look. Without the handler, the stock page answers
-# with the right status and the message. A thrown response
-# (die response('JSON', ..., status => 404)) also works with no handler at
-# all: it answers itself.
+# catch entry decide how those errors look, as Starlette's
+# exception_handlers={HTTPException: ...} does. Without the entry, the stock
+# page answers with the right status and the message. A thrown response
+# (die response('JSON', ..., status => 404)) also works with no entry at
+# all: it answers itself. An ordinary bug is not an HTTP error: it gets the
+# stock 500, and the server logs it.
 #
-# A path no route matches is not an error: the router answers it, and the
-# handler never sees it. http_default sets that answer (a 405 is the router's
-# too; change it with a middleware).
+# A path no route matches is not an error here: http_default answers it, so
+# the entry never sees it (a 405 is the router's too).
 #
 # The Starlette version is in README.md.
 #
@@ -24,7 +25,7 @@
 use v5.40;
 use Future::AsyncAwait;
 use PAGI::Exception::HTTP;
-use PAGI::Tools qw(compose error_context middleware response route);
+use PAGI::Tools qw(compose middleware response route);
 
 my %NOTES = (1 => { id => 1, text => 'buy milk' });
 
@@ -41,11 +42,9 @@ async sub boom ($request) {
     die "an ordinary bug\n";
 }
 
-# The exception handler: errors the app expects become JSON; bugs keep the
-# stock 500. A response with no status of its own takes the error's.
-sub json_errors ($request) {
-    my $error = error_context($request);
-    return $error->default if $error->is_server_error;
+# The errors the app expects become JSON. A response with no status of its
+# own takes the error's.
+sub json_errors ($request, $error) {
     return response('JSON', { error => $error->message });
 }
 
@@ -55,5 +54,5 @@ compose(
         route('/boom' => \&boom),
     ],
     http_default => sub ($request) { response('JSON', { error => 'Not Found' }, status => 404) },
-    middleware => [middleware('ErrorHandler', handler => \&json_errors)],
+    middleware => [middleware('ErrorHandler', catch => { 'PAGI::Exception::HTTP' => \&json_errors })],
 );

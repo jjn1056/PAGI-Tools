@@ -79,26 +79,33 @@ subtest 'the built-in answer is plain text with no-store' => sub {
         'a RequestBody exception shows its client message and is handled';
 };
 
-subtest 'a Request-handler handler reads the error; a bare Response takes its status' => sub {
+subtest 'a catch entry gets the error; a bare Response takes its status' => sub {
     my ($status, $h, $body, $failure) = run(
         error => PAGI::Exception::RequestBody->new(message => 'bad'),
+        options => { catch => { 'PAGI::Exception::RequestBody' => sub { my ($request, $error) = @_;
+            response('JSON', { error => $error->message });
+        } } },
+    );
+    is [$status, $body, $failure], [400, '{"error":"bad"}', undef], 'handled';
+    ($status, $h, $body, $failure) = run(error => "db\n",
         options => { handler => sub { my ($request) = @_;
             response('JSON', { error => error_context($request)->message });
         } },
     );
-    is [$status, $body, $failure], [400, '{"error":"bad"}', undef];
+    is [$status, $body, $failure], [500, '{"error":"Internal Server Error"}', "db\n"],
+        'a handler reads an unhandled error with error_context, and it is re-raised';
 };
 
-subtest "a handler's explicit status and headers win" => sub {
-    my ($status, $h) = run(error => Local::Status->new(404), options => { handler => async sub { my ($request) = @_;
+subtest "an entry's explicit status and headers win" => sub {
+    my ($status, $h) = run(error => Local::Status->new(404), options => { catch => { 404 => async sub {
         response('Text', 'gone', status => 410, headers => ['X-Mine' => 1]);
-    } });
+    } } });
     is [$status, $h->{'x-mine'}], [410, 1];
 };
 
 subtest 'a Response shared across errors takes each error\'s status' => sub {
     my $page = response('Text', 'Something went wrong');
-    my %options = (handler => sub { my ($request) = @_; $page });
+    my %options = (handler => sub { $page }, catch => { 'PAGI::Exception::RequestBody' => sub { $page } });
     my ($status, undef, undef, $failure) = run(
         error => PAGI::Exception::RequestBody->new(message => 'bad'), options => \%options);
     is [$status, $failure], [400, undef], 'the first error: 400, handled';
@@ -116,29 +123,30 @@ subtest 'declining: the handler returns the built-in answer' => sub {
     is [$status, $body], [500, 'Internal Server Error'];
 };
 
-subtest 'a handler may return any application, Pages by choice' => sub {
-    my ($status, $h) = run(error => Local::Status->new(404), options => { handler => sub { my ($request) = @_;
-        PAGI::Pages->status(error_context($request)->status);
-    } }, scope => { type => 'http', method => 'GET', path => '/', headers => [['Accept', 'text/html']] });
+subtest 'an entry may return any application, Pages by choice' => sub {
+    my ($status, $h) = run(error => Local::Status->new(404), options => { catch => { 404 => sub { my ($request, $error) = @_;
+        PAGI::Pages->status($error->status);
+    } } }, scope => { type => 'http', method => 'GET', path => '/', headers => [['Accept', 'text/html']] });
     is [$status, $h->{'content-type'}], [404, 'text/html; charset=utf-8'];
 };
 
 subtest 'an app object handler reads the error from its scope' => sub {
-    my ($status, undef, $body) = run(error => Local::Status->new(409), options => { handler => as_app_object(async sub {
+    my ($status, undef, $body) = run(error => "db\n", options => { handler => as_app_object(async sub {
         my ($scope, $receive, $send) = @_;
-        await invoke_app(response('Text', 'native ' . error_context($scope)->status, status => 409),
+        my $status = error_context($scope)->status;
+        await invoke_app(response('Text', "native $status", status => $status),
             $scope, $receive, $send);
     }) });
-    is [$status, $body], [409, 'native 409'];
+    is [$status, $body], [500, 'native 500'];
 };
 
-subtest 're-raise follows the status actually sent' => sub {
-    my (undef, undef, undef, $failure) = run(error => Local::Status->new(400),
-        options => { handler => sub { my ($request) = @_; response('Text', 'x', status => 500) } });
-    is "$failure", 'status 400', 'a 400 answered 500 is re-raised';
-    (undef, undef, undef, $failure) = run(error => "db\n",
+subtest 're-raise follows whether the error was handled, not the status sent' => sub {
+    my ($status, undef, undef, $failure) = run(error => Local::Status->new(400),
+        options => { catch => { 400 => sub { response('Text', 'x', status => 500) } } });
+    is [$status, $failure], [500, undef], 'a handled 400 answered 500 is not re-raised';
+    ($status, undef, undef, $failure) = run(error => "db\n",
         options => { handler => sub { my ($request) = @_; response('Text', 'x', status => 404) } });
-    is $failure, undef, 'a 500 answered 404 is not';
+    is [$status, $failure], [404, "db\n"], 'an unhandled error answered 404 is re-raised';
 };
 
 subtest 'handler answering 200 is not re-raised but was reported' => sub {
@@ -151,7 +159,7 @@ subtest 'handler answering 200 is not re-raised but was reported' => sub {
         'an unset status takes the error status, 500, so it is re-raised; on_error saw it';
     ($status, undef, undef, $failure) = run(error => "db\n",
         options => { handler => sub { my ($request) = @_; response('Text', 'fine', status => 200) } });
-    is [$status, $failure], [200, undef], 'an explicit 200 is the handler\'s choice';
+    is [$status, $failure], [200, "db\n"], 'an explicit 200 is the handler\'s answer, and the error is still re-raised';
 };
 
 subtest 'claims outside 400-599 become 500, with or without a handler' => sub {
@@ -165,13 +173,13 @@ subtest 'claims outside 400-599 become 500, with or without a handler' => sub {
     }
 };
 
-subtest 'statuses needing a field the built-in answer lacks need a handler' => sub {
+subtest 'statuses needing a field the built-in answer lacks need a catch entry' => sub {
     for my $claim (401, 405, 407, 426) {
         my ($status) = run(error => Local::Status->new($claim));
-        is $status, 500, "claim $claim without a handler";
+        is $status, 500, "claim $claim without an entry";
         ($status) = run(error => Local::Status->new($claim),
-            options => { handler => sub { my ($request) = @_; response('Text', 'x') } });
-        is $status, $claim, "claim $claim with a handler";
+            options => { catch => { $claim => sub { response('Text', 'x') } } });
+        is $status, $claim, "claim $claim with an entry";
     }
     like dies { PAGI::Middleware::ErrorHandler->new(status => 405) }, qr/handler is required/;
     like dies { PAGI::Middleware::ErrorHandler->new(status => 302) }, qr/400 to 599/;
@@ -182,17 +190,19 @@ subtest 'a dying handler: last resort, warning, original re-raised' => sub {
         options => { handler => sub { my ($request) = @_; die "renderer\n" } });
     is [$status, $h->{'cache-control'}, $body, $failure], [500, 'no-store', "Internal Server Error\n", "db\n"];
     like $warnings->[0], qr/PAGI ErrorHandler handler failed: renderer/;
-    (undef, undef, undef, $failure) = run(error => PAGI::Exception::RequestBody->new(message => 'b'),
+    (undef, undef, undef, $failure, $warnings) = run(error => "db\n",
         options => { handler => sub { my ($request) = @_; 'not an app' } });
-    isa_ok($failure, ['PAGI::Exception::RequestBody'], 'a non-application answer is a handler failure');
+    is $failure, "db\n", 'a non-application answer is a handler failure; the original is re-raised';
+    like $warnings->[0], qr/PAGI ErrorHandler handler failed: ErrorHandler handler must return a PAGI application/,
+        'and it says so';
     ($status, undef, undef, $failure) = run(error => "db\n",
         options => { handler => as_app_object(async sub { return }) });
     is [$status, $failure], [500, "db\n"], 'an app that sends nothing';
 };
 
-subtest 'missing scope type reaches the handler as HTTP' => sub {
+subtest 'missing scope type reaches an entry as HTTP' => sub {
     my ($status, undef, $body) = run(error => Local::Status->new(404), scope => { path => '/' },
-        options => { handler => sub { my ($request) = @_; response('Text', $request->scope->{type}) } });
+        options => { catch => { 404 => sub { my ($request) = @_; response('Text', $request->scope->{type}) } } });
     is [$status, $body], [404, 'http'];
 };
 
@@ -227,7 +237,7 @@ subtest 'a 5xx PAGI::Exception::HTTP shows its reason phrase, not its client mes
     my $error = PAGI::Exception::HTTP->new(503, 'back in five minutes');
     my ($status, undef, $body, $failure) = run(error => $error);
     is [$status, $body], [503, 'Service Unavailable'];
-    is $failure, exact_ref($error), 're-raised for the server to log';
+    is $failure, undef, 'a handled HTTP error is not re-raised, whatever its status';
 };
 
 subtest 'PAGI::Exception::HTTP stringifies as status and text' => sub {
@@ -270,11 +280,11 @@ subtest 'a value with status_code and to_app is a fact; its to_app is never call
     is [$status, $body], [404, 'Not Found'];
 };
 
-subtest 'a thrown 503 page answers as thrown and is re-raised' => sub {
+subtest 'a thrown 503 page answers as thrown and is handled' => sub {
     my $page = response('Text', 'down for maintenance', status => 503);
     my ($status, undef, $body, $failure) = run(error => $page);
     is [$status, $body], [503, 'down for maintenance'];
-    is $failure, exact_ref($page), 're-raised for the server to log';
+    is $failure, undef, 'a thrown page is an expected outcome: not re-raised';
 };
 
 subtest 'a thrown Response without a status is a 200 early answer' => sub {
@@ -312,18 +322,19 @@ subtest 'a thrown redirect that fails to render goes through the error pipeline'
     use parent 'PAGI::Request';
 }
 
-subtest 'the handler receives the class the scope key builds' => sub {
+subtest 'an entry receives the class the scope key builds' => sub {
     my $seen;
-    my $handler = sub { my ($request) = @_; $seen = ref $request; return error_context($request)->default };
+    my $entry = sub { my ($request, $error) = @_; $seen = ref $request; return $error->default };
+    my $handler = { catch => { 'PAGI::Exception::RequestBody' => $entry } };
     my ($status, undef, undef, $failure, $warnings) = run(
         error   => PAGI::Exception::RequestBody->new(message => 'bad'),
-        options => { handler => $handler },
+        options => $handler,
         scope   => { type => 'http', method => 'GET', path => '/', headers => [],
             'pagi.request.factory' => sub { Local::AppRequest->new(@_) } },
     );
     is([$seen, $status, $failure, $warnings], ['Local::AppRequest', 400, undef, []],
         'a key: its class');
-    run(error => PAGI::Exception::RequestBody->new(message => 'bad'), options => { handler => $handler });
+    run(error => PAGI::Exception::RequestBody->new(message => 'bad'), options => $handler);
     is($seen, 'PAGI::Request', 'no key: PAGI::Request');
 };
 

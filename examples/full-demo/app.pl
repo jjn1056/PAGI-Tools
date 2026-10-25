@@ -5,7 +5,6 @@ use Future::AsyncAwait;
 use Future::IO;    # pagi-server binds the implementation
 
 use PAGI::Compose qw(compose);
-use PAGI::ErrorContext qw(error_context);
 use PAGI::Response qw(response);
 use PAGI::Routing qw(route websocket sse middleware);
 use PAGI::Routing::URL qw(path_for url_for);
@@ -156,17 +155,21 @@ sse('/events' => async sub {
 # Main Application with Lifespan
 # ============================================================================
 
+# How the client's mistakes look: a catch entry gets the Request and the error.
+sub json_error {
+    my ($request, $error) = @_;
+    return response('JSON', { error => $error->message });
+}
+
 compose(
     routes => \@routes,
     middleware => [
-        # The client's mistakes (a 4xx, such as a body that is not JSON) answer
-        # in JSON like the rest of the API; anything else gets the built-in
-        # plain-text answer, which the server also logs.
-        middleware('ErrorHandler', handler => sub {
-            my ($request) = @_;
-            my $error = error_context($request);
-            return $error->default if $error->is_server_error;
-            return response('JSON', { error => $error->message });
+        # The client's mistakes (an HTTP error, or a body that is not JSON)
+        # answer in JSON like the rest of the API; anything else gets the
+        # built-in plain-text 500, which the server also logs.
+        middleware('ErrorHandler', catch => {
+            'PAGI::Exception::HTTP'        => \&json_error,
+            'PAGI::Exception::RequestBody' => \&json_error,
         }),
     ],
     lifespan => {

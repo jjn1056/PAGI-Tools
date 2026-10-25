@@ -139,15 +139,15 @@ subtest 'direct Response factories replace the four HTTP shortcuts' => sub {
         'redirect constructs the complete response directly');
 };
 
-subtest 'ErrorHandler handler receives a Request and its explicit status wins' => sub {
+subtest 'an ErrorHandler catch entry receives a Request and its explicit status wins' => sub {
     my ($request_seen, $error_seen);
     my $error = Local::UpgradeStatusError->new(503);
     my $app = PAGI::Middleware::ErrorHandler->new(
-        handler => sub {
-            ($request_seen) = @_;
-            $error_seen = PAGI::ErrorContext->new($request_seen)->exception;
+        catch => { 503 => sub {
+            ($request_seen, my $context) = @_;
+            $error_seen = $context->exception;
             return response('Text', 'custom error', status => 409);
-        },
+        } },
     )->wrap(sub { die $error });
 
     my (@warnings, $response);
@@ -155,7 +155,7 @@ subtest 'ErrorHandler handler receives a Request and its explicit status wins' =
         local $SIG{__WARN__} = sub { push @warnings, @_ };
         $response = PAGI::Test::Client->new(app => $app)->get('/');
     }
-    is(\@warnings, [], 'the 503 error answered 409 is not re-raised: the status sent decides');
+    is(\@warnings, [], 'the 503 error, handled by its entry, is not re-raised');
     isa_ok($request_seen, 'PAGI::Request');
     is($error_seen, exact_ref($error), 'the error context carries the original error');
     is($response->status, 409,
