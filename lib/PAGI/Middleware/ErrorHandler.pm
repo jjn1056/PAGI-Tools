@@ -81,7 +81,8 @@ describes.
 
 An error a route's handler throws is handled at that route, with the route's
 own Request (see C<catch>). C<on_error> runs once for every error either
-boundary answers. ErrorHandler converts exceptions into responses; reporting
+boundary answers, except the router's own 404 and 405, which are answers,
+not application errors. ErrorHandler converts exceptions into responses; reporting
 is the server's, and C<on_error>'s for a tracker of your own: see
 L<PAGI::Tools::Cookbook/Who reports an application error>.
 
@@ -148,7 +149,8 @@ construction never consults C<PAGI_ENV>.
 =item * on_error (default: undef)
 
 Callback invoked as C<< $on_error->($error, $scope) >> once for every error
-ErrorHandler answers, handled or not: the original error, then the request
+ErrorHandler answers, handled or not -- except a routing miss (the router's
+own 404 or 405), so a tracker is not sent every scan for a missing page: the original error, then the request
 scope, so a reporter can record the path or a C<pagi.request_id> (present
 when L<PAGI::Middleware::RequestId> wraps this ErrorHandler; in Compose, when
 it wraps the compiled application). Immediate values and Futures are both
@@ -439,7 +441,11 @@ async sub _handle_exception {
     my $entry = $self->_catch_entry($error, $status, $http_error, 'exceptions');
     return 0 unless $entry || $http_error || defined $page_status;
 
-    await $self->_report_error($error, $scope);
+    # A routing miss -- the router's own 404 or 405, raised to an entry -- is
+    # an answer, not an application error: on_error does not hear of it, as
+    # it never did when the router answered it itself.
+    await $self->_report_error($error, $scope)
+        unless blessed($error) && $error->isa('PAGI::Routing::_Miss');
     my $error_scope = await $self->_error_scope($scope, $error, $status, $headers, $http_error);
     # Answered outside a Router's HEAD boundary (a routing miss under a bare
     # wrap, say), a HEAD answer must still send no body.

@@ -7,6 +7,7 @@ use Future::AsyncAwait;
 use lib 'lib';
 use lib 't/lib';
 use PAGITest::Invoke qw(invoke);
+use PAGI::Exception::HTTP;
 use PAGI::Middleware::ErrorHandler;
 use PAGI::Tools qw(compose middleware mount response route router);
 
@@ -106,6 +107,21 @@ subtest "an entry's own Allow is kept" => sub {
     my $app = compose(routes => \@routes, middleware => [middleware('ErrorHandler',
         catch => { 405 => sub { response('Text', 'nope', status => 405, headers => [Allow => 'GET']) } })])->to_app;
     is header_of(invoke($app, path => '/notes', method => 'DELETE'), 'Allow'), 'GET';
+};
+
+subtest "the router's own 404 and 405 are not reported to on_error; an application's thrown 404 is" => sub {
+    my @reported;
+    my $app = compose(
+        routes => [@routes, route('/gone' => sub { PAGI::Exception::HTTP->throw(404, 'gone') })],
+        middleware => [middleware('ErrorHandler',
+            on_error => sub { push @reported, ref($_[0]) || $_[0]; return },
+            catch    => $entries)],
+    )->to_app;
+    is invoke($app, path => '/nowhere')->{status}, 404, 'a routing 404, answered by the entry';
+    is invoke($app, path => '/notes', method => 'DELETE')->{status}, 405, 'a routing 405, answered by the entry';
+    is \@reported, [], 'neither reported: a routing miss is not an application error';
+    is invoke($app, path => '/gone')->{status}, 404;
+    is \@reported, ['PAGI::Exception::HTTP'], "a route's thrown 404 is reported";
 };
 
 done_testing;

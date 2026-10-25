@@ -249,7 +249,8 @@
     does: an outer catch table never reaches past an inner ErrorHandler or
     into a mounted Compose. When that innermost one has catch entries, the
     router raises its 404 and 405 (with Allow) to it, as Starlette's does;
-    with no entry for them they get the router's own plain answers. ErrorHandler's answers to HEAD send no body. A failing
+    with no entry for them they get the router's own plain answers. on_error
+    is not told of a routing miss. ErrorHandler's answers to HEAD send no body. A failing
     handler or entry fails as itself, outward, with one warning naming the
     error it displaced. Cookbook: "Re-render a form from an error handler";
     examples/internal-tool raises its board's errors and answers them in
