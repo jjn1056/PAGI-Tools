@@ -185,16 +185,17 @@ subtest 'statuses needing a field the built-in answer lacks need a catch entry' 
     like dies { PAGI::Middleware::ErrorHandler->new(status => 302) }, qr/400 to 599/;
 };
 
-subtest 'a dying handler: last resort, warning, original re-raised' => sub {
+subtest "a dying handler propagates its own failure; one that answers nothing gets the last resort" => sub {
     my ($status, $h, $body, $failure, $warnings) = run(error => "db\n",
         options => { handler => sub { my ($request) = @_; die "renderer\n" } });
-    is [$status, $h->{'cache-control'}, $body, $failure], [500, 'no-store', "Internal Server Error\n", "db\n"];
-    like $warnings->[0], qr/PAGI ErrorHandler handler failed: renderer/;
+    is [$status, $failure], [undef, "renderer\n"],
+        'nothing sent here, and the failure itself goes on (the next ErrorHandler out, or the server, answers it)';
+    is $warnings, [qq{PAGI ErrorHandler handler failed while answering "db": renderer\n}],
+        'one line names the displaced original';
     (undef, undef, undef, $failure, $warnings) = run(error => "db\n",
         options => { handler => sub { my ($request) = @_; 'not an app' } });
-    is $failure, "db\n", 'a non-application answer is a handler failure; the original is re-raised';
-    like $warnings->[0], qr/PAGI ErrorHandler handler failed: ErrorHandler handler must return a PAGI application/,
-        'and it says so';
+    like "$failure", qr/ErrorHandler handler must return a PAGI application/,
+        'a non-application answer is a handler failure, and that failure goes on';
     ($status, undef, undef, $failure) = run(error => "db\n",
         options => { handler => as_app_object(async sub { return }) });
     is [$status, $failure], [500, "db\n"], 'an app that sends nothing';

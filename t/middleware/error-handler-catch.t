@@ -121,14 +121,17 @@ subtest "a failing entry: its own failure goes on to the server-error boundary" 
         is(refaddr($reported->[0]), refaddr($error), "$label: on_error saw the original first");
         like("$reported->[1]", $why, "$label: then the failure");
         like("$failure", $why, "$label: the failure itself is re-raised");
-        is($warnings, [], "$label: nothing else to say");
+        like($warnings, [qr/\APAGI ErrorHandler catch entry failed while answering "409 Conflict": /],
+            "$label: one line names the displaced original");
     }
 };
 
-subtest 'a failing handler is still diagnosed as the handler' => sub {
-    my (undef, undef, undef, undef, $warnings) = run(error => "db down\n",
+subtest "a failing handler propagates its own failure" => sub {
+    my (undef, undef, $failure, undef, $warnings) = run(error => "db down\n",
         options => { catch => { 'MyApp::Error' => bare('no') }, handler => sub { die "handler broke\n" } });
-    like($warnings, [ qr/ErrorHandler handler failed: handler broke/ ], 'the handler');
+    is($failure, "handler broke\n", 'the failure, not the original');
+    is($warnings, [qq{PAGI ErrorHandler handler failed while answering "db down": handler broke\n}],
+        'one line names the displaced original');
 };
 
 subtest 'a field-required status answered by an entry' => sub {

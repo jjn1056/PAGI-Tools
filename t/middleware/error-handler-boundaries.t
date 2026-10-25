@@ -10,6 +10,7 @@ use PAGITest::Invoke qw(invoke refresh);
 use PAGI::Exception::HTTP;
 use PAGI::Middleware::ErrorHandler;
 use PAGI::Response qw(response);
+use PAGI::Utils ();
 
 # ErrorHandler is two boundaries, as Starlette's application stack is:
 # - the exception boundary handles an expected error -- a registered catch
@@ -108,6 +109,8 @@ subtest 'on_error runs before the answer, in both boundaries' => sub {
 };
 
 subtest "an entry's own failure goes outward, and handler answers it" => sub {
+    my @warnings;
+    local $SIG{__WARN__} = sub { push @warnings, @_ };
     my @reported;
     my $app = PAGI::Middleware::ErrorHandler->new(
         on_error => sub { push @reported, ref($_[0]) || $_[0] },
@@ -118,6 +121,61 @@ subtest "an entry's own failure goes outward, and handler answers it" => sub {
     is [$r->{status}, $r->{body}], [500, 'handler answered'], 'the failure is answered by handler';
     is \@reported, ['Local::Conflict', "template failed\n"], 'on_error: the conflict, then the failure';
     is(($r->{future}->failure)[0], "template failed\n", 'the failure itself goes to the server');
+};
+
+subtest "a failing handler propagates its own failure, not a fallback and the original" => sub {
+    my @warnings;
+    local $SIG{__WARN__} = sub { push @warnings, @_ };
+    my (@inner, @outer);
+    my $inner = PAGI::Middleware::ErrorHandler->new(
+        on_error => sub { push @inner, $_[0] },
+        handler  => sub { die "renderer broke\n" },
+    );
+    my $outer = PAGI::Middleware::ErrorHandler->new(
+        on_error => sub { push @outer, $_[0] },
+        handler  => sub { response('Text', 'outer answered') },
+    );
+    my $r = invoke($outer->wrap($inner->wrap(failing_with("db down\n"))));
+    is [$r->{status}, $r->{body}], [500, 'outer answered'], 'the next ErrorHandler out answers the failure';
+    is \@inner, ["db down\n"], 'the inner one reported the original';
+    is \@outer, ["renderer broke\n"], 'the outer one, the failure';
+    is(($r->{future}->failure)[0], "renderer broke\n", 'the failure goes on to the server');
+
+    $r = invoke($inner->wrap(failing_with("db down\n")));
+    is scalar(@{ $r->{events} }), 0, 'with nothing outside, nothing is sent here (the server answers)';
+    is(($r->{future}->failure)[0], "renderer broke\n", 'and the server gets the failure');
+    is scalar(grep { /handler failed while answering "db down": renderer broke/ } @warnings), 2,
+        'each time, the displaced original is named once';
+};
+
+subtest "a displaced original is named in one line, wherever the answer fails" => sub {
+    my @warnings;
+    local $SIG{__WARN__} = sub { push @warnings, @_ };
+    my $r = invoke(PAGI::Middleware::ErrorHandler->new(
+        handler => sub { die "the 500 template failed\n" },
+    )->wrap(failing_with("an ordinary bug\n")));
+    is \@warnings, [qq{PAGI ErrorHandler handler failed while answering "an ordinary bug": the 500 template failed\n}],
+        'the server-error boundary: the handler';
+    is(($r->{future}->failure)[0], "the 500 template failed\n", 'and the failure goes on untouched');
+
+    @warnings = ();
+    $r = invoke(PAGI::Middleware::ErrorHandler->new(
+        catch => { 'Local::Conflict' => sub { die "the conflict page failed\n" } },
+    )->wrap(failing_with(Local::Conflict->new)));
+    is scalar(@warnings), 1, 'the exception boundary: one line';
+    like $warnings[0], qr/\APAGI ErrorHandler catch entry failed while answering "Local::Conflict=HASH\(0x[0-9a-f]+\)": the conflict page failed$/,
+        'naming the entry, the original and the failure';
+};
+
+subtest 'a handler that answers nothing: the last resort, and the original' => sub {
+    my $warnings = [];
+    local $SIG{__WARN__} = sub { push @$warnings, @_ };
+    my $r = invoke(PAGI::Middleware::ErrorHandler->new(
+        handler => PAGI::Utils::as_app_object(async sub { return }),
+    )->wrap(failing_with("db down\n")));
+    is $r->{status}, 500, 'the last resort';
+    is(($r->{future}->failure)[0], "db down\n", 'the original is rethrown');
+    like $warnings->[0], qr/finished without starting a response/, 'and it says so';
 };
 
 subtest 'two requests at once through one ErrorHandler keep their own state' => sub {

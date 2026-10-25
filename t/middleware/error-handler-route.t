@@ -220,4 +220,17 @@ subtest "the route classifies quietly: a rejected status is diagnosed once, wher
     is scalar(grep { /must carry WWW-Authenticate/ } @warnings), 1, 'diagnosed once';
 };
 
+subtest 'a failing entry at the route names the displaced original once' => sub {
+    my @warnings;
+    local $SIG{__WARN__} = sub { push @warnings, @_ };
+    my $app = compose(
+        routes => [route('/' => sub { die Local::Conflict->new })],
+        middleware => [middleware('ErrorHandler', catch => { 'Local::Conflict' => sub { die "the page failed\n" } })],
+    );
+    my $res = PAGI::Test::Client->new(app => $app)->get('/');
+    is $res->status, 500, 'answered further out';
+    is scalar(grep { /catch entry failed while answering "Local::Conflict=HASH.*": the page failed/ } @warnings), 1,
+        'one line names the original and the failure';
+};
+
 done_testing;

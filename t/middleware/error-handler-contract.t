@@ -438,10 +438,10 @@ subtest 'last-resort send failures propagate without retry' => sub {
         my $send_error = bless {}, 'Local::LastResortSendFailure';
         my @reported;
         my @attempted;
-        # A handler that dies sends the last resort.
+        # A handler that answers nothing gets the last resort.
         my $middleware = PAGI::Middleware::ErrorHandler->new(
             on_error => sub { push @reported, $_[0]; return Future->done },
-            handler  => sub { die "renderer failure\n" },
+            handler  => PAGI::Utils::as_app_object(async sub { return }),
         );
         my $future;
         {

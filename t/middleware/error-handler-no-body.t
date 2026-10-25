@@ -15,9 +15,11 @@ use PAGI::Tools qw(compose middleware response route);
 # naming the handler's line.
 
 my $read_line;
+# raise => 0 keeps the response of an error that is answered and rethrown.
 sub client_with {
     my (%error_handler) = @_;
-    return PAGI::Test::Client->new(app => compose(
+    my $raise = exists $error_handler{raise} ? delete $error_handler{raise} : 1;
+    return PAGI::Test::Client->new(raise_app_exceptions => $raise, app => compose(
         routes => [route('/' => async sub {
             my ($request) = @_;
             await $request->form_params;
@@ -34,12 +36,13 @@ subtest 'a handler that reads the body dies at once, naming its line' => sub {
         my $form = await $request->form_params;
         return response('Text', 'handled ' . ($form->get('title') // '(none)'), status => 500);
     });
-    my $res;
-    my $warnings = warnings { $res = $client->post('/', form => { title => 'hi' }) };
-    is $res->status, 500, 'the last-resort 500';
-    like $warnings->[0],
-        qr/\APAGI ErrorHandler handler failed: ErrorHandler handlers read the request's headers, not its body: the body was the application's at \Q${\__FILE__}\E line \Q$read_line\E\./,
-        'the warning says why and where';
+    my @warnings;
+    local $SIG{__WARN__} = sub { push @warnings, @_ };
+    like dies { $client->post('/', form => { title => 'hi' }) },
+        qr/\AErrorHandler handlers read the request's headers, not its body: the body was the application's at \Q${\__FILE__}\E line \Q$read_line\E\./,
+        'the failure the server gets says why and where';
+    like \@warnings, [qr/\APAGI ErrorHandler handler failed while answering "the route failed": ErrorHandler handlers read/],
+        'and one line names the error it was answering';
 };
 
 subtest 'so does a catch entry' => sub {
@@ -48,15 +51,17 @@ subtest 'so does a catch entry' => sub {
         await $request->body;
         return response('Text', 'caught');
     } });
-    my $res;
-    my $warnings = warnings { $res = $client->post('/', form => { title => 'hi' }) };
-    is $res->status, 500, 'the last-resort 500';
-    like $warnings->[0], qr/\APAGI ErrorHandler catch entry failed: ErrorHandler handlers read the request's headers, not its body/,
-        'the warning says why';
+    my @warnings;
+    local $SIG{__WARN__} = sub { push @warnings, @_ };
+    like dies { $client->post('/', form => { title => 'hi' }) },
+        qr/\AErrorHandler handlers read the request's headers, not its body/,
+        'the failure the server gets says why';
+    like \@warnings, [qr/\APAGI ErrorHandler catch entry failed while answering "the route failed": /],
+        'and one line names the error it was answering';
 };
 
 subtest 'a handler that reads only the headers answers' => sub {
-    my $client = client_with(handler => sub {
+    my $client = client_with(raise => 0, handler => sub {
         my ($request) = @_;
         return response('Text', 'handled ' . $request->method, status => 503);
     });

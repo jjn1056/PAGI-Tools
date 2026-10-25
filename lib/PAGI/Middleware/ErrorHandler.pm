@@ -320,15 +320,48 @@ async sub _handle_exception {
     await $self->_report_error($error, $scope);
     my $error_scope = await $self->_error_scope($scope, $error, $status, $headers, $http_error);
     my $context = PAGI::ErrorContext->new($error_scope);
-    if ($entry) {
-        $request //= PAGI::Request::_Factory::request_for_scope($error_scope, \&_no_body);
-        my $answer = await Future->wrap($entry->($request, $context));
-        await _send_answer($answer, $context, 'ErrorHandler catch entry', $error_scope, $receive, $send);
-    }
-    else {
-        await PAGI::Utils::invoke_app($context->default, $error_scope, $receive, $send);
+    my $answered = eval {
+        if ($entry) {
+            $request //= PAGI::Request::_Factory::request_for_scope($error_scope, \&_no_body);
+            my $answer = await Future->wrap($entry->($request, $context));
+            await _send_answer($answer, $context, 'ErrorHandler catch entry', $error_scope, $receive, $send);
+        }
+        else {
+            await PAGI::Utils::invoke_app($context->default, $error_scope, $receive, $send);
+        }
+        1;
+    };
+    unless ($answered) {
+        my $failure = $@;    # before the warn's own eval resets $@
+        _warn_displaced($entry ? 'catch entry' : 'built-in answer', $error, $failure);
+        _reraise($failure);
     }
     return 1;
+}
+
+# An answer's own failure goes outward as itself, and the error it was
+# answering would leave the server log: one line names both. Perl has no
+# exception chaining (Python's __context__ prints both), so this line is the
+# record. It goes to warn, ErrorHandler's diagnostic channel (pagi-server's
+# --error-log captures it), not on_error, which already had the original.
+sub _warn_displaced {
+    my ($answerer, $original, $failure) = @_;
+    eval {
+        my ($was, $now) = map { _describe_error($_) } $original, $failure;
+        warn "PAGI ErrorHandler $answerer failed while answering \"$was\": $now\n";
+        1;
+    };
+    return;
+}
+
+# An error as one line of text; one whose stringification dies is named by
+# its class.
+sub _describe_error {
+    my ($error) = @_;
+    my $text = eval { "$error" };
+    $text = ref($error) || 'an error' unless defined $text;
+    chomp $text;
+    return $text;
 }
 
 # Runs a route's work -- $run->($send), returning a Future -- so that an error
@@ -441,17 +474,21 @@ sub _wrap_server_errors {
             await $self->_answer_server_error($error_scope, $receive, $wrapped_send);
             1;
         };
-        my $handler_failure = $answered ? undef : $@;
-        if (!$answered || !$started) {
-            # The handler failed, or finished without answering: send the
-            # last resort if nothing went out, and report the error that
-            # started it, not the renderer's.
-            my $reason = defined($handler_failure)
-                ? "$handler_failure" : "it finished without starting a response\n";
-            chomp $reason;
+        # The answer's own failure goes outward as itself, as Starlette lets a
+        # failing handler's exception escape: the next ErrorHandler out
+        # answers it, or the server does. One line names the error it was
+        # answering, which would otherwise leave the server log.
+        unless ($answered) {
+            my $failure = $@;    # before the warn's own eval resets $@
+            _warn_displaced($error_scope->{'pagi.error'}{answered_by} // 'handler', $error, $failure);
+            _reraise($failure);
+        }
+        unless ($started) {
+            # It finished without answering: the last resort, and the error
+            # that started it.
             my $answerer = $error_scope->{'pagi.error'}{answered_by} // 'handler';
-            eval { warn "PAGI ErrorHandler $answerer failed: $reason\n"; 1 };
-            await $self->_send_last_resort($wrapped_send) unless $started;
+            eval { warn "PAGI ErrorHandler $answerer failed: it finished without starting a response\n"; 1 };
+            await $self->_send_last_resort($wrapped_send);
         }
         _reraise($error);
     };
@@ -487,6 +524,7 @@ async sub _answer_server_error {
         my $answer = await Future->wrap($handler->(PAGI::Request::_Factory::request_for_scope($scope, \&_no_body)));
         return await _send_answer($answer, $context, 'ErrorHandler handler', $scope, $receive, $send);
     }
+    $error->{answered_by} = 'built-in answer';
     return await PAGI::Utils::invoke_app($context->default, $scope, $receive, $send);
 }
 
