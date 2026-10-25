@@ -43,7 +43,14 @@ subtest 'the After runs as published' => sub {
         ['create',         'post', '/notes',   [json => { text => 'hi' }]],
         ['read back',      'get',  '/notes/1', []],
     );
+    $client->post('/login');
+    my $bad = $client->post('/notes', body => '{not json', headers => { 'Content-Type' => 'application/json' });
     $client->stop;
+    # 0.002002's content_type => 'application/json' answered every error in
+    # JSON (there a bad body was a plain die, so a 500); the After keeps the
+    # JSON, with the 400 a bad body now is.
+    is([$bad->status, $bad->header('Content-Type'), $bad->json], [400, 'application/json', { error => 'The request body is not valid JSON.' }],
+        "a bad body still answers in JSON, as content_type => 'application/json' did");
     is(\@seen, [
         ['home', 200], ['missing note', 404], ['anonymous post', 401],
         ['login', 200], ['create', 201], ['read back', 200],

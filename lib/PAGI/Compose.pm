@@ -306,12 +306,23 @@ configuration for deferred construction or synchronous factory execution;
 C<middleware($object)> accepts an already configured object with C<wrap>.
 This is application middleware, not router middleware. It
 sees HTTP, WebSocket, SSE, lifespan, and application-defined extension scopes.
-Router-owned 404 and 405 responses travel outward through this complete stack.
-An author error renderer is inside earlier listed author middleware, so those
-earlier wrappers see its response. Compose's emergency ErrorHandler is outside
-the complete author stack and does not send its safety response inward through
-author middleware. Protocol-specific middleware must pass unrelated scope
-types through.
+Responses travel outward through this complete stack. A stock
+L<PAGI::Middleware::ErrorHandler> listed here is taken out of the list,
+wherever it is, and split as Starlette builds an application: its exception
+boundary (C<catch>, and HTTP errors' built-in answers) is around the root
+Router, inside every application middleware; its server-error boundary
+(C<handler>, C<on_error>, the 500) is outside them all. So an application
+middleware's error is answered by C<handler>, never by C<catch>, and nothing
+an application middleware adds -- a scope key, a response header -- reaches
+that 500. Middleware that must cover server-error responses, such as
+RequestId, AccessLog, SecurityHeaders or CORS, wrap the compiled application
+instead (C<< PAGI::Middleware::RequestId->new->wrap($compose->to_app) >>; see
+L<PAGI::Tools::Cookbook/Compose Safety and Application Error Policy>). One
+stock ErrorHandler per Compose: a second dies at C<to_app>. A subclass of
+ErrorHandler is not split and wraps what follows it where it is listed.
+Compose's emergency ErrorHandler is outside the complete author stack and
+does not send its safety response inward through author middleware.
+Protocol-specific middleware must pass unrelated scope types through.
 
 For router-only middleware, construct a Router with its own C<middleware> list
 and preserve it through an explicit root Mount.
@@ -368,12 +379,18 @@ deliberately captured by user coderefs remains ordinary shared Perl state.
 For HTTP, the exact outer-to-inner order is:
 
   outer idempotent application-root HEAD wire boundary
-    ErrorHandler
-      response-completion guard
-        first application middleware
-          second application middleware
-            Compose dispatcher
-              Compose root Router
+    emergency ErrorHandler, server errors only
+      the configured ErrorHandler's server-error boundary, if any
+        response-completion guard
+          first application middleware
+            second application middleware
+              an ErrorHandler's exception boundary
+                Compose dispatcher
+                  Compose root Router
+
+The exception boundary is the configured ErrorHandler's; without one, the
+emergency ErrorHandler's own (it has no C<catch> entries), unless a subclass
+of ErrorHandler is among the application middleware.
 
 The application-root HEAD boundary is outermost and idempotent with a directly
 compiled Router's own HeadBoundary; the outermost participating boundary owns
@@ -477,13 +494,15 @@ enable it accidentally.
 
 Constructor validation and C<to_app> compilation errors are synchronous.
 Every compiled Compose root has one unconditional HTTP safety boundary. There
-is no public option to suppress, detect, configure, or disable it, and Compose
-does not inspect author middleware to decide whether to install it.
+is no public option to suppress, detect, configure, or disable it. Compose
+looks at its author middleware only to find a stock ErrorHandler to split.
 
-Routing outcomes belong to the root Router and pass through Compose unchanged.
-Compose does not inspect routing metadata, distinguish Router 404/405 from
-other application responses, or turn a silent selected Route or Mount
-application into a routing miss.
+Routing outcomes belong to the root Router. With an ErrorHandler that has
+C<catch> entries, the Router raises its 404 and 405 (with C<Allow>) as HTTP
+errors to the exception boundary, as Starlette's router does; with no entry
+for them they get the Router's own plain answers, unchanged. Compose does not
+inspect routing metadata or turn a silent selected Route or Mount application
+into a routing miss.
 Normal completion without a valid response lifecycle throws
 L<PAGI::Exception::IncompleteResponse>. Before response start, that exception,
 request-target failures, failed Futures, author-middleware failures, and author
@@ -509,34 +528,38 @@ replaced safely. Compose sends no second response start and rethrows the
 original value so the server can abort the incomplete stream.
 The completion guard never replaces an inner exception.
 
-Install ordinary author middleware for the application's official error
-policy:
+Install an ErrorHandler for the application's official error policy, and
+wrap Compose in the middleware that must cover its responses:
 
-    use PAGI::ErrorContext qw(error_context);
+    use PAGI::Middleware::AccessLog;
+    use PAGI::Middleware::RequestId;
+    use PAGI::Middleware::SecurityHeaders;
     use PAGI::Response qw(response);
 
-    middleware => [
-        middleware('RequestId'),
-        middleware('AccessLog'),
-        middleware('SecurityHeaders'),
-        middleware('ErrorHandler',
-            handler  => sub {
-                my ($request) = @_;
-                my $error = error_context($request);
-                return $error->default if $error->is_server_error;
-                return response('JSON', { error => $error->message });
-            },
-            on_error => \&report_error),
-    ]
+    my $composed = compose(
+        routes     => \@routes,
+        middleware => [
+            middleware('ErrorHandler',
+                catch    => { 'PAGI::Exception::HTTP' => sub {
+                    my ($request, $error) = @_;
+                    return response('JSON', { error => $error->message },
+                        headers => $error->exception->headers);
+                } },
+                handler  => \&server_error,
+                on_error => \&report_error),
+        ],
+    );
+    my $app = PAGI::Middleware::RequestId->new->wrap(
+        PAGI::Middleware::AccessLog->new->wrap(
+            PAGI::Middleware::SecurityHeaders->new->wrap($composed->to_app)));
 
-This handler runs inside the root last resort. Earlier listed author
-middleware can attach request identity, log, add security headers, or otherwise
-observe its response. If custom policy fails or leaves HTTP unanswered, the
-root boundary still protects the deployed application. Both the author and
-root error layers remain installed; an inner response makes the outer layer
-inert rather than triggering a duplicate start. Configure Router
-C<http_default> when application presentation needs a custom routing 404;
-Router-generated 405 remains Router-owned. Lifespan callback failures retain
+The C<catch> entry answers the errors the application expects, routing 404
+and 405 included; C<handler> answers the rest. The handler runs inside the
+root last resort: if custom policy fails or leaves HTTP unanswered, the root
+boundary still protects the deployed application. Both the author and root
+error layers remain installed; an inner response makes the outer layer inert
+rather than triggering a duplicate start. C<http_default> still answers a
+routing 404 before any entry sees it. Lifespan callback failures retain
 the separate lifespan failure-event behavior documented above, and non-HTTP
 target failures retain their existing propagation behavior.
 

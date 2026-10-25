@@ -37,8 +37,9 @@ time (see [pagi.connection](#breaking-pagisse-and-pagiwebsocket-require-pagiconn
 
 **Changed behaviour:**
 
-- ErrorHandler re-raises server errors, answers in plain text unless its
-  `handler` (reading `error_context($request)`) answers, and loses
+- ErrorHandler re-raises unhandled errors, answers in plain text unless a
+  `catch` entry (the errors the application expects) or its `handler` (the
+  rest, reading `error_context($request)`) answers, and loses
   `content_type` ([ErrorHandler](#breaking-errorhandler-re-raises-server-errors)).
 - Stock refusals and error responses are plain text, each replaceable by one
   option ([changed defaults](#audit-changed-first-party-defaults)).
@@ -532,8 +533,10 @@ handler => sub {
 }
 ```
 
-**After:** it is a Request handler: it receives a Request, reads the error
-with `error_context($request)`, and returns a Response (or any application).
+**After:** the errors the application expects -- HTTP errors, its own
+exception classes -- get `catch` entries, each given a Request and the
+error; `handler` answers the rest, the unhandled errors, and reads the error
+with `error_context($request)`. Both return a Response (or any application).
 A Response that sets no status is sent with the error's; an explicit status
 wins.
 
@@ -541,11 +544,16 @@ wins.
 use PAGI::ErrorContext qw(error_context);
 use PAGI::Response qw(response);
 
+catch => {
+    'PAGI::Exception::HTTP' => sub {
+        my ($request, $error) = @_;
+        return response('JSON', { error => $error->message },
+            headers => $error->exception->headers);   # a 405's Allow, say
+    },
+},
 handler => sub {
     my ($request) = @_;
-    my $error = error_context($request);
-    return $error->default if $error->is_server_error;   # the built-in answer
-    return response('JSON', { error => $error->message });
+    return response('JSON', { error => error_context($request)->message });
 }
 ```
 
@@ -975,9 +983,8 @@ Terminal state now comes from that connection:
 
 ## Breaking: ErrorHandler re-raises server errors
 
-ErrorHandler still renders the error page, but after a **server error**
-(status 500 or above) it re-raises the original exception so the server
-reports it:
+ErrorHandler still renders the error page, but after an **unhandled error**
+it re-raises the original exception so the server reports it:
 
 ```text
 # Before: a bare warn from inside PAGI-Tools
@@ -987,9 +994,21 @@ PAGI application error: database unreachable
 PAGI application error (after response complete): database unreachable
 ```
 
-- An exception claiming a 4xx `status_code` is a handled outcome: rendered,
-  not re-raised, not logged.
-- `on_error` runs before rendering and now receives `($error, $scope)`.
+- An HTTP error (a `status_code` claim from 400 to 599), a thrown page and an
+  error a `catch` entry answers are handled outcomes, whatever their status:
+  answered, not re-raised, not logged.
+- `on_error` runs before rendering, for every error, and now receives
+  `($error, $scope)`.
+- In Compose, the ErrorHandler is split around the application middleware:
+  `catch` inside them, around the router; `handler`, `on_error` and the 500
+  outside them all. Nothing an application middleware adds reaches the 500,
+  so RequestId, AccessLog and middleware that set response headers (CORS,
+  SecurityHeaders) wrap the compiled application when they must cover it:
+
+  ```perl
+  my $app = PAGI::Middleware::RequestId->new->wrap(
+      PAGI::Middleware::AccessLog->new->wrap($compose->to_app));
+  ```
 - An exception **after** the response has started is no longer swallowed:
   ErrorHandler awaits `on_error`, sends nothing more, and rethrows, so the
   server aborts the stream. Code that calls a wrapped application directly
@@ -1011,7 +1030,8 @@ like $warnings[0], qr/^exception after response completed: database unreachable/
 ### Replace ErrorHandler content_type
 
 `content_type` is removed; the built-in answer is plain text. To answer
-another way, use `handler`:
+another way, give the errors the application expects a `catch` entry and the
+rest a `handler`:
 
 ```perl
 # Before
@@ -1022,19 +1042,27 @@ use PAGI::ErrorContext qw(error_context);
 use PAGI::Response qw(response);
 
 enable 'ErrorHandler',
+    # HTTP errors. An entry answers in full: it passes on the error's
+    # headers (a 405's Allow).
+    catch => {
+        'PAGI::Exception::HTTP' => sub {
+            my ($request, $error) = @_;
+            return response('JSON', { error => $error->message },
+                headers => $error->exception->headers);
+        },
+    },
+    # Everything else: the unhandled errors, the 500.
     handler => sub {
         my ($request) = @_;
-        my $error = error_context($request);
-        return $error->default if $error->is_server_error;
-        return response('JSON', { error => $error->message });
+        return response('JSON', { error => error_context($request)->message });
     };
 ```
 
 Use `response('HTML', ...)` or `response('Text', ...)` the same way for the other two.
-An exception's `status_code` is kept when it is 400-599; without a handler,
-401, 405, 407 and 426 (which need a field the built-in answer lacks) fall
-back to 500, as does anything malformed. The error is re-raised to the server
-when the status sent is 500 or above.
+An exception's `status_code` is kept when it is 400-599; for the built-in
+answer, 401, 405, 407 and 426 (which need a field it lacks) fall back to
+500, as does anything malformed. An HTTP error is handled whatever its
+status, and not re-raised; an unhandled error is re-raised to the server.
 
 ## Pages replaces the stock response applications
 
@@ -1084,10 +1112,10 @@ App::File's 416 `Content-Range`.
 |---|---|
 | CSRF, TrustedHosts, HTTPSRedirect, ReverseProxy, RateLimit, ContentNegotiation, App::WrapCGI, App::File (Static, Directory), Requires | `refuse` |
 | Maintenance | `response` |
-| Router and Compose (404) | `http_default` |
+| Router and Compose (404) | `http_default`, or an ErrorHandler `catch` entry for 404 |
 | URLMap | `default` |
-| ErrorHandler | `handler` |
-| Router 405 | a middleware around the Router; Endpoint::HTTP overrides `method_not_allowed` |
+| ErrorHandler | `catch` entries; `handler` for unhandled errors |
+| Router 405 | an ErrorHandler `catch` entry for 405, or a middleware around the Router; Endpoint::HTTP overrides `method_not_allowed` |
 URLMap with no default, on a WebSocket or SSE scope, now croaks instead of
 sending `http.response.*` on another protocol.
 

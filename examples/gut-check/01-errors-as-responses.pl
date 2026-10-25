@@ -11,10 +11,10 @@
 # all: it answers itself. An ordinary bug is not an HTTP error: it gets the
 # stock 500, and the server logs it.
 #
-# A path no route matches is not an error here: http_default answers it, so
-# the entry never sees it. A wrong method is: the router raises its 405, and
-# the entry passes on the error's headers, which carry the Allow a 405 must
-# have (an entry answers in full, as a Starlette exception handler does).
+# A path no route matches, or a method a matched path does not allow, reaches
+# the entry too: with catch entries, the router raises its 404 and 405, as
+# Starlette's does. The entry answers in full, as a Starlette exception
+# handler does, so it passes on the error's headers: the Allow a 405 must have.
 #
 # The Starlette version is in README.md.
 #
@@ -23,6 +23,7 @@
 #       curl -i localhost:5000/notes/9      # 404, thrown from deep in the model
 #       curl -i localhost:5000/boom         # an ordinary bug: the stock 500
 #       curl -i localhost:5000/nope         # no route: the router's 404, same JSON shape
+#       curl -i -X POST localhost:5000/notes/1   # a wrong method: 405 in JSON, with Allow
 
 use v5.40;
 use Future::AsyncAwait;
@@ -55,6 +56,5 @@ compose(
         route('/notes/{id}' => \&show),
         route('/boom' => \&boom),
     ],
-    http_default => sub ($request) { response('JSON', { error => 'Not Found' }, status => 404) },
     middleware => [middleware('ErrorHandler', catch => { 'PAGI::Exception::HTTP' => \&json_errors })],
 );

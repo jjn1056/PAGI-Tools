@@ -367,8 +367,6 @@ subtest 'Streaming Response Formats recipe executes as published' => sub {
 subtest 'Thrown pages recipe executes as published' => sub {
     my $recipe = code_block_containing($cookbook,
         '=head3 Thrown pages and house-styled errors', "middleware('ErrorHandler'");
-    my $miss = code_block_containing($cookbook,
-        '=head3 Thrown pages and house-styled errors', 'http_default');
     perl_script_runs(
         'thrown pages recipe',
         "use PAGI::Compose qw(compose);\nuse PAGI::Routing qw(middleware route);\n"
@@ -380,7 +378,7 @@ subtest 'Thrown pages recipe executes as published' => sub {
             . "    route('/plack' => sub { die Local::PlackStyle->new }),\n"
             . "    route('/page' => sub { die response('Text', 'down', status => 503) }),\n"
             . "    route('/fact' => sub { die PAGI::Exception::HTTP->new(404, 'nope') }),\n"
-            . "],\n" . $miss . ");\n"
+            . "]);\n"
             . "local \$SIG{__WARN__} = sub {};\n"
             . "my \$client = PAGI::Test::Client->new(app => \$app);\n"
             . "my \$res = \$client->get('/plack');\n"
@@ -394,7 +392,23 @@ subtest 'Thrown pages recipe executes as published' => sub {
             . "die 'a wrong method gets the house style and keeps Allow' unless \$res->status == 405\n"
             . "    && \$res->json->{error} eq 'Method Not Allowed' && (\$res->header('Allow') // '') eq 'GET, HEAD';\n"
             . "\$res = \$client->get('/nope');\n"
-            . "die 'a routing miss gets it from http_default' unless \$res->status == 404 && \$res->json->{error} eq 'Not Found';\n",
+            . "die 'a routing miss reaches the entry' unless \$res->status == 404 && \$res->json->{error} eq 'Not Found';\n",
+    );
+};
+
+subtest 'Re-render a form from an error handler recipe executes as published' => sub {
+    my $recipe = first_code_block($cookbook, '=head3 Re-render a form from an error handler');
+    perl_script_runs(
+        're-render a form recipe',
+        $recipe
+            . "use PAGI::Test::Client;\n"
+            . "my \$client = PAGI::Test::Client->new(app => \$app);\n"
+            . "my \$res = \$client->post('/tasks', form => { title => 'Rotate <the> key' });\n"
+            . "die 'a new title redirects' unless \$res->status == 303;\n"
+            . "\$res = \$client->post('/tasks', form => { title => 'rotate <THE> key' });\n"
+            . "die 'a taken title is a 409' unless \$res->status == 409;\n"
+            . "die 'with the error, escaped' unless index(\$res->text, 'There is already a task called &#34;rotate &#60;THE&#62; key&#34;.') >= 0;\n"
+            . "die 'and the form with what was typed' unless index(\$res->text, 'value=\"rotate &#60;THE&#62; key\"') >= 0;\n",
     );
 };
 

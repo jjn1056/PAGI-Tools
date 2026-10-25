@@ -288,7 +288,11 @@ Both `/apples` and `/apples/` reach the child `/` index.
 returns the application JSON rather than a routing response.
 
 The Compose-level `RequestId` middleware adds `X-Request-ID` to every HTTP
-response. The exported functional middleware in
+response the application answers. A server error's 500 is rendered outside
+Compose's middleware, so it carries none, as in Starlette, where
+`ServerErrorMiddleware` is outside the user middleware; to cover it, wrap the
+compiled application instead
+(`PAGI::Middleware::RequestId->new->wrap($compose->to_app)`). The exported functional middleware in
 [`lib/AppleApp/Middleware.pm`](lib/AppleApp/Middleware.pm) wraps only the
 `/apples` mount and adds `X-Apples-API: 1`, demonstrating that middleware can
 be global or scoped to one routing boundary. It sets the header with

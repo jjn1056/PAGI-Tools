@@ -25,7 +25,7 @@ in [UPGRADING-REFERENCE.md](UPGRADING-REFERENCE.md).
 | `Test::WebSocket`: a dying app's disconnect detail was the whole exception | its first line without " at FILE line N", as `Test::SSE` and PAGI-Server record it ([details](UPGRADING-REFERENCE.md#running-against-pagi-server-0002007)) |
 | `Test::SSE`/`Test::WebSocket` `is_closed` true only after the test's `close` (or, for WebSocket, the app's `websocket.close`) | also true when the app returns, dies or refuses; sent events stay readable ([details](UPGRADING-REFERENCE.md#running-against-pagi-server-0002007)) |
 | `Test::Client`: an HTTP handler waiting on its own event loop (an IO::Async timer) completed without setup | bind Future::IO to that loop in the test: `use Future::IO::Impl::IOAsync`; then WebSocket, SSE and lifespan waits run it too (PAGI::Test::Client, "Testing an application that commits to an event loop") |
-| ErrorHandler `content_type`; errors swallowed after start | a Request-handler `handler` reading `error_context($request)`; 5xx re-raised to the server ([details](UPGRADING-REFERENCE.md#breaking-errorhandler-re-raises-server-errors)) |
+| ErrorHandler `content_type`; errors swallowed after start | `catch` entries for the errors the app expects, a `handler` reading `error_context($request)` for the rest; an unhandled error re-raised to the server; in Compose, RequestId, AccessLog and response-header middleware that must cover the 500 wrap the compiled app ([details](UPGRADING-REFERENCE.md#breaking-errorhandler-re-raises-server-errors)) |
 | an unknown middleware option | now dies; check spelling and renamed options (`invalid` → `refuse`) |
 | Session `secret`, `cookie_name`, `cookie_options`; `State::Bearer` | `state => session_state('Cookie', ...)`; no secret ([details](UPGRADING-REFERENCE.md#breaking-the-session-cookie-is-configured-on-statecookie-not-on-the-middleware)) |
 | CSRF `enforce => 'header'` / `enforce => 'app'` | the default / remove it: `form_field => 'csrf_token'` and `csrf_protect` on each form route; `enforce` now dies ([details](UPGRADING-REFERENCE.md#breaking-csrf-enforce-is-replaced-by-refuse)) |
@@ -174,6 +174,11 @@ async sub create_note ($request) {
     return response('JSON', $notes->{$id}, status => 201);
 }
 
+# Every error in JSON: a catch entry is given the error, a handler reads it.
+sub json_error ($request, $error = error_context($request)) {
+    return response('JSON', { error => $error->message });
+}
+
 compose(
     lifespan => { startup => sub ($state, $scope) { $state->{notes} = {} } },
     routes => [
@@ -184,9 +189,10 @@ compose(
     ],
     middleware => [
         middleware('Session'),
-        middleware('ErrorHandler', handler => sub ($request) {
-            return response('JSON', { error => error_context($request)->message });
-        }),
+        middleware('ErrorHandler',
+            catch   => { 'PAGI::Exception::RequestBody' => \&json_error },
+            handler => \&json_error,
+        ),
     ],
 );
 ```
@@ -204,6 +210,9 @@ What changed, line by line:
   with `app_state($request)`.
 - `$ctx->session` became `session($request)`; Session no longer takes
   `secret`.
-- ErrorHandler's `content_type` became a `handler`: a Request handler that
-  reads the error with `error_context($request)` and returns a Response.
+- ErrorHandler's `content_type` became `catch` entries for the errors the
+  application expects (here a body that is not JSON) and a `handler` for
+  the rest; both answer in JSON. An entry is given the error; the handler
+  reads it with `error_context($request)`. In 0.002002 a body that was not
+  JSON was a 500; it is now a 400.
 - `:id` became `{id}`, and `post` became `methods => ['POST']`.

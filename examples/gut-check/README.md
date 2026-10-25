@@ -33,7 +33,7 @@ written against it; the Starlette versions are unchanged.
 
 | Pair | What it does | Behaviour | PAGI lines (imports) | Starlette lines (imports) |
 |---|---|---|---|---|
-| `01-errors-as-responses` | throw a 404 from the model, real bugs get a 500, unmatched paths get the same JSON | identical (PAGI styles the routing 404 with `http_default`; Starlette's router raises it to the handler) | 23 (4) | 19 (4) |
+| `01-errors-as-responses` | throw a 404 from the model, real bugs get a 500, unmatched paths get the same JSON | identical: both routers raise their 404 and 405 to the handler; PAGI's 405 keeps `Allow`, which the Starlette handler as written drops | 20 (4) | 19 (4) |
 | `02-notes-resource` | CRUD resource: class endpoints, lifespan store, named links, typed `{id}` | identical, incl. 204 and the typed-path 404 | 48 (17) | 44 (5) |
 | `03-broadcast-hub` | WebSocket chat + SSE watcher + HTTP announce on one fan-out | identical where Starlette can be tested (see below) | 32 (4) | 46 (5) |
 | `04-everyday-middleware` | `Server-Timing` and maintenance mode, hand-written | identical | 25 (4) | 26 (7) |
@@ -231,7 +231,7 @@ Each pair's Starlette version, as measured and run during the gut check
 
 ### 01-errors-as-responses
 
-Starlette sends a routing 404 through the same exception handler as a thrown one; PAGI's router answers its own misses (`http_default` styles them).
+Both send a routing 404 and 405 through the same exception handler as a thrown error. Run on Starlette 1.10.0, this version answers `POST /notes/1` with a JSON 405 and no `Allow` header, because its handler does not pass on `exc.headers`; PAGI's entry passes on the error's headers.
 
 ```python
 from starlette.applications import Starlette

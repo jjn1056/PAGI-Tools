@@ -136,12 +136,23 @@ PAGI::ErrorContext - The error an ErrorHandler handler is answering
 
     use PAGI::ErrorContext qw(error_context);
 
-    middleware('ErrorHandler', handler => sub {
-        my ($request) = @_;
-        my $error = error_context($request);
-        return $error->default if $error->is_server_error;
-        return response('JSON', { error => $error->message });
-    });
+    middleware('ErrorHandler',
+        # The errors the application expects: an entry is given the error.
+        catch => {
+            'PAGI::Exception::HTTP' => sub {
+                my ($request, $error) = @_;
+                return response('JSON', { error => $error->message },
+                    headers => $error->exception->headers);
+            },
+        },
+        # The 500 page for everything else: the handler reads it.
+        handler => sub {
+            my ($request) = @_;
+            my $error = error_context($request);
+            return $error->default if $error->detail;   # development: the built-in page
+            return response('HTML', '<h1>Something went wrong</h1>', status => $error->status);
+        },
+    );
 
 =head1 DESCRIPTION
 

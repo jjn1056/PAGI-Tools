@@ -181,8 +181,8 @@
     t/example-gut-check.t.
   - PAGI::Middleware::RequestClass: middleware('RequestClass', class =>
     'MyApp::Request') gives every handler below it (routes, Endpoint::HTTP
-    methods, refuse, deny and decline handlers, an ErrorHandler handler
-    listed after it, Authentication backends) that Request class instead
+    methods, refuse, deny and decline handlers, an ErrorHandler catch
+    entry, Authentication backends listed after it) that Request class instead
     of PAGI::Request, through the scope key pagi.request.factory;
     request_response's request_factory still wins for its one handler.
   - examples/request-class: an application's Request class set once by
@@ -218,14 +218,39 @@
     ['WWW-Authenticate' => ...])), and ErrorHandler's built-in answer sends
     an HTTP error's headers, from any thrown object with a headers method:
     a 401, 405, 407 or 426 that carries its required field no longer needs
-    a handler. Headers that cannot be sent make the built-in answer a 500
-    with a diagnostic; a handler or catch entry answers with the claimed
-    status whatever the headers are.
+    a catch entry. Headers that cannot be sent make the built-in answer a
+    500 with a diagnostic; a catch entry answers in full, with the claimed
+    status whatever the headers are, and sends them only if it passes them
+    on.
   - ErrorHandler catch => { 404 => sub ($request, $error) {...},
-    'MyApp::Conflict' => sub {...} }: answers by status and exception
-    class before handler, in Starlette's order (an HTTP error's status,
-    then the class and its ancestors, then the status a plain die was
-    given).
+    'MyApp::Conflict' => sub {...} }: the errors the application expects,
+    answered by status and exception class in Starlette's order (an HTTP
+    error's status, then the class and its ancestors, then the status a
+    plain die was given).
+  - ErrorHandler is two boundaries, as Starlette's ExceptionMiddleware and
+    ServerErrorMiddleware are. The exception boundary handles an expected
+    error -- an HTTP error, a thrown page, or one with a catch entry -- and
+    a handled error is not re-raised, whatever its status; the
+    server-error boundary answers the rest with handler (or a catch entry
+    for the configured status, or the built-in 500) and always re-raises.
+    An error a route's handler throws -- a coderef route, an Endpoint::HTTP
+    method, a builder that takes a Request -- is answered at that route,
+    so a catch entry gets the route's own Request: the form it read, its
+    path_params, the session and CSRF keys (as Starlette's request_response
+    hands an exception handler the endpoint's Request). In Compose's
+    middleware the stock ErrorHandler is split, wherever it is listed:
+    catch around the router, inside every application middleware; handler,
+    on_error and the 500 outside them all, so an application middleware's
+    error gets handler, never catch, and request identity, access logging
+    and response headers that must cover the 500 wrap the compiled
+    application. One per Compose; a subclass is not split. With catch
+    entries, the router raises its 404 and 405 (with Allow) to it, as
+    Starlette's does; with no entry for them they get the router's own
+    plain answers. ErrorHandler's answers to HEAD send no body. A failing
+    handler or entry fails as itself, outward, with one warning naming the
+    error it displaced. Cookbook: "Re-render a form from an error handler";
+    examples/internal-tool raises its board's errors and answers them in
+    one place, beside the same board in Flask.
   - A Stream's content may be a source, any object with next_chunk:
     response('Stream', $source) pulls it one value at a time, as
     Starlette's StreamingResponse iterates its content (NDJSON takes a
@@ -312,8 +337,9 @@
   - raw_path is the full requested path at every mount level; AccessLog
     logs, and HTTPSRedirect redirects to, the encoded request URI.
   - Stock error responses from first-party components are plain text, each
-    replaceable by one option (refuse, response, http_default, default or
-    ErrorHandler's handler); a PAGI::Pages page is the application's choice.
+    replaceable by one option (refuse, response, http_default, default, or
+    ErrorHandler's catch and handler); a PAGI::Pages page is the
+    application's choice.
   - One coderef convention: a slot that answers a request (every refuse,
     Maintenance response, ErrorHandler handler, routes, http_default,
     deny/decline) reads a bare coderef as a Request handler; a slot that
@@ -322,10 +348,9 @@
   - ErrorHandler answers in plain text (reason phrase, or a client error's
     client_message) with Cache-Control: no-store; its handler is a Request
     handler that reads the error through PAGI::ErrorContext
-    (error_context($request)), may return any application, and declines by
-    returning $error->default. The error is re-raised when the status sent
-    is 5xx; a failing handler gets a last-resort 500 and the original error
-    is re-raised. Status claims outside 400-599 answer 500.
+    (error_context($request)), answers only unhandled errors, may return any
+    application, and declines by returning $error->default. Status claims
+    outside 400-599 answer 500.
   - References in events are shared, not copied (PAGI 0.002013): Runtime,
     SecurityHeaders and CORS no longer write into a response's own header
     list, nor Debug into its header pairs, which leaked one request's headers -- an origin, a timing
@@ -397,9 +422,9 @@
   - ErrorHandler answers a thrown page -- a value with to_app and no
     status_code, such as a Response -- with the page itself. Below 400 it
     is sent as it is, with no on_error, handler or re-raise, so
-    die response('Redirect', '/login') redirects; from 400 to 599 it goes
-    through on_error and the handler, and $error->default is the page. A
-    thrown Response used to be a 500.
+    die response('Redirect', '/login') redirects; from 400 to 599 it is a
+    handled error: on_error runs and the page is the answer, not re-raised.
+    A thrown Response used to be a 500.
   - $request->state, $ws->state and $sse->state always return a
     PAGI::State. Without application state it is empty, and its get and
     data die naming the likely cause (lifespan startup did not run;
@@ -481,9 +506,12 @@
   - Session takes no secret, cookie_name or cookie_options: the cookie is
     configured on State::Cookie, which sets no Max-Age by default and
     merges its cookie_options into the defaults.
-  - ErrorHandler re-raises server errors to the server after the error
-    response (when the status sent is 5xx), and rethrows an exception raised after the response
-    started instead of swallowing it.
+  - ErrorHandler re-raises an unhandled error to the server after the error
+    response (an HTTP error or a thrown page is handled, whatever its
+    status), and rethrows an exception raised after the response started
+    instead of swallowing it. In Compose its 500 is rendered outside the
+    application middleware: RequestId, AccessLog, CORS and SecurityHeaders
+    that must cover it wrap the compiled application.
   - PAGI::WebSocket and PAGI::SSE require pagi.connection (PAGI::Server
     0.003000); their state is a PAGI::State object; deny takes a response.
   - A request body cut short by a disconnect croaks instead of returning

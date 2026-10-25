@@ -247,9 +247,10 @@ description retains request dispatch but does not run that inner lifecycle.
 For HTTP, a directly compiled Router already installs its own HeadBoundary.
 Compose adds an outer, idempotent application-root HEAD boundary plus
 ErrorHandler and a response-completion guard outside author middleware and the
-target. The Router already owns 404 and 405. Configure its C<http_default> when
-the application needs custom missing-route presentation; method mismatches
-retain the Router-generated 405 and authoritative C<Allow>. A selected native
+target. The Router owns 404 and 405: it answers them in plain text, with the
+authoritative C<Allow> on a 405, or -- with an ErrorHandler that has C<catch>
+entries -- raises them to it, so an entry gives them the house style. An
+explicit C<http_default> answers a missing route itself. A selected native
 app that sends nothing is incomplete output and becomes 500, never an implicit
 miss.
 
@@ -991,6 +992,14 @@ leading C<+> names a class exactly, as in C<middleware('+MyApp::Middleware::Auth
       middleware('ErrorHandler', development => 1),    # Development diagnostics
   ],
 
+These see every response the application answers. A server error's 500 is
+the exception: Compose renders it outside all of them, so it carries no
+request ID, log line or added header. Wrap Compose in the ones that must
+cover it, outermost first:
+
+  my $app = PAGI::Middleware::RequestId->new->wrap(
+      PAGI::Middleware::AccessLog->new(format => 'tiny')->wrap($compose->to_app));
+
 =head3 Per-Route and Per-Mount Middleware
 
 A Router, a Mount and a Route take the same C<middleware> list, applied only
@@ -1181,20 +1190,24 @@ Catch and format errors:
   middleware('ErrorHandler', development => 1),  # Safely stringified development detail
   middleware('ErrorHandler'),                    # Production (default): generic errors, no detail leak
 
-C<ErrorHandler>'s built-in answer is plain text. To answer another way, give
-it a C<handler> -- a Request handler that reads the error with
-C<error_context($request)>:
+C<ErrorHandler>'s built-in answer is plain text. To give the errors the
+application expects -- HTTP errors, its own exception classes -- another
+answer, register C<catch> entries; an entry gets the Request and the error:
 
-  use PAGI::Tools qw(error_context middleware response);
+  use PAGI::Tools qw(middleware response);
 
   middleware('ErrorHandler',
-      handler => sub {
-          my ($request) = @_;
-          my $error = error_context($request);
-          return $error->default if $error->is_server_error;
-          return response('JSON', { error => $error->message });
+      catch => {
+          'PAGI::Exception::HTTP' => sub {
+              my ($request, $error) = @_;
+              return response('JSON', { error => $error->message },
+                  headers => $error->exception->headers);
+          },
       },
   ),
+
+C<handler> answers everything else, the unhandled errors, with a Request; it
+reads the error with C<error_context($request)>.
 
 Ordinary construction has static C<development =E<gt> 0> behavior and does
 not consult C<PAGI_ENV>. The handler returns a Response or an application,
@@ -1202,9 +1215,10 @@ immediately or as a Future; a Response that sets no status is sent with the
 error's.
 C<on_error> is awaited reporting, not rendering; reporter failure is contained.
 It receives C<($error, $scope)>.
-Before response start, ErrorHandler reports and renders, then re-raises a
-server error (500 or above) so the server logs it; a handled 4xx exception is
-not re-raised. After start it reports,
+Before response start, a handled error -- a C<catch> entry's, or an HTTP
+error's built-in answer, whatever its status -- is answered and not
+re-raised; an unhandled one is reported, rendered, then re-raised so the
+server logs it. After start it reports,
 emits no replacement response, and rethrows the original exception so the
 server can abort the incomplete stream. Built-in bodies are byte-correct UTF-8
 and carry C<Cache-Control: no-store>.

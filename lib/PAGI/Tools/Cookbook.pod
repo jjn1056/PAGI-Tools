@@ -630,19 +630,60 @@ only C<middleware(...)> descriptions.
 =head2 Compose Safety and Application Error Policy
 
 Compose installs the same root safety graph around the distinct root Router it
-constructs from C<routes>:
+constructs from C<routes>. It takes the ErrorHandler out of C<middleware>,
+wherever it is listed, and places its two halves as Starlette builds an
+application -- C<ServerErrorMiddleware> outermost, C<ExceptionMiddleware>
+around the router:
 
   outer idempotent application-root HEAD boundary
-    automatic ErrorHandler
-      response-completion guard
-        author middleware, in listed order
-          Compose root Router
+    Compose's emergency ErrorHandler (server errors only)
+      your ErrorHandler's server-error boundary: handler, on_error
+        response-completion guard
+          author middleware, in listed order
+            your ErrorHandler's exception boundary: catch
+              Compose root Router
 
-Router 404/405 responses pass through this graph unchanged. Compose's stock
-error response is a plain-text, no-store 500, with a final hardcoded UTF-8
-text 500 only if an author handler itself fails. Put the application's
-official error policy inside request IDs, access logging, and security
-middleware so those layers observe it:
+An error a route throws reaches the exception boundary first: a C<catch> entry
+or an HTTP error's built-in answer handles it there, inside every author
+middleware. Anything unhandled -- an ordinary bug, or any error an author
+middleware throws -- is answered by C<handler> (or the stock 500) outside
+them, reported, and re-raised for the server. Without an ErrorHandler of your
+own, the emergency one's exception boundary is the one around the router.
+Compose's stock error response is a plain-text, no-store 500, with a final
+hardcoded UTF-8 text 500 only if an author handler itself fails. One stock
+ErrorHandler per Compose: a second dies when the application is built. A
+subclass of ErrorHandler is not split; it wraps what follows it, where it is
+listed.
+
+Because the 500 is rendered outside the author middleware, and a PAGI scope
+is copied rather than changed in place, nothing an author middleware adds
+reaches it: not RequestId's C<pagi.request_id> or its C<X-Request-ID> header,
+not AccessLog's line for it, not a header SecurityHeaders or CORS sets.
+Middleware listed in C<middleware> see the error pass through them as an
+exception. Starlette's middleware have the same limit. Request identity,
+access logging and globally enforced response headers that must cover
+server-error responses wrap Compose instead, with the middleware's own
+C<wrap>:
+
+  use PAGI::Middleware::AccessLog;
+  use PAGI::Middleware::RequestId;
+  use PAGI::Middleware::SecurityHeaders;
+
+  my $composed = compose(
+      routes => [mount('/' => app => $routing)],
+      middleware => [
+          middleware('ErrorHandler',
+              handler  => \&server_error,
+              on_error => \&report_error),
+      ],
+  );
+
+  # Outermost first: every response, the 500 included, gets a request ID, an
+  # access-log line and the security headers; on_error and the handler see
+  # the same pagi.request_id.
+  my $app = PAGI::Middleware::RequestId->new->wrap(
+      PAGI::Middleware::AccessLog->new->wrap(
+          PAGI::Middleware::SecurityHeaders->new->wrap($composed->to_app)));
 
 A bare Router has no root ErrorHandler, response-completion guard, or lifespan
 owner, but its compiled app already installs a Router HeadBoundary. If a
@@ -650,18 +691,6 @@ selected application sends nothing, a direct Router call completes without
 synthesizing a response. Compose wraps that same Router in the safety graph
 above; the outer idempotent HEAD boundary becomes the wire owner, and the guard
 converts pre-start silence into its production-safe 500.
-
-  my $app = compose(
-      routes => [mount('/' => app => $routing)],
-      middleware => [
-          middleware('RequestId'),
-          middleware('AccessLog'),
-          middleware('SecurityHeaders'),
-          middleware('ErrorHandler',
-              handler  => \&server_error,
-              on_error => \&report_error),
-      ],
-  )->to_app;
 
 For example, a database failed Future before response start is awaited by the
 author ErrorHandler, reported through C<on_error>, rendered by
@@ -674,8 +703,9 @@ start, and rethrows the original database exception so the server can abort.
 Ordinary ErrorHandler instances default to static production mode and never
 consult C<PAGI_ENV>. Compose's private outer instance resolves development per
 handled request and falls back to safe production output if resolution fails.
-The built-in answer is plain text. To answer another way, give ErrorHandler a
-C<handler>:
+The built-in answer is plain text. To answer an unhandled error another way,
+give ErrorHandler a C<handler>; the errors the application expects get
+C<catch> entries (see L</Thrown pages and house-styled errors>):
 
   use PAGI::ErrorContext qw(error_context);
   use PAGI::Response qw(response);
@@ -684,13 +714,15 @@ C<handler>:
       handler => sub {
           my ($request) = @_;
           my $error = error_context($request);
-          return $error->default if $error->is_server_error;   # the built-in answer
-          return response('JSON', { error => $error->message });
+          return response('HTML', '<h1>Something went wrong</h1>', status => 500)
+              unless $error->detail;                  # production
+          return $error->default;                     # development: the built-in page, with the detail
       })
 
-C<error_context($request)> gives the error, its status and a client-safe
-message; returning C<< $error->default >> leaves an error to the built-in
-answer. A handler is authoritative for its own content and headers.
+A C<handler> answers only unhandled errors: HTTP errors and thrown pages never
+reach it. C<error_context($request)> gives the error, its status and a
+client-safe message; returning C<< $error->default >> leaves it to the
+built-in answer. A handler is authoritative for its own content and headers.
 
 =head3 Who reports an application error
 
@@ -708,9 +740,10 @@ governs it and a replaced C<logger> receives it:
 
   PAGI application error (after response complete): database unreachable
 
-C</missing> gets a 404 page and nothing is logged: an exception that claims a
-4xx status is a handled outcome, not an error. The same holds for an
-ErrorHandler you install yourself. Behind a server other than PAGI::Server,
+C</missing> gets a 404 page and nothing is logged: an HTTP error, whatever
+its status, is handled -- by a C<catch> entry or its built-in answer -- and a
+handled error is an outcome, not a failure. Only an unhandled error is
+re-raised. The same holds for an ErrorHandler you install yourself. Behind a server other than PAGI::Server,
 the re-raised exception reaches whatever that server does with an application
 failure after a complete response.
 
@@ -723,7 +756,7 @@ the server's log, such as an error tracker or paging:
           my ($error, $scope) = @_;
           $tracker->capture($error,
               path       => $scope->{path},
-              request_id => $scope->{'pagi.request_id'});  # with RequestId installed
+              request_id => $scope->{'pagi.request_id'});  # with RequestId around Compose
           return;
       }),
 
@@ -764,18 +797,68 @@ C<to_app> but no usable status, such as an exception written for Plack -- is
 an ordinary error: the stock 500, and its C<to_app> is never run. A thrown
 page below 400, such as C<die response('Redirect', '/login')>, is sent at once.
 
-Routing misses never reach the entry here: they are answers, not errors.
-The router answers a path nothing matches (404) and a method a matched path
-does not allow (405) itself, in plain text. Give the 404 the house style with
-C<http_default>, beside C<routes>:
+Routing misses reach the entry too. With an ErrorHandler that has C<catch>
+entries, the router raises a path nothing matches as a 404 HTTP error and a
+method a matched path does not allow as a 405 carrying C<Allow>, as
+Starlette's router raises C<HTTPException> -- so the entry above answers them
+in JSON, and a C<404> or C<405> status entry answers just those. With no entry
+for them, they get the router's own plain-text answers, unchanged. A Router
+mounted inside raises its misses the same way; a Compose mounted inside
+answers its own. An explicit C<http_default> still answers a path nothing
+matches, before any entry sees it.
 
-  http_default => sub {
+=head3 Re-render a form from an error handler
+
+A route can leave the errors its domain raises to one place and still answer
+with the form the user typed. A C<catch> entry answering an error a route's
+handler threw gets that route's own Request, as a Starlette exception handler
+gets the endpoint's: the form the route read, its C<path_param>s, and the
+scope keys of middleware inside the ErrorHandler (the session, the CSRF
+token).
+
+  use Future::AsyncAwait;
+  use PAGI::Tools qw(compose middleware response route);
+
+  package My::TitleTaken { sub new { my ($class, %f) = @_; bless {%f}, $class } }
+
+  my %taken;
+
+  sub html { my ($text) = @_; $text =~ s/([&<>"])/'&#' . ord($1) . ';'/ge; $text }
+
+  sub task_form {
+      my ($title, $error, @options) = @_;
+      return response('HTML', (defined $error ? '<p class="error">' . html($error) . '</p>' : '')
+          . '<form method="post"><input name="title" value="' . html($title) . '">'
+          . '<button>Add</button></form>', @options);
+  }
+
+  # The route reads the form and raises the board's error; it does not
+  # answer it.
+  async sub create {
       my ($request) = @_;
-      return response('JSON', { error => 'Not Found' }, status => 404);
-  },
+      my $title = (await $request->form_params)->get('title') // '';
+      die My::TitleTaken->new(title => $title) if $taken{lc $title};
+      $taken{lc $title} = 1;
+      return response('Redirect', '/', status => 303);
+  }
 
-A 405 is changed by a middleware that rewrites it (see L<PAGI::Routing>), and
-a mounted Router answers its own misses.
+  my $app = compose(
+      routes => [route('/tasks' => \&create, methods => ['POST'])],
+      middleware => [middleware('ErrorHandler', catch => {
+          # The route's own Request: the form create read is there.
+          'My::TitleTaken' => async sub {
+              my ($request, $error) = @_;
+              my $title = (await $request->form_params)->get('title');
+              return task_form($title, qq{There is already a task called "$title".}, status => 409);
+          },
+      })],
+  );
+
+This is the route-level part of ErrorHandler only: an error an author
+middleware throws gets C<handler>, with a Request that has no body. The
+complete application, with templates, the session's CSRF token and a
+missing-task entry that names the id from C<path_param>, is
+F<examples/internal-tool>, beside the same board in Flask.
 
 =head2 Real Catch-All Routes
 

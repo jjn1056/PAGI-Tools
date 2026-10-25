@@ -54,32 +54,80 @@ Plack::Builder does.
 
 =head1 DESCRIPTION
 
-PAGI::Middleware::ErrorHandler catches exceptions thrown by the inner
-application and converts them to HTTP error responses. Without a C<handler>,
-the answer is plain text -- the status's reason phrase, or a client error's
-C<client_message> -- with C<Cache-Control: no-store>, and in development the
-error's text after a blank line (see L<PAGI::ErrorContext/default>).
+PAGI::Middleware::ErrorHandler turns exceptions thrown by the inner
+application into HTTP responses, at two boundaries, as Starlette's
+C<ExceptionMiddleware> and C<ServerErrorMiddleware> do:
+
+=over 4
+
+=item * B<The exception boundary> handles the errors an application expects:
+an HTTP error (a value with C<status_code>, such as L<PAGI::Exception::HTTP>),
+a thrown page, or an error that has a C<catch> entry. A C<catch> entry answers
+it -- by the HTTP error's status, or by the exception's class or an ancestor
+-- or else the built-in answer: the status's reason phrase, or a client
+error's C<client_message>, in plain text with C<Cache-Control: no-store>, and
+in development the error's text after a blank line (see
+L<PAGI::ErrorContext/default>). A thrown page answers as itself. A handled
+error is an outcome, not a failure: it is not re-raised, whatever its status.
+
+=item * B<The server-error boundary> answers everything else -- an ordinary
+bug, a C<status_code> claim it rejected -- with a C<catch> entry for the
+configured C<status>, the C<handler>, or the built-in 500. After the response
+it re-raises the original exception, so the server reports it through its
+own log, as L<PAGI::Spec::Www> "Exceptions after the terminal event"
+describes.
+
+=back
+
+An error a route's handler throws is handled at that route, with the route's
+own Request (see C<catch>). C<on_error> runs once for every error either
+boundary answers. ErrorHandler converts exceptions into responses; reporting
+is the server's, and C<on_error>'s for a tracker of your own: see
+L<PAGI::Tools::Cookbook/Who reports an application error>.
 
 A thrown page -- a value with C<to_app> and no C<status_code>, such as a
 thrown Response -- whose status is below 400 is not an error: it is sent as
 it is. That is how to throw a redirect: C<die response('Redirect', '/login')>.
 See L</EXCEPTION HANDLING>.
 
-ErrorHandler converts exceptions into responses; it does not report them.
-After the response is complete, the original exception is re-raised so the
-server reports it through its own log, as L<PAGI::Spec::Www> "Exceptions after
-the terminal event" describes, when the status actually sent is 500 or above:
-what the client was sent decides. A 4xx sent is a handled outcome, not an
-error. If the handler dies or answers nothing, a last-resort 500 is sent, the
-handler's failure is warned, and the original error is re-raised. Use C<on_error> for
-reporting of your own, such as an error tracker; see
-L<PAGI::Tools::Cookbook/Who reports an application error>.
+Placed with C<wrap> -- on a Router, a Mount or a Route, or by hand -- one
+ErrorHandler is both boundaries around what follows it. In
+L<PAGI::Compose>'s C<middleware> it is split, wherever it is listed: the
+exception boundary around the router, inside every application middleware,
+and the server-error boundary outside them all. See L</BOUNDARIES AND
+DATABASE FAILURES>.
 
-ErrorHandler sees only what is thrown. A path no route matches, or a method
-a matched path does not allow, is not an error: the router answers it with a
-plain-text 404 or 405, and the handler never runs. The Router's (or
-Compose's) C<http_default> sets the 404; a 405 is changed by a middleware
-that rewrites it (see L<PAGI::Routing>).
+A path no route matches, or a method a matched path does not allow: with
+C<catch> entries, a Router inside this ErrorHandler raises them as a 404 HTTP
+error and a 405 carrying C<Allow>, as Starlette's router raises
+C<HTTPException> inside an application, so an entry for the status or for
+C<PAGI::Exception::HTTP> answers them. With no entry for them, the default
+answer is the router's own plain-text response, byte for byte. Without
+C<catch> entries the router answers them itself. A Router's (or Compose's)
+explicit C<http_default> answers a missing path before any entry sees it.
+
+The model is Starlette 1.10.0's:
+
+=over 4
+
+=item * C<starlette/applications.py>, C<build_middleware_stack>:
+C<ServerErrorMiddleware> outermost, the user middleware, then
+C<ExceptionMiddleware> innermost, around the router.
+
+=item * C<starlette/middleware/errors.py>: the 500 handler gets
+C<Request(scope)>, with no receive, and the exception is always re-raised.
+
+=item * C<starlette/middleware/exceptions.py> and
+C<starlette/_exception_handler.py>: handlers by status and by class, most
+specific class first; C<starlette/routing.py> C<request_response> runs them
+at the route with the endpoint's own Request
+(C<wrap_app_handling_exceptions>).
+
+=item * C<starlette/routing.py>: the router raises C<HTTPException(404)> and
+C<HTTPException(405)> with C<Allow> only C<if "app" in scope>, inside an
+application; otherwise it sends plain responses.
+
+=back
 
 =head1 CONFIGURATION
 
@@ -95,14 +143,17 @@ construction never consults C<PAGI_ENV>.
 
 =item * on_error (default: undef)
 
-Callback invoked as C<< $on_error->($error, $scope) >> when an exception is
-caught: the original error, then the request scope, so a reporter can record
-the path or a C<pagi.request_id> (present when L<PAGI::Middleware::RequestId> is
-installed). Immediate values and Futures are both accepted and awaited.
-Callback failures are contained and never replace the application error.
+Callback invoked as C<< $on_error->($error, $scope) >> once for every error
+ErrorHandler answers, handled or not: the original error, then the request
+scope, so a reporter can record the path or a C<pagi.request_id> (present
+when L<PAGI::Middleware::RequestId> wraps this ErrorHandler; in Compose, when
+it wraps the compiled application). Immediate values and Futures are both
+accepted and awaited. Callback failures are contained and never replace the
+application error.
 
-It is for reporting of your own, in addition to the server's: a server error
-is still re-raised to the server after rendering (see L</DESCRIPTION>).
+It is for reporting of your own, in addition to the server's: an unhandled
+error is still re-raised to the server after rendering (see
+L</DESCRIPTION>).
 
     on_error => sub  {
         my ($error, $scope) = @_;
@@ -114,16 +165,19 @@ is still re-raised to the server after rendering (see L</DESCRIPTION>).
 The status for an exception that claims none, from 400 to 599. A status HTTP
 says must carry a field the built-in answer cannot supply -- 401
 (C<WWW-Authenticate>), 405 (C<Allow>), 407 (C<Proxy-Authenticate>), 426
-(C<Upgrade>) -- needs a C<handler>, or an exception whose C<headers> carry
-that field. An exception's C<status_code> outside 400-599, or one of those
+(C<Upgrade>) -- needs a C<catch> entry that answers it, or an exception whose
+C<headers> carry that field. An exception's C<status_code> outside 400-599, or one of those
 with neither, answers 500 with a diagnostic.
 
 =item * handler (default: the built-in answer)
 
-The answer to an error, given the scope with the error as C<pagi.error>; read
-it with L<PAGI::ErrorContext>. A coderef is a Request handler: it receives a
-L<PAGI::Request>, or the class L<PAGI::Middleware::RequestClass> set when that
-middleware is listed before this one, and returns a Response or an application.
+The answer to an unhandled error -- an HTTP error or a thrown page never
+reaches it -- given the scope with the error as C<pagi.error>; read it with
+L<PAGI::ErrorContext>. A coderef is a Request handler: it receives a
+L<PAGI::Request> (or the class L<PAGI::Middleware::RequestClass> set, when
+that middleware wraps this one; in Compose it never does, as the handler is
+outside every application middleware), and returns a Response or an
+application.
 A returned Response that set no status of its own is sent with the error's
 status. An object is an
 application; a native C<($scope, $receive, $send)> app is passed as
@@ -134,13 +188,16 @@ C<as_app_object($app)>.
     handler => sub {
         my ($request) = @_;
         my $error = error_context($request);
-        return $error->default if $error->is_server_error;   # the built-in answer
-        return response('JSON', { error => $error->message });
+        return $error->default if $error->detail;   # development: the built-in page
+        return response('HTML', '<h1>Something went wrong</h1>', status => $error->status);
     }
 
 The handler sees the request as this layer sees it: scope keys added further
-in (C<path_params>, CSRF's token) are not there, and its
-answer does not pass through inner middleware's send wrappers.
+in (C<path_params>, a session, CSRF's token, a C<pagi.request_id>) are not
+there, and its answer does not pass through inner middleware's send wrappers.
+In Compose that is every application middleware: middleware that must cover
+the 500 wraps the compiled application instead (see
+L<PAGI::Tools::Cookbook/Compose Safety and Application Error Policy>).
 
 The handler's Request has no body to read: the body was the application's,
 which may have read it before it failed, and on a real server reading it
@@ -148,13 +205,14 @@ again would wait for an event that never comes. So C<body>, C<form_params>,
 C<json> and the rest die at once, naming the handler's line -- as
 Starlette's C<ServerErrorMiddleware> hands its handler C<Request(scope)>,
 with no receive. Headers, cookies, the query and the method read as usual.
-The same holds for a C<catch> entry's Request. An application given as the
-handler gets the C<$receive> this layer was given, and owns what it does
-with it.
+The same holds for a C<catch> entry's Request, except at a route (see
+C<catch>). An application given as the handler gets the C<$receive> this
+layer was given, and owns what it does with it.
 
 =item * catch (default: none)
 
-Answers by status and by exception class, before C<handler>:
+The errors the application expects, answered by status and by exception
+class:
 
     catch => {
         404 => sub { response('JSON', { error => 'not found' }) },
@@ -167,9 +225,23 @@ Answers by status and by exception class, before C<handler>:
 
 A key that is an integer from 400 to 599 is a status; any other key is an
 exact package name (no leading C<+>: nothing is loaded). An entry is called
-with the Request a C<handler> gets and the L<PAGI::ErrorContext>, and returns
-what a C<handler> returns; a Response that set no status of its own is sent
-with the error's status. The entry that answers is, in Starlette's order:
+with a Request and the L<PAGI::ErrorContext>, and returns what a C<handler>
+returns; a Response that set no status of its own is sent with the error's
+status. An entry answers in full: an HTTP error's C<headers> (the C<Allow>
+of a routing 405, a C<Retry-After>) are sent only if it passes them on, as
+C<< headers => $error->exception->headers >>, as a Starlette exception
+handler replaces the default one that sends them.
+
+An entry answering an error a route's handler threw gets that route's own
+Request, as Starlette's C<request_response> hands an exception handler the
+endpoint's: the form the route read, its C<path_param>s, and the scope keys
+of middleware inside the ErrorHandler. This covers the endpoint's lifecycle
+-- a coderef route's handler, an L<PAGI::Endpoint::HTTP> method, and a
+builder that receives a Request -- which goes beyond Starlette, whose
+C<HTTPEndpoint> runs without that wrapper, so the three behave alike here.
+An error raised anywhere else (an endpoint's C<new>, a middleware, the
+router) gets a Request built from the scope, with no body. The entry that
+answers is, in Starlette's order:
 
 =over 4
 
@@ -180,16 +252,20 @@ see L</EXCEPTION HANDLING>), its status;
 resolution order;
 
 =item 3. for any other error (a plain C<die>, a claim that was rejected), the
-status ErrorHandler gave it (C<status>, 500 by default).
+status ErrorHandler gave it (C<status>, 500 by default): that entry answers
+at the server-error boundary, in C<handler>'s place, and the error is still
+re-raised.
 
 =back
 
-With no entry, C<handler> answers, or the built-in answer. A thrown page or
-Response is an answer, not an error, and never reaches C<catch>. An entry for
-a status that must carry a field (see C<status>) answers it as a C<handler>
-does, and is responsible for the field. An entry that dies or returns
-something that is not an application is a handler failure: the last-resort
-500, the original error reported and re-raised.
+With no entry, an HTTP error gets the built-in answer, and anything else
+C<handler> or the built-in 500. A thrown page or Response is an answer, not
+an error, and never reaches C<catch>. An entry for a status that must carry a
+field (see C<status>) is responsible for the field. An entry that dies, or
+returns something that is not an application, fails as itself: its failure
+goes on outward as the error -- to the server-error boundary, which answers
+and re-raises it -- and one warning names the error it was answering
+(C<PAGI ErrorHandler catch entry failed while answering "...": ...>).
 
 =back
 
@@ -745,8 +821,23 @@ __END__
 
 =head1 BOUNDARIES AND DATABASE FAILURES
 
-ErrorHandler is ordinary middleware and uses the same placement rules as every
-pure PAGI wrapper. Application middleware provides whole-application policy:
+ErrorHandler uses the same placement rules as every pure PAGI wrapper, with
+one exception: in L<PAGI::Compose>'s C<middleware> the stock ErrorHandler is
+split, wherever it is listed, as Starlette builds an application:
+
+  Compose's emergency ErrorHandler (server errors only)
+    this ErrorHandler's server-error boundary: handler, on_error, the 500
+      the response-completion guard, then the application middleware
+        this ErrorHandler's exception boundary: catch, HTTP errors
+          the root Router
+
+So an application middleware's error is answered by C<handler>, never by
+C<catch>, and nothing an application middleware adds reaches the 500. One
+stock ErrorHandler per Compose: a second dies when the application is built
+(put section-local ones on a Router, a Mount or a Route). A subclass of
+ErrorHandler is not split: it wraps what follows it where it is listed, and
+Compose then adds no exception boundary of its own. Application middleware
+provides whole-application policy:
 
     use PAGI::Compose qw(compose);
     use PAGI::Routing qw(middleware mount);
@@ -785,8 +876,9 @@ Mount middleware list changes only one mounted occurrence:
     )
 
 ErrorHandler is also useful on a Route: exceptions happen after that Route is
-selected. Router NONE and PARTIAL are already ordinary 404/405 responses, not
-exceptions; customize NONE with Router C<http_default>.
+selected. Router NONE and PARTIAL are 404/405, raised to the nearest
+enclosing ErrorHandler that has C<catch> entries, otherwise answered by the
+Router in plain text; an explicit C<http_default> answers NONE itself.
 
 If a database call throws or returns a failed Future before response start,
 C<on_error> settles before the handler or the built-in answer runs, and once
@@ -804,8 +896,12 @@ reached a legal terminal state, nothing on the wire was corrupted: the
 already-complete response stands as-is (C<on_complete> fires, not
 C<on_disconnect>, and with no disconnect reason to report), and ErrorHandler
 still settles C<on_error> and rethrows so the exception is not silently
-swallowed. Put an author ErrorHandler inside request-ID, access-log, and
-security middleware when those wrappers must observe the official 500.
+swallowed. When request-ID, access-log and security middleware must observe
+the official 500, they wrap the ErrorHandler; in Compose, they wrap the
+compiled application:
+
+    my $app = PAGI::Middleware::RequestId->new->wrap($compose->to_app);
+
 Compose keeps its own stock outer ErrorHandler installed as the last recovery
 boundary if author policy itself fails.
 
@@ -818,17 +914,17 @@ class:
 =over 4
 
 =item * B<A value with C<status_code> is an HTTP error.> The claim is called
-exception-safely and kept when it is an integer from 400 to 599 (and, without
-a handler, not one of the statuses that need a field the built-in answer
-lacks, unless its C<headers> carry it; see C<status>). Throwing,
+exception-safely and kept when it is an integer from 400 to 599 (and, for the
+built-in answer, not one of the statuses that need a field the built-in
+answer lacks, unless its C<headers> carry it; see C<status>). Throwing,
 Future-valued, reference-valued, malformed and out-of-range claims fall back
 to 500 with a diagnostic, without replacing the original exception. The
 built-in answer shows its C<client_message> for a 4xx and sends its
 C<headers>, so under it C<headers> that cannot be sent (a wrong shape, a name
 that is not an HTTP token, a character above 0xFF, a C<headers> method that
-dies) fall back to 500 too. A C<handler>'s or C<catch> entry's answer is its
-own and keeps the claimed status whatever the C<headers> are; it reads them
-from the exception if it wants them. Its own C<to_app>, if it has one, is never called.
+dies) fall back to 500 too. A C<catch> entry's answer is its own and keeps
+the claimed status whatever the C<headers> are; it reads them from the
+exception if it wants them. Its own C<to_app>, if it has one, is never called.
 L<PAGI::Exception::HTTP> is the class PAGI-Tools ships:
 
     die PAGI::Exception::HTTP->new(404, 'Resource not found');
@@ -837,9 +933,8 @@ L<PAGI::Exception::HTTP> is the class PAGI-Tools ships:
 thrown L<PAGI::Response>. Its own C<status> decides. Below 400 the page is
 sent as it is, with no C<on_error>, no handler and nothing re-raised: a
 thrown redirect. If sending it fails, that failure is handled like any other
-error. From 400 to 599 it is an error like any other: C<on_error>
-is called, the handler sees it, and C<< $error->default >> is the page
-itself, so without a handler the page is the answer. A page whose C<status>
+error. From 400 to 599 it is a handled error: C<on_error> is called and the
+page is the answer, never C<catch> or C<handler>, and nothing is re-raised. A page whose C<status>
 is missing, dies, or is not 100-599 is answered with the built-in 500. A
 Response that set no status has status 200, so throwing one sends it as a
 200.
@@ -861,10 +956,11 @@ C<code>) or ones relying on L<Plack::Middleware::HTTPExceptions>' C<as_psgi>
 and C<location>, probably will not work as intended: they become a 500 unless
 they implement C<status_code>, and their PSGI rendering is never used.
 
-Whether the exception is re-raised follows the status sent: a 4xx is a
-handled outcome; 500 or above, including a claim that fell back to 500, is a
-server error and is re-raised after the response. An early answer is never
-re-raised.
+Whether the exception is re-raised follows whether it was handled, not the
+status sent: an HTTP error, a thrown page and an error a C<catch> entry
+answered are handled and not re-raised, whatever their status; anything
+else, a claim that fell back to 500 included, is re-raised after the
+response. An early answer is never re-raised.
 
 An exception object whose boolean or string overload throws cannot be carried
 by a failed Future. After the response, such an exception is re-raised as the
@@ -881,13 +977,17 @@ built-in answer runs. The built-in answer is a UTF-8 octet string with a
 byte-correct C<Content-Length> and C<Cache-Control: no-store>. A handler
 controls its own content and cache headers.
 
-=item * If the handler or a C<catch> entry dies, returns something that is not
-an application, or answers without starting a response, the middleware emits
-one hardcoded UTF-8 plain-text 500 with C<no-store>, warns C<PAGI ErrorHandler
-handler failed: ...> (C<catch entry failed> for an entry),
-and re-raises the original exception. That last resort contains no exception
-or handler data. A failure while sending it propagates without another
-response attempt.
+=item * If the handler or a C<catch> entry dies or returns something that is
+not an application, its failure goes on outward as itself, as Starlette lets
+a failing handler's exception escape: the next ErrorHandler out answers it
+(in Compose, the emergency one), or the server does. One warning names the
+error it displaced: C<PAGI ErrorHandler handler failed while answering
+"...": ...> (C<catch entry> for an entry). If the handler answers without
+starting a response, the middleware emits one hardcoded UTF-8 plain-text 500
+with C<no-store>, warns C<PAGI ErrorHandler handler failed: it finished
+without starting a response>, and re-raises the original exception. That
+last resort contains no exception or handler data. A failure while sending it
+propagates without another response attempt.
 
 =item * If the response has already started when an error occurs, no handler
 is invoked and no replacement response is started. The middleware awaits
