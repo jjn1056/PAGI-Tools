@@ -13,6 +13,7 @@ use PAGI::Exception::HTTP;
 use PAGI::Middleware::Session qw(session_store);
 use PAGI::Session qw(session);
 use PAGI::Test::Client;
+use PAGI::Test::ConnectionState;
 use PAGI::Tools qw(compose endpoint middleware mount response route router websocket);
 use PAGI::Utils qw(as_app_object);
 
@@ -196,16 +197,19 @@ subtest 'a route that started its response, then threw: not answered again' => s
 };
 
 subtest 'a WebSocket route is untouched' => sub {
-    my $entry_ran = 0;
+    my ($entry_ran, $route_ran) = (0, 0);
     my $app = compose(
-        routes => [websocket('/ws' => sub { die Local::Conflict->new })],
+        routes => [websocket('/ws' => sub { $route_ran++; die Local::Conflict->new })],
         middleware => [middleware('ErrorHandler', catch => { 'Local::Conflict' => sub { $entry_ran++; response('Text', 'x') } })],
     );
     my $r = invoke($app->to_app, type => 'websocket', path => '/ws',
+        'pagi.connection' => PAGI::Test::ConnectionState->new(websocket => 1),
         body_events => [{ type => 'websocket.connect' }]);
+    is $route_ran, 1, 'the WebSocket route ran';
     is $entry_ran, 0, 'the catch entry is for HTTP';
     ok !(grep { ($_->{type} // '') eq 'http.response.start' } @{ $r->{events} }), 'no HTTP answer';
     ok $r->{future}->is_failed, 'the error propagates';
+    isa_ok(($r->{future}->failure)[0], ['Local::Conflict'], "and it is the route's own");
 };
 
 subtest "the route classifies quietly: a rejected status is diagnosed once, where it is answered" => sub {
