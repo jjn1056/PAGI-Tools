@@ -4,8 +4,8 @@ A middleware rewrites a form's body before the application reads it: the
 `username` field is trimmed and upper-cased, and a `middleware_processed`
 field is added. The route reads its form as usual and sees only the
 rewritten one. `app.py` is the same application in Starlette; both were run
-(`pagi-server` and `uvicorn`) with the same requests and answer them the
-same way.
+(`pagi-server` and `uvicorn`) with the requests below and gave the same
+answers.
 
 Requires Perl 5.40.
 
@@ -37,9 +37,11 @@ goes. Handing the application the client's receive after reading it would
 leave the application waiting for a body that never comes.
 
 The middleware reads the whole body before the application runs, which is
-right for a small form. To change a large body as it streams, change each
-event inside the receive instead, as the `gzip` recipe in
-`PAGI::Tools::Cookbook` ("Watching or changing the request body") does.
+right for a small form; bound its size if it may not be small. To read it
+only when the application asks, do the same inside the receive you hand
+on, as the gzip recipe in `PAGI::Tools::Cookbook` ("Watching or changing
+the request body") does; to change a body as it streams, change each event
+there and hand it on.
 
 ## Differences from the Starlette version
 
@@ -52,4 +54,8 @@ event inside the receive instead, as the `gzip` recipe in
   them (`html.escape`), as the Perl one does.
 
 Starlette changes `scope["headers"]` in place; the Perl version gives the
-application a copy of the scope, as PAGI middleware does.
+application a copy of the scope, as PAGI middleware does. Two smaller
+differences: `parse_qs` drops fields with blank values, which the Perl
+version keeps; and `app.py` replaces `Content-Length` only when the request
+had one, where `app.pl` always sets it and drops a chunked request's
+`Transfer-Encoding`.

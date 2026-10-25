@@ -7,6 +7,7 @@ use lib "$Bin/../lib";
 BEGIN { plan skip_all => 'examples/signed-requests requires Perl 5.40' if $] < 5.040 }
 
 use Digest::SHA qw(hmac_sha256_hex sha256_hex);
+use Future;
 use PAGI::Test::Client;
 
 # A middleware checks a signature over the body as the routes read it -- a
@@ -53,4 +54,18 @@ $res = $client->post('/signed/artifacts/evil.tar', body => $bytes, headers => si
 is [$res->status, $res->json], [401, { error => 'bad signature' }], 'a forged artifact is refused';
 
 $client->stop;
+
+subtest "a route's own 401 is not taken for a bad signature" => sub {
+    require PAGI::Exception::HTTP;
+    my $wrapped = SignedRequests::VerifySignature->new(secret => 'test-secret')->wrap(sub {
+        PAGI::Exception::HTTP->throw(401, 'log in first');
+    });
+    my $error = dies {
+        $wrapped->({ type => 'http', method => 'GET', path => '/', headers => [['x-signature', 'sha256=x']] },
+            sub { Future->done({ type => 'http.disconnect' }) }, sub { Future->done })->get;
+    };
+    isa_ok($error, ['PAGI::Exception::HTTP'], 'it propagates');
+    is($error->client_message, 'log in first', 'as the route threw it');
+};
+
 done_testing;

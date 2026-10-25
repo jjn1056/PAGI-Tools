@@ -27,7 +27,7 @@ my $verifying = async sub {
     my $event = await $receive->();
     return $event unless $event->{type} eq 'http.request';
     $sha->add($event->{body} // '');
-    PAGI::Exception::HTTP->throw(401, 'bad signature')
+    SignedRequests::BadSignature->throw(401, 'bad signature')
         if !$event->{more}
         && !secure_compare($given, 'sha256=' . hmac_sha256_hex($sha->hexdigest, $secret));
     return $event;
@@ -39,7 +39,10 @@ This is the shape of Starlette's `RequestBodyLimitMiddleware`, which counts
 the bytes in the receive it hands the app and fails the read past its limit,
 and of the body-changing middleware Starlette's documentation points to
 (msgpack-asgi). As Starlette's does, the middleware answers the failure
-itself when nothing has been sent yet, and rethrows it otherwise. A request
+itself when nothing has been sent yet, and rethrows it otherwise; it
+throws a class of its own, `SignedRequests::BadSignature`, so a route's
+own 401 passes through untouched, as Starlette's catches only its own
+`_RequestBodyTooLarge`. A request
 with no signature header at all is refused before any route runs.
 
 ## What the routes do about it
@@ -63,6 +66,7 @@ with no signature header at all is refused before any route runs.
   hash, so the middleware hashes each chunk as it arrives and never holds
   the body in one string. GitHub's scheme, an HMAC over the body itself,
   needs an incremental HMAC (`Digest::HMAC`), which is not in core Perl.
-- Watching and changing the body through the receive the app is handed is
-  the one way a middleware touches it: see `Reading the request body` in
-  `PAGI::Middleware`.
+- This middleware watches the body through the receive it hands the app;
+  `Reading the request body` in `PAGI::Middleware` has the other shapes,
+  reading the body ahead and handing on the same one (`record_receive`) or
+  a different one.

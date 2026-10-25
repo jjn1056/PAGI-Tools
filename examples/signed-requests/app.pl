@@ -29,12 +29,17 @@ use Digest::SHA ();
 use File::Temp qw(tempdir);
 use PAGI::Tools qw(compose middleware mount response route);
 
+# The middleware's own failure: a 401, which Compose answers like any
+# PAGI::Exception::HTTP, and which the middleware tells from a route's own.
+package SignedRequests::BadSignature {
+    use parent 'PAGI::Exception::HTTP';
+}
+
 package SignedRequests::VerifySignature {
     use parent 'PAGI::Middleware';
     use Future::AsyncAwait;
     use Digest::SHA qw(hmac_sha256_hex);
     use Scalar::Util qw(blessed);
-    use PAGI::Exception::HTTP;
     use PAGI::Tools qw(response);
     use PAGI::Utils::SecureCompare qw(secure_compare);
 
@@ -56,14 +61,15 @@ package SignedRequests::VerifySignature {
                 my $event = await $receive->();
                 return $event unless $event->{type} eq 'http.request';
                 $sha->add($event->{body} // '');
-                PAGI::Exception::HTTP->throw(401, 'bad signature')
+                SignedRequests::BadSignature->throw(401, 'bad signature')
                     if !$event->{more}
                     && !secure_compare($given, 'sha256=' . hmac_sha256_hex($sha->hexdigest, $self->{secret}));
                 return $event;
             };
 
-            # A failed read is answered here when nothing was sent yet, and
-            # rethrown otherwise, as Starlette's body limit does.
+            # Its own failed read is answered here when nothing was sent yet,
+            # and rethrown otherwise; any other error passes through, as
+            # Starlette's body limit catches only its own exception.
             my $started = 0;
             my $watching = async sub ($event) {
                 $started = 1 if $event->{type} eq 'http.response.start';
@@ -72,8 +78,7 @@ package SignedRequests::VerifySignature {
             my $error;
             eval { await $app->($scope, $verifying, $watching); 1 } or $error = $@;
             return unless defined $error;
-            die $error if $started || !(blessed($error) && $error->isa('PAGI::Exception::HTTP')
-                && $error->status_code == 401);
+            die $error if $started || !(blessed($error) && $error->isa('SignedRequests::BadSignature'));
             await $self->{refuse}->($scope, $receive, $send);
         };
     }

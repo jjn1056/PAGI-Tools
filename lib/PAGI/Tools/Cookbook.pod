@@ -2770,15 +2770,20 @@ it as it streams, a middleware wraps C<$receive>, and the application reads
 through the wrapper: the middleware sees
 each C<http.request> event as it goes past, and may hand on a changed one.
 These two are plain C<app-E<gt>app> functions, which C<middleware> takes as
-factories. The first only watches; the second hands the
-application a gzip-encoded body decompressed, as Starlette's documentation
-points to msgpack-asgi for a body converted in the receive:
+factories. The first only watches, as the body streams. The second hands
+the application a gzip-encoded body decompressed: the first time the
+application asks for the body, it reads the whole compressed body inside
+that receive and returns the plain one, as msgpack-asgi (which Starlette's
+documentation points to) converts a body. That reads ahead, so it bounds
+both sizes -- a small gzip body can decompress to gigabytes:
 
   use v5.40;
   use Future::AsyncAwait;
-  use IO::Uncompress::Gunzip qw(gunzip);
+  use IO::Uncompress::Gunzip ();
   use PAGI::Exception::HTTP;
   use PAGI::Tools qw(compose middleware response route);
+
+  my $MAX_BODY = 10 * 1024 * 1024;    # compressed or not
 
   # Watching: the body's size, counted as the application reads it.
   sub logged_body_size ($app) {
@@ -2814,13 +2819,28 @@ points to msgpack-asgi for a body converted in the receive:
               my $packed = '';
               while (1) {
                   my $event = await $receive->();
-                  return $event unless $event->{type} eq 'http.request';
+                  if ($event->{type} ne 'http.request') {
+                      return $event unless length $packed;    # no body: hand it on
+                      die "Request body incomplete: client disconnected mid-body\n";
+                  }
                   $packed .= $event->{body} // '';
+                  PAGI::Exception::HTTP->throw(413, 'Request body too large.')
+                      if length $packed > $MAX_BODY;
                   last unless $event->{more};
               }
               $decoded = 1;
-              gunzip(\$packed => \my $plain, Transparent => 0)
+              my $gunzip = IO::Uncompress::Gunzip->new(\$packed, Transparent => 0)
                   or PAGI::Exception::HTTP->throw(400, 'The gzip request body could not be decoded.');
+              my $plain = '';
+              while (1) {
+                  my $read = $gunzip->read(my $block, 64 * 1024);
+                  PAGI::Exception::HTTP->throw(400, 'The gzip request body could not be decoded.')
+                      if $read < 0;
+                  last if $read == 0;
+                  $plain .= $block;
+                  PAGI::Exception::HTTP->throw(413, 'Request body too large.')
+                      if length $plain > $MAX_BODY;
+              }
               return { type => 'http.request', body => $plain, more => 0 };
           };
           await $app->($plain_scope, $decoding, $send);
@@ -2836,7 +2856,9 @@ points to msgpack-asgi for a body converted in the receive:
   );
 
 Both run only as far as the application reads: a route that never reads the
-body never decompresses or counts it. A middleware that refuses on the body
+body never decompresses or counts it. To change a body as it streams,
+change each event in the receive and hand it on, as C<logged_body_size>
+hands each one on. A middleware that refuses on the body
 throws from the read that decides, as C<gunzip_body> does for a body that is
 not gzip; examples/signed-requests refuses a forged signature on the last
 chunk that way. examples/modify-form-post reads a whole form first instead,

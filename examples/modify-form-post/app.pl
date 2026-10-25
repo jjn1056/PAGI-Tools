@@ -44,9 +44,11 @@ sub modify_form_post ($app) {
         my $body = form_encode(@fields);
 
         # The application gets a scope whose Content-Length is the new
-        # body's, and a receive that delivers that body once.
+        # body's (a chunked request's Transfer-Encoding goes: the new body
+        # has a length), and a receive that delivers that body once.
         my $rewritten_scope = { %$scope, headers => [
-            (grep { lc($_->[0]) ne 'content-length' } @{ $scope->{headers} }),
+            (grep { lc($_->[0]) ne 'content-length' && lc($_->[0]) ne 'transfer-encoding' }
+                @{ $scope->{headers} }),
             ['content-length', length $body],
         ] };
         my $delivered = 0;

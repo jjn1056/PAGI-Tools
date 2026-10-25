@@ -414,6 +414,11 @@ $res = $client->post('/echo', body => 'plain');
 die 'plain: got ' . $res->text . "\n" unless $res->text eq 'identity: plain';
 $res = $client->post('/echo', body => 'not gzip', headers => { 'Content-Encoding' => 'gzip' });
 die 'bad gzip: got ' . $res->status . "\n" unless $res->status == 400;
+my $bomb_text = 'x' x (11 * 1024 * 1024);
+gzip(\$bomb_text => \my $bomb) or die 'gzip failed';
+die 'the bomb is not small: ' . length($bomb) . "\n" unless length($bomb) < 64 * 1024;
+$res = $client->post('/echo', body => $bomb, headers => { 'Content-Encoding' => 'gzip' });
+die 'bomb: got ' . $res->status . "\n" unless $res->status == 413;
 PERL
     perl_script_runs('Watching or changing the request body recipe', $recipe . $checks);
 };
