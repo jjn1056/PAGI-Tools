@@ -166,7 +166,10 @@ C<403 text/plain> response, C<CSRF token validation failed>. An application
 L<PAGI::Request>, returning a Response or an application) or an object
 with C<to_app>, which
 includes every L<PAGI::Response> -- answers instead, and can read the reason
-with C<< csrf($request)->failure >>. Exactly C<0>: the middleware never refuses;
+with C<< csrf($request)->failure >>. When C<csrf_protect> refuses a form post
+the reason reads C<missing_token> (the header the middleware checks was
+absent), whether the form's field was missing or wrong. Exactly C<0>: the
+middleware never refuses;
 the request reaches the application with the outcome recorded for
 C<< csrf($request)->valid >> and C<< ->failure >>. Any other plain value dies.
 

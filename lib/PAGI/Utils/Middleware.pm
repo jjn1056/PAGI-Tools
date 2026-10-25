@@ -252,8 +252,8 @@ Each middleware that reads the body records it again, from the replay it
 was given. Events held in memory are handed on as the same hashes, so the
 body is held once however many middleware record it; spooled events are
 copies. When the application never calls C<$replaying> to the end -- it
-reads the form a L<PAGI::Request> already parsed, say -- the buffer is
-released when the request is over.
+answers without reading the body, say -- the buffer is released when the
+request is over.
 
 To hand the application a I<different> body, write the receive yourself
 (examples/modify-form-post); to watch or change the body as it streams,
@@ -263,9 +263,9 @@ wrap C<$receive> instead of reading ahead
 =head3 Why this helper exists
 
 Reading the whole body in middleware and then handing the application a
-new receive is the pattern the Starlette community teaches for changing or
-checking a request body in pure ASGI middleware. Two write-ups of it, kept
-here so the reason for this helper is not lost:
+receive that delivers it is a pattern the Starlette community teaches for
+pure ASGI middleware. The sources, kept here so the reason for this helper
+is not lost:
 
 =over 4
 
@@ -273,23 +273,23 @@ here so the reason for this helper is not lost:
 Honeybadger Developer Blog, 2026-08-28,
 L<https://www.honeybadger.io/blog/starlette-middleware/>: "Pure ASGI
 middlewares are also the preferred choice when you want to modify the
-request or response body"; it buffers the body "via C<receive>, then
-supplies a C<receive_wrapper> that replays the modified body downstream".
+request or response body"; "we buffer it via C<receive>, then supply a
+C<receive_wrapper> that replays the modified body downstream".
 
-=item * John Napiorkowski's Starlette C<ModifyFormPostMiddleware>, ported as
-examples/modify-form-post (its C<app.py> is the Starlette version).
+=item * examples/modify-form-post, ported from a Starlette
+C<ModifyFormPostMiddleware> (its C<app.py>), which reads a whole form and
+hands the application a receive with a rewritten body.
 
 =back
 
-Both hand-written receives got the details wrong, which is what this helper
-does for you: each returned the body on every call, so an application
+The hand-written receives in both get details wrong that this
+helper gets right: each returned the body on every call, so an application
 waiting for C<http.disconnect> got the body again; the article's never
 passes on the client's receive, so the disconnect never arrives; and it
-leaves C<Content-Length> stale after changing the body. Starlette's own
-documentation shows the other shape, a receive wrapped to watch or change
-the events as the application reads them ("Inspecting or modifying the
-request" in its middleware guide, citing msgpack-asgi); its
-C<RequestBodyLimitMiddleware> checks the body that way. The PAGI-Tools
-ruling (2026-10-24) keeps both: the request-state ledger, Q13 and Q14.
+leaves C<Content-Length> stale after changing the body. Starlette's
+documentation also shows the other shape, a receive wrapped to watch or
+change the events as the application reads them ("Inspecting or modifying
+the request" in its middleware guide, citing msgpack-asgi); its
+C<RequestBodyLimitMiddleware> checks the body that way.
 
 =cut

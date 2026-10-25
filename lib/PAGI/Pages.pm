@@ -821,8 +821,9 @@ sub _select_representation {
     my $no_body = sub {
         return Future->fail('metadata-only Request cannot consume a body');
     };
-    # Request lazily installs its header cache; keep those writes local while
-    # descriptor factories retain the original scope identity.
+    # Negotiation reads a metadata view of the scope, without a header cache a
+    # WebSocket or SSE helper keeps there, while descriptor factories retain
+    # the original scope identity.
     my $request = PAGI::Request->new(
         _metadata_scope($scope), $no_body,
     );

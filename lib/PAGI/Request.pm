@@ -1484,14 +1484,18 @@ the scope in place (C<< $scope->{path_params} = {...} >>, merged or replaced
 as its routing means), relies on the stock C<path_params>, which reads the
 scope live, and builds a new Request only when the scope is new. It does not
 cache path parameters on the object or write the fields above, and it does
-not make a shallow copy of the scope per match: copied scalars such as the
-body latch would split between the copies (L<PAGI::Building>, "The footgun:
-scalars do not propagate").
+not make a shallow copy of the scope per match: a value written into one
+copy is not in the others (L<PAGI::Building>, "The footgun: scalars do not
+propagate").
 
 When something hands a route a copy of the scope (a per-route middleware
-that rewrites it, say), the copy is a new scope and needs a new Request. A
-framework that keeps one Request in its context compares
-C<< $scope != $ctx->request->scope >> and rebuilds it when they differ.
+that rewrites it, say), the copy is a new scope and needs a new Request,
+since a Request reads headers and the query from the scope it was built
+over. A framework that keeps one Request in its context compares
+C<< $scope != $ctx->request->scope >> and rebuilds it when they differ. The
+rebuilt Request cannot read a body the old one already read -- the body
+arrived once, and the old Request holds it -- so read the body only where
+the scope is final: in the handler.
 
 This is how Starlette works: its C<Request.path_params> reads
 C<scope["path_params"]>, and each route match updates the scope in place.
