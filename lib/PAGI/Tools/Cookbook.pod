@@ -2953,11 +2953,12 @@ and hands the application the rewritten body.
 
 =head2 CSRF on a streamed upload
 
-L<PAGI::CSRF/csrf_protect> parses the whole form to read its C<csrf_token>
-field, so a route that streams a plain HTML form's upload with
-C<multipart_stream> checks the token itself, from the stream's first part.
-L<PAGI::Middleware::CSRF> never reads the body, so the route needs no
-middleware of its own:
+A route that streams a plain HTML form's upload with C<multipart_stream>
+needs no CSRF code of its own. L<PAGI::Middleware::CSRF> reads a multipart
+form only as far as its C<csrf_token> field, checks it, and hands the route
+the whole body, so the upload after the token streams to the route as it
+arrives. The form puts its token field before the file -- browsers send
+fields in document order -- and a file part before the token is refused:
 
   use v5.40;
   use Future::AsyncAwait;
@@ -2968,8 +2969,7 @@ middleware of its own:
   my $uploads = tempdir(CLEANUP => 1);
   my $files   = 0;
 
-  # The page's upload form puts its csrf_token field before the file, and
-  # browsers send fields in document order, so the token arrives first.
+  # The page's upload form puts its csrf_token field before the file.
   async sub notes ($request) {
       my $token = csrf($request)->token;
       return response('HTML', <<"HTML");
@@ -2980,19 +2980,11 @@ middleware of its own:
   HTML
   }
 
-  # A script whose X-CSRF-Token header matched has passed (valid); the
-  # middleware refused every other failure but a form without the header,
-  # whose token must be the first part, checked before any file.
+  # Only a request whose token the middleware matched gets here: an
+  # X-CSRF-Token header, or the form's field, read before the file.
   async sub upload ($request) {
       my $stream = $request->multipart_stream;
-      my $check  = csrf($request);
-      unless ($check->valid) {
-          my $first = await $stream->next;
-          return response('Text', 'CSRF token validation failed', status => 403)
-              unless defined($first) && $first->name eq 'csrf_token' && !$first->is_file
-                  && $check->verify(await $first->value);
-      }
-      my $bytes = 0;
+      my $bytes  = 0;
       while (defined(my $part = await $stream->next)) {
           next unless $part->is_file;
           $bytes += await $part->stream_to_file("$uploads/upload-" . ++$files);
@@ -3008,9 +3000,9 @@ middleware of its own:
       middleware => [middleware('CSRF', form_field => 'csrf_token')],
   );
 
-C<valid> is true when the middleware matched an C<X-CSRF-Token> header, so a
-script that sends the header uploads in any part order. C<verify> also fails
-a request the middleware found to be cross-origin.
+A script that sends the C<X-CSRF-Token> header uploads in any part order:
+the middleware then reads nothing. A form's token must come within
+C<max_form_size> bytes (1 MiB by default), however large the file after it.
 
 =head2 A huge upload in a legacy encoding
 

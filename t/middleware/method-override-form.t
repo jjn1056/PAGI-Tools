@@ -7,7 +7,6 @@ use Future::AsyncAwait;
 use lib 'lib';
 use PAGI::Middleware::MethodOverride;
 use PAGI::Test::Client;
-use PAGI::CSRF qw(csrf_protect);
 use PAGI::Tools qw(compose middleware response route);
 
 # MethodOverride takes the method from the header or the _method query
@@ -122,7 +121,7 @@ subtest 'with CSRF, in either order, the method in the URL and the token in the 
     my %options = (CSRF => [form_field => 'csrf_token'], MethodOverride => []);
     for my $order (['CSRF', 'MethodOverride'], ['MethodOverride', 'CSRF']) {
         my $client = PAGI::Test::Client->new(app => compose(
-            routes     => [route('/' => csrf_protect(\&report), methods => [qw(POST PUT PATCH DELETE)])],
+            routes     => [route('/' => \&report, methods => [qw(POST PUT PATCH DELETE)])],
             middleware => [map { middleware($_, @{ $options{$_} }) } @$order],
         ));
         $client->put('/');    # any response sets the CSRF cookie

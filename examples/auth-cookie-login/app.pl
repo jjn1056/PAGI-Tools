@@ -6,7 +6,7 @@ use Future::AsyncAwait;
 use PAGI::Auth qw(auth_result unauth_result);
 use PAGI::Auth::SimpleUser;
 use PAGI::Compose qw(compose);
-use PAGI::CSRF qw(csrf csrf_protect);
+use PAGI::CSRF qw(csrf);
 use PAGI::Middleware::Session qw(session_state);
 use PAGI::Pages qw(redirect not_found);
 use PAGI::Response qw(response);
@@ -118,9 +118,8 @@ compose(
             route('/' => \&home, methods => ['GET'], name => 'home',
                 middleware => [middleware('Requires', redirect => ['login'])]),
             route('/login' => \&login_form, methods => ['GET'], name => 'login'),
-            # The forms' routes check their csrf_token field first.
-            route('/login' => csrf_protect(\&login_submit), methods => ['POST']),
-            route('/logout' => csrf_protect(\&logout), methods => ['POST'], name => 'logout'),
+            route('/login' => \&login_submit, methods => ['POST']),
+            route('/logout' => \&logout, methods => ['POST'], name => 'logout'),
         ]),
     ],
     http_default => not_found(),
@@ -132,7 +131,7 @@ compose(
         # The token lives in the session, so a cookie planted by another
         # site or subdomain cannot stand in for it. A cross-site post gets
         # its 403 here; the forms post the token in the csrf_token field,
-        # which csrf_protect on their routes reads.
+        # which the middleware reads from the body before the routes run.
         middleware('CSRF', session => 1, form_field => 'csrf_token'),
         middleware('Authentication', backend => \&session_user),
     ],

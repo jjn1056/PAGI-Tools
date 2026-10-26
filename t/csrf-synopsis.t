@@ -21,7 +21,12 @@ subtest 'the middleware handles it' => sub {
     is($saved->status, 200, 'matching header: reaches the application');
 };
 
-subtest 'csrf_protect reads the form' => sub {
+subtest 'csrf_protect is gone: the middleware checks every form' => sub {
+    like(dies { eval 'use PAGI::CSRF qw(csrf_protect); 1' or die $@ },
+        qr/"csrf_protect" is not exported by the PAGI::CSRF module/, 'importing it fails');
+};
+
+subtest 'the middleware reads the form' => sub {
     my $client = PAGI::Test::Client->new(app => $form);
     my ($token) = $client->get('/')->text =~ /name="csrf_token" value="([^"]+)"/;
     ok($token, 'the page hands over the token');

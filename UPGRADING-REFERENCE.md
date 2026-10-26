@@ -883,7 +883,7 @@ its own buckets.
 | 0.002002 | Now |
 |---|---|
 | `enforce => 'header'` (the default) | the default; remove the option |
-| `enforce => 'app'` | remove it, set `form_field => 'csrf_token'`, and wrap each form route's handler in `csrf_protect` (PAGI::CSRF), which reads the field from the handler's Request and refuses like a header; or keep the handler's `verify` under `refuse => 0` |
+| `enforce => 'app'` | remove it and set `form_field => 'csrf_token'`: the middleware reads each form's field from the body and refuses like a header, before any route runs; or keep the handler's `verify` under `refuse => 0` |
 
 Passing `enforce` dies, so a form application that relied on
 `enforce => 'app'` cannot silently start refusing its posts. The default
@@ -895,13 +895,13 @@ middleware('CSRF',
     refuse => response('JSON', { detail => 'CSRF token validation failed' }, status => 403));
 ```
 
-The middleware never reads the body. Without `form_field` an unsafe request
-without the `X-CSRF-Token` header is refused; with it, a form post without
-the header reaches its route for `csrf_protect` to check, and the handler's
-`form_params` returns the parse `csrf_protect` made. A route that streams a
-form upload skips `csrf_protect` and checks the token it streams with
-`csrf($request)->verify`; see "CSRF on a streamed upload" in
-`PAGI::Tools::Cookbook`.
+Without `form_field` an unsafe request without the `X-CSRF-Token` header is
+refused. With it, a form post without the header has its field read by the
+middleware -- a urlencoded body whole, at most `max_form_size` bytes, a
+multipart body only as far as its token part -- and the route is handed the
+whole body to read as usual. A route that streams a form upload needs
+nothing of its own: the form puts its token field before the file; see
+"CSRF on a streamed upload" in `PAGI::Tools::Cookbook`.
 
 ## Breaking: CSRF secret removed, cookie readable, origin checked
 

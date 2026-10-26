@@ -1105,9 +1105,10 @@ Protect against Cross-Site Request Forgery:
   middleware('CSRF'),
 
 Checks a token on unsafe requests (POST, PUT, PATCH, DELETE): the
-X-CSRF-Token header. A plain form's C<csrf_token> field is checked by
-C<csrf_protect> around its route's handler, under
-C<< middleware('CSRF', form_field => 'csrf_token') >> (see
+X-CSRF-Token header, or, under
+C<< middleware('CSRF', form_field => 'csrf_token') >>, a plain form's
+C<csrf_token> field, which the middleware reads from the body before any
+route runs (see
 L<PAGI::Middleware::CSRF/"Form flow (plain HTML forms)">).
 
 =back

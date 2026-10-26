@@ -43,8 +43,8 @@ Its other modes:
     # Keep the token in the session (Session middleware must wrap this one)
     middleware('CSRF', session => 1);
 
-    # Accept plain HTML forms: a form post without the header is left to
-    # csrf_protect on its route, which reads the csrf_token field
+    # Accept plain HTML forms: a form post without the header has its
+    # csrf_token field read here, and the route reads the whole body as usual
     middleware('CSRF', form_field => 'csrf_token');
 
 L<PAGI::CSRF/SYNOPSIS> shows both modes in full, as complete applications.
@@ -165,13 +165,12 @@ C<Origin>. The token check still applies.
 
 =item * form_field (default: undef)
 
-The form field that L<PAGI::CSRF/csrf_protect> reads the token from, usually
-C<csrf_token> (the name of the default cookie and of the session key). Set,
-an unsafe form post that came without the header and passed the origin check
-is not refused here: it is left to C<csrf_protect> on its route, and the
-middleware records the field and C<refuse> in the scope for it. C<undef>, the
-default, means no form flow: a request without the header is refused.
-Anything else but a non-empty string dies.
+The form field the token is read from, usually C<csrf_token> (the name of the
+default cookie and of the session key). Set, an unsafe form post that came
+without the header and passed the origin check has the field read from its
+body here (see L</"Form flow (plain HTML forms)">). C<undef>, the default,
+means no form flow: a request without the header is refused. Anything else
+but a non-empty string dies.
 
 =item * max_form_size (default: 1048576, 1 MiB)
 
@@ -191,9 +190,9 @@ C<403 text/plain> response, C<CSRF token validation failed>. An application
 L<PAGI::Request>, returning a Response or an application) or an object
 with C<to_app>, which
 includes every L<PAGI::Response> -- answers instead, and can read the reason
-with C<< csrf($request)->failure >>. When C<csrf_protect> refuses a form post
-the reason reads C<missing_token> (the header the middleware checks was
-absent), whether the form's field was missing or wrong. Exactly C<0>: the
+with C<< csrf($request)->failure >>; when the middleware read a form's body,
+it is handed a receive that delivers the whole body, so it can read the form
+to re-render it. Exactly C<0>: the
 middleware never refuses;
 the request reaches the application with the outcome recorded for
 C<< csrf($request)->valid >> and C<< ->failure >>. Any other plain value dies.
@@ -224,7 +223,7 @@ sub _init {
     die 'CSRF httponly has no cookie to flag under session => 1: the token lives in the session'
         if $self->{httponly} && $self->{session};
     $self->{trusted_origins} = _trusted_origins($config->{trusted_origins} // []);
-    # The field csrf_protect reads; absent or undef, there is no form flow.
+    # The field a form's token is read from; absent or undef, no form flow.
     $self->{form_field} = $config->{form_field};
     die 'CSRF form_field must be a field name, like csrf_token, or undef for no form flow'
         if defined($self->{form_field}) && (ref($self->{form_field}) || !length($self->{form_field}));
@@ -237,15 +236,11 @@ sub _init {
         unless !ref($self->{max_form_size}) && $self->{max_form_size} =~ /\A[1-9][0-9]*\z/;
 
     # Absent: the default refusal. Exactly 0: the application decides.
-    # refuse_given is the option as given, for csrf_protect, which answers
-    # with it after reading the body: a Request handler is then called with
-    # that same Request.
     my $refuse = PAGI::Utils::_refuse_option('CSRF', $config, 1);
     my $default = PAGI::Response::Text->new('CSRF token validation failed', status => 403);
     $self->{refuse} = !defined($refuse) ? $default->to_app
         : ref($refuse) ? $refuse
         : undef;
-    $self->{refuse_given} = !defined($refuse) ? $default : $config->{refuse};
     PAGI::Utils::_reject_unknown_options('CSRF', $config,
         qw(cookie_name form_field httponly max_form_size refuse safe_methods secure
             session token_header trusted_origins));
@@ -299,8 +294,6 @@ sub wrap {
         # cookie's (undef when the client has none yet).
         my ($token, $stored) = $self->_token_for($scope);
         my %recorded = ('pagi.csrf_token' => $token);
-        $recorded{'pagi.csrf_form'} = { field => $self->{form_field}, refuse => $self->{refuse_given} }
-            if defined($self->{form_field}) && $self->{refuse};
         my $failure;
         unless ($self->{safe_methods}{$scope->{method}}) {
             $failure = $self->_origin_failure($scope)
@@ -630,42 +623,38 @@ on their own: C<< cookie_name => 'XSRF-TOKEN', token_header => 'X-XSRF-TOKEN' >>
 =head2 Form flow (plain HTML forms)
 
 A plain C<< <form> >> POST cannot add a header, so it carries the token in
-a hidden C<csrf_token> field. Run the middleware with C<form_field> and wrap
-each form route's handler in L<PAGI::CSRF/csrf_protect>:
-
-    use PAGI::CSRF qw(csrf csrf_protect);
+a hidden C<csrf_token> field. Run the middleware with C<form_field>, and
+render the token into each form:
 
     <input type="hidden" name="csrf_token" value="<%= csrf($request)->token %>">
 
-    route('/tasks' => csrf_protect(\&create), methods => ['POST']),
+    route('/tasks' => \&create, methods => ['POST']),
     ...
     middleware => [middleware('CSRF', form_field => 'csrf_token')],
 
-C<csrf_protect> reads the field from the handler's own Request, refuses a
-missing or wrong one before the handler runs, and the handler reads its
-fields as usual, from that same parse:
+The middleware reads the field from the body -- a urlencoded body whole, at
+most C<max_form_size> bytes, a multipart body only as far as its token part
+-- and refuses a missing or wrong one before any route runs. The route is
+handed a receive that delivers the whole body again, and reads its fields as
+usual:
 
     my $form = await $request->form_params;
 
-One token serves every form on the page. A form route without
-C<csrf_protect> accepts a post without the token: only the origin check
-stands in front of it.
+The form is therefore parsed twice, once here for one field and once by the
+route. One token serves every form on the page. Were a form to carry two
+token fields, the first decides (Django's middleware takes the last), so
+that a multipart upload can stream past its token.
 
 =head2 Streamed uploads
 
-A route that streams a form upload with C<multipart_stream> does not use
-C<csrf_protect>, which would parse the whole form first. A client that can
-set the header (a script uploading with fetch) sends it, and the middleware
-checks it. A plain HTML form cannot: when the request sent no header
-(C<< csrf($request)->failure >> is C<missing_token>), take the token from
-the stream's first part and check it with C<< csrf($request)->verify >>,
-which also fails a cross-origin request. Refuse any other failure, such as a
-header that did not match. L<PAGI::Tools::Cookbook/CSRF on a streamed
-upload> has a complete application. In a raw-scope application the same
-check is:
-
-    my $guard = csrf($scope);
-    my $valid = $guard->verify($token_from_the_stream);
+A route that streams a form upload with C<multipart_stream> needs nothing
+of its own. The form puts its hidden token field before the file -- browsers
+send fields in document order -- and the middleware reads only as far as
+it; the route then streams the upload, the token part first, as it arrives.
+A file part before the token is refused (C<missing_token>). A client that
+can set the header (a script uploading with fetch) sends it instead, and
+then nothing is read here. L<PAGI::Tools::Cookbook/CSRF on a streamed
+upload> has a complete application.
 
 =head1 SECURITY
 

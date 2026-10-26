@@ -139,12 +139,13 @@
     and replaces it when the session is regenerated (at login);
     an origin check (Sec-Fetch-Site, then Origin vs Host) on unsafe
     requests and on WebSocket handshakes (cross-site WebSocket hijacking),
-    with trusted_origins; httponly. It never reads the body. With
-    form_field set, a urlencoded or multipart post without the header is
-    left to PAGI::CSRF's new csrf_protect, which wraps a form route's
-    handler and reads the field from the handler's own Request (as
-    starlette-wtf's csrf_protect does), so one token serves every form on
-    a page and the handler's form_params is the same parse.
+    with trusted_origins; httponly. With form_field set, the middleware
+    checks a plain HTML form's token itself, as Django's does: it reads a
+    urlencoded body whole (at most max_form_size, 1 MiB) and a multipart
+    body only as far as its token part, deciding in byte order so an
+    upload after the token still streams, and hands the route a receive
+    that delivers the whole body again. Every form route is protected; one
+    token serves every form on a page.
   - PAGI::FutureOwner: own the Futures you start until they settle; await
     settled for all of them (in lifespan.shutdown, say). Replaces ->retain
     for background work.
@@ -550,11 +551,11 @@
   - PAGI::Middleware::CSRF's enforce is removed: refuse => 0 replaces
     enforce => 'app', and passing enforce dies.
   - PAGI::Middleware::CSRF accepts a plain HTML form only with
-    form_field => 'csrf_token' and csrf_protect around each form route's
-    handler (0.002002's enforce => 'app' with the handler's verify);
-    without form_field, an unsafe request without the X-CSRF-Token header
-    is refused. It never reads the body, so a route that streams an upload
-    checks the token from the stream itself (see the Cookbook).
+    form_field => 'csrf_token' (0.002002's enforce => 'app' with the
+    handler's verify), and then checks the form's field itself, before
+    any route runs; without form_field, an unsafe request without the
+    X-CSRF-Token header is refused. A multipart form puts its token field
+    before any file.
   - PAGI::Middleware::CSRF's secret is removed (tokens are random; passing
     it dies); its cookie is no longer HttpOnly unless httponly => 1;
     cross-origin unsafe requests are refused. PAGI::CSRF's verify fails a

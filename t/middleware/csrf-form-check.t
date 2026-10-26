@@ -14,7 +14,7 @@ use PAGI::Tools qw(compose middleware response route);
 # recording receive, and hands whoever runs next a receive that delivers the
 # whole body again. Every form route is protected; the route reads its form
 # as usual. (No header and no Origin: a plain form post from a client that
-# sends neither, the case a route without csrf_protect used to accept.)
+# sends neither: no origin check stands in front of it, only this one.)
 
 my $ran = 0;
 

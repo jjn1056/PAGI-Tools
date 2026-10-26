@@ -43,11 +43,10 @@ installed; it is not a dependency of PAGI-Tools.
   Request) and what Flask's `@app.errorhandler` gives.
 - **CSRF on forms.** `middleware('CSRF', session => 1, form_field =>
   'csrf_token')` keeps the token in the session and refuses a cross-site
-  POST. Each POST route is wrapped in `csrf_protect`, which reads the hidden
-  `csrf_token` field from the handler's own Request and answers a missing or
-  wrong token with a 403 before the handler runs. One token serves every form
-  on the page. `create` then reads its fields with `form_params`, the same
-  parse.
+  POST. It reads each form's hidden `csrf_token` field from the body and
+  answers a missing or wrong token with a 403 before any route runs, handing
+  the route the whole body; `create` then reads its fields with
+  `form_params` as usual. One token serves every form on the page.
 - **Static files.** `mount('/static', app =>
   PAGI::App::File->from_app_path('public'), name => 'static')`. The mount is
   named `static`, so the layout links the stylesheet with
@@ -61,9 +60,9 @@ lines. The difference is the batteries: Flask's `render_template` and
 `flash`/`get_flashed_messages` are the `page` and `flash` helpers here,
 `url_for('static', ...)` is the template's `url('static', ...)`, and Flask's
 module-level `BOARD` is
-Compose's `lifespan` block. CSRF has the same shape in both: the Flask
-version calls `check_csrf` in its three handlers, and PAGI-Tools wraps the
-three routes in `csrf_protect`.
+Compose's `lifespan` block. CSRF is checked before each handler in both: the
+Flask version calls `check_csrf` in its three handlers, and PAGI-Tools'
+middleware checks every form post, so the routes say nothing about it.
 
 Errors are answered the same way in both: Flask's `@app.errorhandler`
 functions see the same `request`, and so do ErrorHandler's `catch` entries;
@@ -277,8 +276,8 @@ ul.tasks form { display: inline; }
 ## See also
 
 - `PAGI::Session` and `PAGI::Middleware::Session`
-- `PAGI::Middleware::CSRF` for the token and the origin check; `PAGI::CSRF`
-  for the token the page renders and `csrf_protect`
+- `PAGI::Middleware::CSRF` for the token, the origin check and the form
+  check; `PAGI::CSRF` for the token the page renders
 - `PAGI::App::File`, `from_app_path`
 - `examples/auth-cookie-login`, the same form idioms with a login
 - `examples/contact-form`, form fields and file uploads without a session
