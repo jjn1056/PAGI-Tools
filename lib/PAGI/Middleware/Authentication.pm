@@ -26,11 +26,16 @@ sub _init {
     $self->{backend} = $backend;
     croak "Authentication 'body_buffer' was removed: a backend never reads the body"
         if exists $config->{body_buffer};
+    my $catch = exists $config->{catch}
+        ? PAGI::Middleware::ErrorHandler::_catch_table($config->{catch}, 'Authentication') : undef;
     PAGI::Utils::_reject_unknown_options('Authentication', $config,
-        qw(backend));
-    # The built-in answers a Compose application gives a route's HTTP error,
-    # for a backend's when no ErrorHandler is around this middleware.
-    $self->{built_in_answers} = PAGI::Middleware::ErrorHandler->_new_compose_failsafe(
+        qw(backend catch));
+    # What answers the backend's HTTP errors when no ErrorHandler is around
+    # this middleware, or always with a catch table: its entries, else the
+    # built-in answers a Compose application gives a route's HTTP error.
+    $self->{own_catch} = $catch ? 1 : 0;
+    $self->{answers} = PAGI::Middleware::ErrorHandler->_new_compose_failsafe(
+        ($catch ? (catch => $catch) : ()),
         _development_resolver => sub { return PAGI::Utils::is_development() },
     );
 }
@@ -69,12 +74,14 @@ sub wrap {
             my $error = $@;
             # An HTTP error the backend throws is the client's answer, as
             # Starlette's middleware answers its backend's
-            # AuthenticationError: answered as a route's thrown error is, by
-            # the ErrorHandler this request is inside (on a route) or with
-            # the built-in answer, then re-raised from 500 up. Anything else
-            # is a server error, as before.
+            # AuthenticationError with its on_error: by this middleware's
+            # catch table, else as a route's thrown error is -- by the
+            # ErrorHandler this request is inside (on a route) or with the
+            # built-in answer -- then re-raised from 500 up. Anything else is
+            # a server error, as before.
             die $error unless blessed($error) && $error->isa('PAGI::Exception::HTTP');
-            my $answering = ($type eq 'http' && $scope->{'pagi.error_handler'}) || $self->{built_in_answers};
+            my $answering = !$self->{own_catch} && $type eq 'http' && $scope->{'pagi.error_handler'}
+                ? $scope->{'pagi.error_handler'} : $self->{answers};
             my $handled = await $answering->_handle_exception($error, $request, $scope, $receive, $send, 'quiet');
             die $error if !$handled || $handled == 2;
             return;
@@ -130,7 +137,8 @@ Plack::Builder does.
 
 Construct with C<new(backend =E<gt> $backend)> and call C<wrap($next)> to get a
 native application. C<backend> is required and must be exactly a coderef or an
-object implementing C<authenticate>; unknown constructor options are errors.
+object implementing C<authenticate>; C<catch> is optional (see L</catch>);
+unknown constructor options are errors.
 The same backend is reused across invocations. This middleware constructs one
 L<PAGI::Request>, or the class L<PAGI::Middleware::RequestClass> set when that
 middleware is listed before this one, for each HTTP, WebSocket, or SSE
@@ -174,7 +182,45 @@ sent a malformed or duplicate C<Authorization> field:
     });
 
 Anything else the backend throws, and every error from downstream,
-propagates as a server error. An application can read the
+propagates as a server error.
+
+=head2 catch
+
+    my %catch = ('PAGI::Exception::HTTP' => sub {
+        my ($request, $context) = @_;
+        return response('JSON', { error => $context->message },
+            status  => $context->status,
+            headers => $context->exception->headers);
+    });
+
+    compose(
+        routes     => [...],
+        middleware => [
+            middleware('ErrorHandler', catch => \%catch),                        # what the application raises
+            middleware('Authentication', backend => $backend, catch => \%catch), # what the backend raises
+        ],
+    );
+
+How the backend's HTTP errors look. In Compose's C<middleware> list an
+ErrorHandler's C<catch> entries never see them: Compose puts its exception
+boundary inside the application middleware, as Starlette's
+C<exception_handlers> never see an C<AuthenticationMiddleware> error. So the
+rule is: ErrorHandler's C<catch> answers what the application raises, and
+this middleware answers what its backend raises, with this table -- the
+same shape as L<PAGI::Middleware::ErrorHandler/catch>, so one table can serve
+both, and an API's 401 is JSON like its 404. Its role is Starlette's
+C<on_error>; it is not named C<on_error>, which is ErrorHandler's reporting
+hook.
+
+Keys are statuses from 400 to 599 or exact class names; an entry receives
+the backend's Request (with no body) and an L<PAGI::ErrorContext>, and
+returns a response, as an ErrorHandler entry does. The table is checked when
+the middleware is constructed. It answers only the backend's
+L<PAGI::Exception::HTTP> errors, wherever the middleware is placed, before
+any ErrorHandler around it; an error no entry matches gets the built-in
+answer. Without C<catch>, the backend's error is answered by the ErrorHandler
+this middleware is inside, on a route, and with the built-in answer
+elsewhere. An application can read the
 result with C<auth($scope)> or C<auth($request)>; absence is a configuration
 error rather than an implicit guest.
 

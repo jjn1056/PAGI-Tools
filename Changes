@@ -96,6 +96,10 @@
     answer (as Starlette answers a backend's AuthenticationError): answered
     as a route's thrown error is, by the ErrorHandler the route is inside or
     with the built-in answer, and a WebSocket or SSE is refused with it.
+    Its catch option (an ErrorHandler-shaped table; Starlette's on_error)
+    shapes those answers wherever it is placed, so one table can serve
+    ErrorHandler and Authentication: ErrorHandler's catch answers what the
+    application raises, a middleware answers what it raises itself.
   - PAGI::Request's bearer_token, basic_auth and content_type with
     raise_on_error throw a PAGI::Exception::HTTP 400 ("The Authorization
     header could not be parsed.") for a duplicate or malformed field: the

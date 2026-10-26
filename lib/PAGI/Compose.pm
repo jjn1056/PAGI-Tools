@@ -314,7 +314,9 @@ Router, inside every application middleware; its server-error boundary
 (C<handler>, C<on_error>, the 500) is outside them all. So an application
 middleware's error is answered by C<handler>, never by C<catch>, and nothing
 an application middleware adds -- a scope key, a response header -- reaches
-that 500. Middleware that must cover server-error responses, such as
+that 500. ErrorHandler's C<catch> is for what the application raises; a
+middleware with errors of its own answers them with its own table, such as
+L<PAGI::Middleware::Authentication>'s C<catch>. Middleware that must cover server-error responses, such as
 RequestId, AccessLog, SecurityHeaders or CORS, wrap the compiled application
 instead (C<< PAGI::Middleware::RequestId->new->wrap($compose->to_app) >>; see
 L<PAGI::Tools::Cookbook/Compose Safety and Application Error Policy>). One

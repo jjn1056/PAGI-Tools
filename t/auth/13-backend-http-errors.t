@@ -7,6 +7,7 @@ use Future::AsyncAwait;
 use PAGI::Auth qw(auth auth_result unauth_result);
 use PAGI::Auth::SimpleUser;
 use PAGI::Exception::HTTP;
+use PAGI::Middleware::Authentication;
 use PAGI::Routing qw(sse websocket);
 use PAGI::Test::Client;
 use PAGI::Tools qw(compose middleware response route);
@@ -29,7 +30,7 @@ sub whoami {
 
 sub client_for {
     my ($backend, %opts) = @_;
-    my @auth = (middleware('Authentication', backend => $backend));
+    my @auth = (middleware('Authentication', backend => $backend, %{ $opts{auth} // {} }));
     my $app = $opts{on_route}
         ? compose(routes => [route('/' => \&whoami, middleware => \@auth)], middleware => $opts{middleware} // [])
         : compose(routes => [
@@ -121,6 +122,69 @@ subtest 'a WebSocket or SSE connection is refused with the answer' => sub {
     ok $ws->refused, 'WebSocket: denied, not accepted';
     is [$ws->response->status, $ws->response->text], [401, 'Sign in.'], 'WebSocket: denied with the answer';
     is $ran, 0, 'neither handler ran';
+};
+
+# Middleware catches its own errors; the application's catch entries answer
+# what the application raises. An Authentication catch table, the same shape
+# as ErrorHandler's, shapes the backend's errors wherever it is placed, so
+# one table can serve both.
+my $json = sub {
+    my ($request, $context) = @_;
+    return response('JSON', { error => $context->message }, status => $context->status,
+        headers => $context->exception->headers);
+};
+my $expired = sub {
+    PAGI::Exception::HTTP->throw(401, 'Token expired.', headers => ['WWW-Authenticate' => 'Bearer error="invalid_token"']);
+};
+
+subtest 'in Compose middleware, an Authentication catch table answers the backend\'s error' => sub {
+    for my $key ('PAGI::Exception::HTTP', 401) {
+        $ran = 0;
+        my $res = client_for($expired, auth => { catch => { $key => $json } })->get('/');
+        is [$res->status, $res->json, $res->header('WWW-Authenticate')],
+            [401, { error => 'Token expired.' }, 'Bearer error="invalid_token"'], "an entry for $key";
+        is $ran, 0, 'the route never ran';
+    }
+    my $res = client_for(sub { PAGI::Exception::HTTP->throw(403, 'No.') }, auth => { catch => { 401 => $json } })->get('/');
+    is [$res->status, $res->text], [403, 'No.'], 'an error no entry matches gets the built-in answer';
+};
+
+subtest 'one table shared by ErrorHandler and Authentication: one format' => sub {
+    my %catch = ('PAGI::Exception::HTTP' => $json);
+    my $app = compose(
+        routes => [route('/' => sub { PAGI::Exception::HTTP->throw(404, 'No such note.') })],
+        middleware => [middleware('ErrorHandler', catch => \%catch),
+                       middleware('Authentication', backend => sub {
+                           my ($request) = @_;
+                           $expired->() if ($request->header('Authorization') // '') eq 'Bearer old';
+                           return unauth_result();
+                       }, catch => \%catch)],
+    );
+    my $client = PAGI::Test::Client->new(app => $app->to_app);
+    is [$client->get('/')->json], [{ error => 'No such note.' }], 'the application\'s 404';
+    is [$client->get('/', headers => { Authorization => 'Bearer old' })->json], [{ error => 'Token expired.' }], 'the backend\'s 401';
+};
+
+subtest 'on a route, an Authentication catch table answers before the route\'s ErrorHandler' => sub {
+    my $text = sub { response('Text', 'route ErrorHandler', status => $_[1]->status) };
+    my $res = client_for($expired, on_route => 1, auth => { catch => { 401 => $json } },
+        middleware => [middleware('ErrorHandler', catch => { 'PAGI::Exception::HTTP' => $text })])->get('/');
+    is [$res->status, $res->json], [401, { error => 'Token expired.' }], 'the middleware\'s own table';
+};
+
+subtest 'a WebSocket is refused with the catch entry\'s answer' => sub {
+    my $ws = client_for($expired, auth => { catch => { 401 => $json } })->websocket('/socket');
+    ok $ws->refused, 'denied';
+    is [$ws->response->status, $ws->response->json], [401, { error => 'Token expired.' }];
+};
+
+subtest 'a catch table is checked at construction' => sub {
+    like dies { PAGI::Middleware::Authentication->new(backend => sub {}, catch => []) },
+        qr/\AAuthentication catch must be a hash reference of status or class => code/, 'not a hash';
+    like dies { PAGI::Middleware::Authentication->new(backend => sub {}, catch => { 401 => 'x' }) },
+        qr/\AAuthentication catch entry for '401' must be a code reference/, 'an entry that is not code';
+    like dies { PAGI::Middleware::Authentication->new(backend => sub {}, catch => { '+Foo' => sub {} }) },
+        qr/\AAuthentication catch key '\+Foo' is neither a status/, 'a bad key';
 };
 
 done_testing;

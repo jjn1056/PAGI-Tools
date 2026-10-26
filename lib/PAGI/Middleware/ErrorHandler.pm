@@ -326,19 +326,21 @@ sub _init {
 }
 
 # The catch table, checked: each key a status from 400 to 599 or an exact
-# package name, each entry a code reference. Returns a copy.
+# package name, each entry a code reference. Returns a copy. $owner names the
+# middleware the table was given to in its errors (Authentication takes one).
 sub _catch_table {
-    my ($catch) = @_;
-    croak 'ErrorHandler catch must be a hash reference of status or class => code'
+    my ($catch, $owner) = @_;
+    $owner //= 'ErrorHandler';
+    croak "$owner catch must be a hash reference of status or class => code"
         unless ref($catch) eq 'HASH';
     my %table;
     for my $key (sort keys %$catch) {
         unless ($key =~ /\A[45][0-9][0-9]\z/ || $key =~ /\A[A-Za-z_]\w*(?:::\w+)*\z/) {
             my $hint = $key =~ /\A\+([A-Za-z_]\w*(?:::\w+)*)\z/
                 ? "; a class name is exact, so write '$1'" : '';
-            croak "ErrorHandler catch key '$key' is neither a status from 400 to 599 nor a package name$hint";
+            croak "$owner catch key '$key' is neither a status from 400 to 599 nor a package name$hint";
         }
-        croak "ErrorHandler catch entry for '$key' must be a code reference"
+        croak "$owner catch entry for '$key' must be a code reference"
             unless ref($catch->{$key}) eq 'CODE';
         $table{$key} = $catch->{$key};
     }
@@ -906,7 +908,12 @@ split, wherever it is listed, as Starlette builds an application:
           the root Router
 
 So an application middleware's error is answered by C<handler>, never by
-C<catch>, and nothing an application middleware adds reaches the 500. One
+C<catch>, and nothing an application middleware adds reaches the 500. The
+rule, as in Starlette: this ErrorHandler's C<catch> answers what the
+application raises -- routes, endpoints, the router -- and a middleware that
+raises errors of its own answers them itself, with a table of its own
+(L<PAGI::Middleware::Authentication>'s C<catch>, the same shape as this one's,
+so one table can serve both; L<PAGI::Middleware::CSRF>'s C<refuse>). One
 stock ErrorHandler per Compose: a second dies when the application is built
 (put section-local ones on a Router, a Mount or a Route). A subclass of
 ErrorHandler is not split: it wraps what follows it where it is listed, and
