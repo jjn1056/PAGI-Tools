@@ -92,7 +92,15 @@
     and PAGI::Middleware::Authentication. Its backend reads the request's
     headers and cookies, never the body (as Starlette's backend gets an
     HTTPConnection); a request signed over its body is checked in the
-    handler.
+    handler. A PAGI::Exception::HTTP the backend throws is the client's
+    answer (as Starlette answers a backend's AuthenticationError): answered
+    as a route's thrown error is, by the ErrorHandler the route is inside or
+    with the built-in answer, and a WebSocket or SSE is refused with it.
+  - PAGI::Request's bearer_token, basic_auth and content_type with
+    raise_on_error throw a PAGI::Exception::HTTP 400 ("The Authorization
+    header could not be parsed.") for a duplicate or malformed field: the
+    client sent it. Option errors still croak; PAGI::Headers' own readers
+    still raise plain errors, since they parse any header list.
   - PAGI::Middleware::Requires: the scopes a route, mount or application
     requires, as middleware (Starlette's @requires). Otherwise a plain 403,
     a refuse application, or a redirect 303: to a location as written, or

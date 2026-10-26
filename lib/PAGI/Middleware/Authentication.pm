@@ -8,6 +8,7 @@ use Future;
 use Future::AsyncAwait;
 use Scalar::Util qw(blessed);
 use PAGI::Auth qw(auth);
+use PAGI::Middleware::ErrorHandler ();
 use PAGI::Utils::Middleware qw(clone_scope);
 use PAGI::Utils ();
 
@@ -27,6 +28,11 @@ sub _init {
         if exists $config->{body_buffer};
     PAGI::Utils::_reject_unknown_options('Authentication', $config,
         qw(backend));
+    # The built-in answers a Compose application gives a route's HTTP error,
+    # for a backend's when no ErrorHandler is around this middleware.
+    $self->{built_in_answers} = PAGI::Middleware::ErrorHandler->_new_compose_failsafe(
+        _development_resolver => sub { return PAGI::Utils::is_development() },
+    );
 }
 
 # The receive behind a backend's Request: reading the body there dies, and
@@ -51,10 +57,28 @@ sub wrap {
         # The backend reads the request's headers and cookies; the body is
         # the application's, so the backend's Request has none to read.
         my $request = PAGI::Utils::request_for_scope($scope, \&_no_body);
-        my $returned = ref($backend) eq 'CODE'
-            ? $backend->($request)
-            : $backend->authenticate($request);
-        my @results = await Future->wrap($returned);
+        my @results;
+        my $authenticated = eval {
+            my $returned = ref($backend) eq 'CODE'
+                ? $backend->($request)
+                : $backend->authenticate($request);
+            @results = await Future->wrap($returned);
+            1;
+        };
+        unless ($authenticated) {
+            my $error = $@;
+            # An HTTP error the backend throws is the client's answer, as
+            # Starlette's middleware answers its backend's
+            # AuthenticationError: answered as a route's thrown error is, by
+            # the ErrorHandler this request is inside (on a route) or with
+            # the built-in answer, then re-raised from 500 up. Anything else
+            # is a server error, as before.
+            die $error unless blessed($error) && $error->isa('PAGI::Exception::HTTP');
+            my $answering = ($type eq 'http' && $scope->{'pagi.error_handler'}) || $self->{built_in_answers};
+            my $handled = await $answering->_handle_exception($error, $request, $scope, $receive, $send, 'quiet');
+            die $error if !$handled || $handled == 2;
+            return;
+        }
         croak 'Authentication backend must return one Auth result'
             unless @results == 1;
 
@@ -126,9 +150,31 @@ body; see examples/signed-requests).
 
 The result is installed under C<pagi.auth> in a shallow child scope and the
 downstream application always continues. Guest and rejected results do not
-select responses; applications make that decision explicitly. Backend and
-downstream exceptions and failed Futures propagate normally. No
-C<authenticated> scope is granted implicitly. An application can read the
+select responses; applications make that decision explicitly. No
+C<authenticated> scope is granted implicitly.
+
+A L<PAGI::Exception::HTTP> the backend throws, or fails its Future with, is
+the client's answer, as Starlette's AuthenticationMiddleware answers its
+backend's C<AuthenticationError>: the request goes no further, and the error
+is answered as one thrown from a route is. On a route, inside an
+L<PAGI::Middleware::ErrorHandler>, that ErrorHandler answers it, with its
+C<catch> entries and C<on_error>; elsewhere -- in Compose's C<middleware>
+list, say -- with the built-in answer: its status, its C<client_message> as
+plain text, its C<headers> (a 401's C<WWW-Authenticate>, say). A WebSocket
+or SSE connection is refused with that answer. From 500 up it is answered
+and then re-raised, so the server logs it. That includes the 400 a
+L<PAGI::Request> auth helper throws with C<raise_on_error> when the client
+sent a malformed or duplicate C<Authorization> field:
+
+    middleware('Authentication', backend => sub {
+        my ($request) = @_;
+        my ($user, $password) = $request->basic_auth(raise_on_error => 1);  # 400 if malformed
+        return unauth_result() unless defined $user;
+        ...
+    });
+
+Anything else the backend throws, and every error from downstream,
+propagates as a server error. An application can read the
 result with C<auth($scope)> or C<auth($request)>; absence is a configuration
 error rather than an implicit guest.
 

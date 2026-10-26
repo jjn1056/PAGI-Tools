@@ -14,6 +14,7 @@ use Scalar::Util qw(blessed);
 use PAGI::Request::MultiPartHandler;
 use PAGI::Request::Upload;
 use PAGI::ContentNegotiation;
+use PAGI::Exception::HTTP ();
 use PAGI::Exception::RequestBody;
 use PAGI::Request::BodyStream;
 use PAGI::Request::_BodyInput ();
@@ -114,7 +115,7 @@ sub host {
 # Content-Type shortcut
 sub content_type {
     my ($self, @opts) = @_;
-    return $self->headers->content_type(@opts) // '';
+    return $self->_client_header('content_type', 'Content-Type', @opts) // '';
 }
 
 # The Content-Type charset parameter, as sent (undef when there is none)
@@ -278,13 +279,27 @@ sub preferred_type {
 # Extract Bearer token from Authorization header
 sub bearer_token {
     my ($self, @opts) = @_;
-    return $self->headers->authorization_bearer(@opts);
+    return $self->_client_header('authorization_bearer', 'Authorization', @opts);
 }
 
 # Extract Basic auth credentials
 sub basic_auth {
     my ($self, @opts) = @_;
-    return $self->headers->authorization_basic(@opts);
+    return $self->_client_header('authorization_basic', 'Authorization', @opts);
+}
+
+# Reads one of the client's header fields through PAGI::Headers' $method.
+# What raise_on_error refuses -- a duplicate or malformed field -- is the
+# client's error, so it is an HTTP 400, as a body the client got wrong is.
+# The options are checked first, so an option error stays a croak.
+sub _client_header {
+    my ($self, $method, $field, @opts) = @_;
+    my $raise = PAGI::Headers::_read_options($method, @opts);
+    return $self->headers->$method(@opts) unless $raise;
+    my @value;
+    return wantarray ? @value : $value[0]
+        if eval { @value = $self->headers->$method(@opts); 1 };
+    PAGI::Exception::HTTP->throw(400, "The $field header could not be parsed.");
 }
 
 # Path parameters - captured from URL path by router
@@ -778,7 +793,10 @@ validated inbound Host authority.
 
 The normalized media type from one valid Content-Type field, without
 parameters. Returns C<''> when the field is absent, duplicated, or malformed.
-Accepts C<raise_on_error =E<gt> 1> to report duplicate or malformed input.
+With C<raise_on_error =E<gt> 1> a duplicate or malformed field throws a
+L<PAGI::Exception::HTTP> 400, C<The Content-Type header could not be parsed.>:
+the client sent it, so it is the client's error, which a Compose application
+answers by itself (see L</AUTH HELPERS>).
 Use C<< $request->header('Content-Type') >> for the raw last-value lookup;
 parsing does not alter the stored field.
 
@@ -1345,8 +1363,10 @@ integration truly requires the server's raw transport handle.
 Returns an RFC 6750 Bearer token only when exactly one Authorization field is
 present. Missing fields and another identifiable scheme return C<undef>.
 Malformed Bearer credentials, including the former permissive whitespace and
-partial-token forms, return C<undef> by default or raise with
-C<raise_on_error =E<gt> 1>. Unknown options are errors.
+partial-token forms, and duplicate fields, return C<undef> by default; with
+C<raise_on_error =E<gt> 1> they throw a L<PAGI::Exception::HTTP> 400, C<The
+Authorization header could not be parsed.> Unknown options are errors (a
+croak, not a 400).
 
 =head2 basic_auth
 
@@ -1356,8 +1376,16 @@ Returns Basic C<(username, password)> bytes in list context only when exactly
 one Authorization field contains a valid conventional padded Base64 credential.
 It splits at the first colon and does not decode character encodings or verify
 credentials. Missing, another scheme, duplicates, and malformed input return
-C<(undef, undef)> by default; C<raise_on_error =E<gt> 1> raises for duplicates
-or malformed Basic credentials. Unknown options are errors.
+C<(undef, undef)> by default; with C<raise_on_error =E<gt> 1> duplicates and
+malformed Basic credentials throw a L<PAGI::Exception::HTTP> 400, C<The
+Authorization header could not be parsed.> Unknown options are errors (a
+croak, not a 400).
+
+The 400 is the client's error, not the application's: a Compose application
+answers it by itself, at a route or in an authentication backend (see
+L<PAGI::Middleware::Authentication>), and does not log it. Its message never
+carries the credential. The L<PAGI::Headers> readers these call raise plain
+errors instead, since they parse any header list, not only a request's.
 
 =head2 scope
 
