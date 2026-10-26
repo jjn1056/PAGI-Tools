@@ -1,10 +1,10 @@
 # Large Modular HTML Application
 
 This example structures a larger PAGI::Tools application as an inspectable
-Router graph. All application behavior lives under `lib/`; `app.pl` only loads
-`MyApp::Root` and returns `MyApp::Root->to_app`. That method retains the
-inspectable `PAGI::Compose` description; a conforming server compiles its
-`to_app` boundary once while loading the application.
+Router graph. All application behavior lives under `lib/`, and the application
+is `MyApp::Root`, a `PAGI::App::Compose`: `MyApp::Root->new->composition`
+returns the inspectable `PAGI::Compose` description, and a server compiles it
+once, through `to_app`, while loading the application.
 
 This example requires Perl 5.40+ and Type::Tiny. Those are example/test
 requirements: the PAGI::Tools distribution itself supports Perl 5.24
@@ -12,23 +12,19 @@ and does not depend on Type::Tiny at runtime.
 
 ## Run it
 
-From the PAGI-Tools checkout, use the currently shipped file loader:
-
-`app.pl` still locates `lib` because bootstrap happens before `PAGI::Utils` or
-`MyApp::Root` can be loaded.
+From the PAGI-Tools checkout, serve the root module, with its `lib` on the
+path:
 
 ```bash
-pagi-server --app examples/large-application/app.pl --port 5000
+pagi-server -I examples/large-application/lib \
+    --app examples/large-application/lib/MyApp/Root.pm --port 5000
 ```
 
-Then open <http://localhost:5000/>.
+Then open <http://localhost:5000/>. The module also answers one request
+without a server:
 
-This module-and-expression loader shape remains deferred and is not currently
-available:
-
-```text
-pagi-server --lib /Project-MyApp/lib --module MyApp::Root \
-    -e 'MyApp::Root->to_app'
+```bash
+perl -I examples/large-application/lib examples/large-application/lib/MyApp/Root.pm GET /
 ```
 
 ## Application tree
@@ -46,9 +42,10 @@ lib/MyApp/
 - `MyApp::Root`, `MyApp::Person`, and `MyApp::Person::Blogs` each expose a
   `routing()` method that returns an immutable `PAGI::Routing::Router`
   description.
-- `MyApp::Root` is the one Compose boundary. Its `to_app()` puts the reusable
+- `MyApp::Root` is the one Compose boundary. Its `routes` put the reusable
   immutable Router from `MyApp::Root->routing` behind an unnamed root
-  `mount('/' => app => ...)`, alongside the startup and shutdown callbacks.
+  `mount('/' => app => ...)`, and its `on_startup` and `on_shutdown` are the
+  lifespan.
 - Root mounts Person with `app =>` and name `person`; Person mounts Blogs with
   `app =>` and name `blog`. The application values are immutable Router
   objects, so these mounts form one inspectable reverse-routing graph.

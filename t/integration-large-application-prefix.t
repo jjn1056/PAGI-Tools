@@ -12,8 +12,9 @@ plan skip_all => 'examples/large-application requires Type::Tiny' unless eval { 
 # The example, unchanged, served under the root path /app (as behind a proxy
 # that strips it): its lifespan still runs, and every link it renders keeps
 # the prefix and resolves when followed as a browser would.
-my $app = do "$Bin/../examples/large-application/app.pl";
-ok($app, 'app.pl loads') or diag($@ || $!);
+# Loaded as pagi-server --app loads it: the module returns the application.
+my $app = do "$Bin/../examples/large-application/lib/MyApp/Root.pm";
+ok($app && $app->can('to_app'), 'lib/MyApp/Root.pm loads as an application') or diag($@ || $!);
 
 my $client = PAGI::Test::Client->new(app => $app, lifespan => 1, root_path => '/app');
 $client->start;

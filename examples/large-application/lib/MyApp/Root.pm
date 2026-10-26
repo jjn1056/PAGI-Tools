@@ -1,8 +1,14 @@
 package MyApp::Root;
 
+# The application. Serve it with
+#   pagi-server -I examples/large-application/lib \
+#       --app examples/large-application/lib/MyApp/Root.pm
+# or try one request without a server:
+#   perl -I examples/large-application/lib examples/large-application/lib/MyApp/Root.pm GET /
+
 use v5.40;
+use parent 'PAGI::App::Compose';
 use PAGI::App::File;
-use PAGI::Compose qw(compose);
 use PAGI::Pages qw(welcome not_found);
 use PAGI::Response qw(response);
 use PAGI::Routing qw(router route mount);
@@ -11,12 +17,12 @@ use MyApp::Data;
 use MyApp::Person ();
 use MyApp::View ();
 
-sub startup($state, $scope) {
+sub on_startup($self, $state, $scope) {
     $state->{data} = MyApp::Data->new;
     return;
 }
 
-sub shutdown($state, $scope) {
+sub on_shutdown($self, $state, $scope) {
     delete $state->{data};
     return;
 }
@@ -69,16 +75,12 @@ sub routing($class) {
     );
 }
 
-sub to_app($class) {
-    return compose(
-        routes => [
-            mount('/' => app => $class->routing),
-        ],
-        lifespan => {
-            startup  => \&startup,
-            shutdown => \&shutdown,
-        },
-    );
+# The one Compose boundary: the root Router behind an unnamed root mount,
+# with on_startup and on_shutdown as its lifespan.
+sub routes($self) {
+    return [
+        mount('/' => app => $self->routing),
+    ];
 }
 
-1;
+__PACKAGE__->run_if_script;

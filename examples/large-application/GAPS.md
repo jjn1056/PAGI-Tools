@@ -23,14 +23,15 @@ rechecked against the completed Router-mount contract before planning. The
 application-local `MyApp::View` helper already removes unrelated HTML
 document-shell duplication.
 
-## Server module-and-expression loader
+## Server module loader
 
-The desired command shape is:
+Resolved by `PAGI::App::Compose`: `MyApp::Root` is the application, and the
+module is served directly,
 
 ```text
-pagi-server --lib /Project-MyApp/lib --module MyApp::Root \
-    -e 'MyApp::Root->to_app'
+pagi-server -I examples/large-application/lib \
+    --app examples/large-application/lib/MyApp/Root.pm
 ```
 
-That syntax is not currently shipped. It belongs to PAGI::Server loader work,
-not to the PAGI::Tools composition gaps above. This example uses `app.pl`.
+with no `app.pl` to locate `lib`. A `--module`/`-e` loader is not shipped and
+this example no longer needs one.

@@ -58,7 +58,6 @@ sub _source_text {
 subtest 'example sources require Perl 5.40 and use signatures' => sub {
     my $root = "$Bin/../examples/large-application";
     my @sources = (
-        "$root/app.pl",
         "$root/lib/MyApp/Data.pm",
         "$root/lib/MyApp/Root.pm",
         "$root/lib/MyApp/Person.pm",
@@ -322,7 +321,7 @@ subtest 'component handlers keep application hrefs behind URL helper calls' => s
 };
 
 subtest 'application View owns the shared HTML document shell' => sub {
-    my $client = PAGI::Test::Client->new(app => MyApp::Root->to_app, lifespan => 1);
+    my $client = PAGI::Test::Client->new(app => MyApp::Root->new->to_app, lifespan => 1);
     $client->start;
     my $html = $client->get('/')->text;
     $client->stop;
@@ -334,14 +333,11 @@ subtest 'application View owns the shared HTML document shell' => sub {
 
 subtest 'Root composes lifespan, Router links, and owned outcomes' => sub {
     my $routing = MyApp::Root->routing;
-    my $direct_app = MyApp::Root->to_app;
-    isa_ok($direct_app, 'PAGI::Compose');
-
-    my $app_file = "$Bin/../examples/large-application/app.pl";
-    my $app = do $app_file;
-    my $load_error = $@ || $!;
-    ok(!$load_error, 'minimal app.pl loads cleanly') or diag($load_error);
-    isa_ok($app, 'PAGI::Compose');
+    # Root is the application: a PAGI::App::Compose whose composition is the
+    # one Compose boundary, compiled when the test client asks for it.
+    my $app = MyApp::Root->new;
+    isa_ok($app, 'PAGI::App::Compose');
+    isa_ok($app->composition, 'PAGI::Compose');
 
     my $state;
     PAGI::Test::Client->run($app, sub {
