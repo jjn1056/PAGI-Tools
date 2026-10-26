@@ -11,7 +11,11 @@ a `PAGI::SSE`. A `mount` takes a complete PAGI application, such as a Router or
 `PAGI::App::File`. Raw three-channel applications are rare here: only
 `protocol-refusal` wraps one with `as_app_object`, because the application
 forms it accepts are its subject. Runnable examples return their Compose or
-Router object; servers accept anything with `to_app`.
+Router object; servers accept anything with `to_app`. A single-file example
+is an `app.pl`; one with its own `lib/` is a `PAGI::App::Compose` in
+`lib/<App>.pm`, served with that `lib/` on the path, and has no `app.pl`. The
+two framework demos keep an `app.pl`: their `lib/` is the framework, standing
+in for one installed from CPAN.
 
 ## Requirements
 
@@ -23,9 +27,13 @@ Router object; servers accept anything with `to_app`.
   ```
   cpanm PAGI::Server
   ```
-  Then launch any example with:
+  Then launch a single-file example with:
   ```
   pagi-server --app examples/<name>/app.pl --port 5000
+  ```
+  and one with a `lib/` (its README names the module) with:
+  ```
+  pagi-server -I examples/<name>/lib --app examples/<name>/lib/<App>.pm --port 5000
   ```
 
 Examples assume you understand the core spec
@@ -42,7 +50,7 @@ raw PAGI protocol details that belong alongside the server implementation.
 Start here:
 
 - `full-demo` - the runnable companion to the QUICK TOUR in `PAGI::Tools`: HTTP, streaming and NDJSON Responses, WebSocket and SSE handlers, links built from route names, and lifespan state
-- `chat` - multi-user chat over HTTP, WebSocket and SSE: one-object handlers on declarative routes, a JSON API Router mounted at `/api`, live SSE notifications, application-wide logging
+- `chat` - (a PAGI::App::Compose in `lib/ChatApp.pm`) multi-user chat over HTTP, WebSocket and SSE: one-object handlers on declarative routes, a JSON API Router mounted at `/api`, live SSE notifications, application-wide logging
 
 HTTP:
 
@@ -77,13 +85,13 @@ Structuring applications:
 - `endpoint-demo` - HTTP, WebSocket, and SSE endpoint classes as route leaves, with per-route middleware
 - `endpoint-class-demo` - a PAGI::App::Compose in `lib/MyApp.pm`, no `app.pl` (`run_if_script`: served with `--app`, runnable for one request from the shell): ordinary modular objects returning immutable Router subtrees, with configured exact-leaf endpoint classes
 - `starlette-endpoint` - Perl 5.40 Starlette's class-based HTTPEndpoint example, ported line for line: `endpoint('MyHttpRoute')` at a route; the Python beside it in the README, with both curl transcripts (PUT 405 with Allow, HEAD, OPTIONS 204)
-- `endpoint-lifecycle` - Perl 5.40 one `endpoint()` spelling for three lifecycles: plain and WebSocket classes built fresh for each request or connection (state on `$self`), a Moo HTTP endpoint whose builder fills a required per-request attribute next to shared route config, and one object shared on purpose with `BUILD_APP`
+- `endpoint-lifecycle` - Perl 5.40 (a PAGI::App::Compose in `lib/NotesApp.pm`) one `endpoint()` spelling for three lifecycles: plain and WebSocket classes built fresh for each request or connection (state on `$self`), a Moo HTTP endpoint whose builder fills a required per-request attribute next to shared route config, and one object shared on purpose with `BUILD_APP`
 - `framework-on-tools` - Perl 5.40 small Sinatra/FastAPI-shaped framework (`lib/Tiny.pm`) built on Tools, and a notes app on it: a Request subclass, plain-value returns, `before` and `around` (call_next) hooks, startup services, typed path parameters, exception mapping, a plugin, a raw escape hatch and an OpenAPI document from the Router; the README lists each seam and its cost
 - `framework-wrap-style` - Perl 5.40 a wrap-style framework (`lib/Mini.pm`), the shape Thunderhorse and Responder have: a Request subclass, a mutable response staged on the empty `PAGI::Response` and built with one call, its own router re-dispatching one request through chained matches, a 401 exception carrying its challenge, a 204 and a bodyless redirect without Empty, and a page turned into a response
 - `openapi-notes` - Perl 5.40 a notes API whose `/openapi.json` comes from `openapi(...)`: typed path parameters, operationIds, security from `Requires` and bodies from route `meta`; a Router part under one PAGI::App::Compose, a mounted static application left out, and generated Python clients driving it end to end
 - `request-class` - Perl 5.40 an application's own Request subclass with two helpers, set once by `middleware('RequestClass')` and received by a plain route, an Endpoint::HTTP method and a route inside a mount, with no handler wrapped
 - `escape-hatches` - Perl 5.40 the easy way, then each step down to raw PAGI in one app: a handler returning a response, one reading the raw scope and connection, one answering with a hand-written application mid-request, a raw application mounted at a route, and raw middleware editing events
-- `large-application` - Perl 5.40+ Compose-rooted modular HTML application with named Person/Blogs Router application mounts, cross-component links, boundary-specific Router defaults, an opaque static-file mount, lifespan data, and a deferred-work ledger
+- `large-application` - Perl 5.40+ Compose-rooted modular HTML application (`MyApp::Root`, a PAGI::App::Compose, is the application) with named Person/Blogs Router application mounts, cross-component links, boundary-specific Router defaults, an opaque static-file mount, lifespan data, and a deferred-work ledger
 
 Lifespan and background work:
 
