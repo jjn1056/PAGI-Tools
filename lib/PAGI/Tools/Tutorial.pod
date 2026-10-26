@@ -1632,7 +1632,8 @@ C<use MyApp> is safe:
 
 An application with C<on_startup> is tested with
 C<< PAGI::Test::Client->run >>, which runs lifespan. A classic application
-writes C<call>, the PAGI application itself, on L<PAGI::App>.
+writes C<call>, the PAGI application itself, on L<PAGI::App>; see
+C<examples/raw-app>.
 L<PAGI::App::Compose> has the details, and C<examples/endpoint-class-demo> a
 larger application in this shape.
 

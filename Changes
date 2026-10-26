@@ -23,7 +23,8 @@
     run_if_script, the module's last line in place of 1;, makes
     lib/MyApp.pm both an application a server loads
     (pagi-server -Ilib --app lib/MyApp.pm) and a program you can run.
-    Loading it builds nothing until a server calls to_app.
+    Loading it builds nothing until a server calls to_app. For a classic
+    application, one that writes call itself: examples/raw-app.
   - PAGI::App::Compose: the regular way to write a Compose application in
     lib/MyApp.pm. A subclass writes routes, and optionally app_middleware,
     http_default, on_startup and on_shutdown; to_app builds them once into

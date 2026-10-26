@@ -209,7 +209,9 @@ Serve it, or try one request from the shell without a server:
     perl -Ilib lib/MyApp.pm GET /
 
 A Compose application subclasses L<PAGI::App::Compose> instead, and
-declares its routes, middleware and lifespan in methods.
+declares its routes, middleware and lifespan in methods. F<examples/raw-app>
+is a complete classic application: C<call> handling lifespan, http and
+websocket scopes, with a helper module of its own.
 
 =head1 DESCRIPTION
 

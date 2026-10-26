@@ -21,7 +21,7 @@ in for one installed from CPAN.
 
 - Perl 5.24+ with `Future::AsyncAwait` for the distribution and most examples;
   `large-application`, `starlette-apples`, `gut-check`, `content-negotiation`, `upload-streaming`, `process-streaming`,
-  `webhook-receiver`, `signed-requests`, `modify-form-post`, `method-override`, `tenant-orders`, `framework-on-tools`, `framework-wrap-style`, `request-class`, `starlette-endpoint`, `endpoint-lifecycle`, `escape-hatches`, `internal-tool`, `auth-cookie-login`, `auth-extensions`, `auth-notes`, `auth-jwt-sandbox`, and `openapi-notes`
+  `webhook-receiver`, `signed-requests`, `modify-form-post`, `method-override`, `tenant-orders`, `framework-on-tools`, `framework-wrap-style`, `request-class`, `starlette-endpoint`, `endpoint-lifecycle`, `escape-hatches`, `raw-app`, `internal-tool`, `auth-cookie-login`, `auth-extensions`, `auth-notes`, `auth-jwt-sandbox`, and `openapi-notes`
   require Perl 5.40+
 - A PAGI server to run examples against:
   ```
@@ -83,6 +83,7 @@ Structuring applications:
 - `compose` - optional application root combining declarative routes, request-ID middleware, server-owned lifecycle state, automatic HEAD, and verified shutdown
 - `declarative-routing` - immutable `PAGI::Routing` tree with package handlers, a configured child Router mount, route middleware, boundary-specific HTTP defaults, and reverse URLs
 - `endpoint-demo` - HTTP, WebSocket, and SSE endpoint classes as route leaves, with per-route middleware
+- `raw-app` - Perl 5.40 a classic PAGI application in a module: a PAGI::App whose `call` is the application itself, with no Compose, handling lifespan, http and websocket scopes and refusing what it does not serve; `run_if_script` serves it with `--app` and runs one request from the shell
 - `endpoint-class-demo` - a PAGI::App::Compose in `lib/MyApp.pm`, no `app.pl` (`run_if_script`: served with `--app`, runnable for one request from the shell): ordinary modular objects returning immutable Router subtrees, with configured exact-leaf endpoint classes
 - `starlette-endpoint` - Perl 5.40 Starlette's class-based HTTPEndpoint example, ported line for line: `endpoint('MyHttpRoute')` at a route; the Python beside it in the README, with both curl transcripts (PUT 405 with Allow, HEAD, OPTIONS 204)
 - `endpoint-lifecycle` - Perl 5.40 (a PAGI::App::Compose in `lib/NotesApp.pm`) one `endpoint()` spelling for three lifecycles: plain and WebSocket classes built fresh for each request or connection (state on `$self`), a Moo HTTP endpoint whose builder fills a required per-request attribute next to shared route config, and one object shared on purpose with `BUILD_APP`
