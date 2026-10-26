@@ -1730,7 +1730,10 @@ C<< $request->basic_auth(raise_on_error =E<gt> 1) >> similarly returns
 C<(username, password)> in list context. The default read instead returns
 C<undef> for unusable Bearer input (or C<(undef, undef)> for Basic), so it
 cannot distinguish a malformed credential from an absent one. Neither helper
-verifies a credential or constructs a response. See L<PAGI::Request/AUTH HELPERS>.
+verifies a credential or constructs a response. Without the C<eval>, a
+malformed or duplicate field is a L<PAGI::Exception::HTTP> 400, C<The
+Authorization header could not be parsed.>, which the Authentication middleware
+answers before the application runs. See L<PAGI::Request/AUTH HELPERS>.
 
 =head2 Read upload parameters and write download parameters
 
