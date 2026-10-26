@@ -79,7 +79,7 @@ like($res{routes}->json->{export_url}, qr{\Ahttps?://[^/]+/export\z},
     'and url_for gives an absolute URL');
 
 like($stderr, qr/\[STARTUP\] Application ready!/, 'the startup hook ran');
-like($stderr, qr/\[SHUTDOWN\] Shutting down after \d+s, handled \d+ requests/,
+like($stderr, qr/\[SHUTDOWN\] Shutting down after \d+s, \d+ stream requests/,
     'and the shutdown hook reports from shared state');
 
 done_testing;
