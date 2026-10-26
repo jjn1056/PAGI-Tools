@@ -2,7 +2,7 @@ use strict;
 use warnings;
 use Test2::V0;
 use FindBin qw($Bin);
-use lib "$Bin/../lib";
+use lib "$Bin/../lib", "$Bin/../examples/endpoint-lifecycle/lib";
 
 BEGIN { plan skip_all => 'examples/endpoint-lifecycle requires Perl 5.40' if $] < 5.040 }
 
@@ -13,14 +13,17 @@ use PAGI::Test::Client;
 # One endpoint() spelling, three lifecycles: classes built fresh per request
 # or connection (no BUILD_APP), a per-request builder, and one shared object.
 
-my $app = do "$Bin/../examples/endpoint-lifecycle/app.pl" or die $@ || $!;
+# The application is a module: loading it builds nothing until a server (or
+# the test client) asks for the application.
+my $app = do "$Bin/../examples/endpoint-lifecycle/lib/NotesApp.pm" or die $@ || $!;
+can_ok $app, 'to_app';
 
 # Counts NotesApp::Notes constructions; the real constructor still runs.
+# endpoint() runs when the application is built, so the class is loaded here
+# first; endpoint() then uses it as defined.
 my $notes_built = 0;
 {
-    # The glob is named at run time: a literal *NotesApp::Notes::new would
-    # create that symbol when this file compiles, before app.pl loads the
-    # class, and endpoint() would then take the package as already defined.
+    require NotesApp::Notes;
     no strict 'refs';
     no warnings qw(redefine once);
     my $new = NotesApp::Notes->can('new');
