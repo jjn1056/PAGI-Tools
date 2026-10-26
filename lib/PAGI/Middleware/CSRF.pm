@@ -192,7 +192,10 @@ with C<to_app>, which
 includes every L<PAGI::Response> -- answers instead, and can read the reason
 with C<< csrf($request)->failure >>; when the middleware read a form's body,
 it is handed a receive that delivers the whole body, so it can read the form
-to re-render it. Exactly C<0>: the
+to re-render it. It answers failed checks only: a form body over
+C<max_form_size>, or one that cannot be parsed, is the client's error, not a
+CSRF failure, and is answered by the middleware's own plain-text 413 or 400.
+Exactly C<0>: the
 middleware never refuses;
 the request reaches the application with the outcome recorded for
 C<< csrf($request)->valid >> and C<< ->failure >>. Any other plain value dies.
@@ -394,8 +397,11 @@ async sub _multipart_token {
     my $boundary = defined($parameters) ? $parameters->{boundary} : undef;
     return ('malformed') unless defined($boundary) && length($boundary);
 
-    my ($outcome, $value, $collecting, $collected) = (undef, undef, 0, '');
-    my $parser = HTTP::MultiPartParser->new(
+    my ($outcome, $value, $collecting, $collected, $fed) = (undef, undef, 0, '', 0);
+    # The parser takes fewer boundary characters than RFC 2046 allows (no
+    # space, no '@'); one it refuses is a body that cannot be parsed, as the
+    # route's own parse would find. Any other failure propagates.
+    my $parser = eval { HTTP::MultiPartParser->new(
         boundary  => $boundary,
         on_header => sub {
             my ($lines) = @_;
@@ -411,12 +417,24 @@ async sub _multipart_token {
             ($outcome, $value) = ('token', $collected) if $final;
         },
         on_error => sub { $outcome //= 'malformed' },
-    );
+    ) };
+    unless ($parser) {
+        my $error = $@;
+        return ('malformed') if $error =~ /\bboundary\b/;
+        die $error;
+    }
     my $left = $self->{max_form_size};
     until (defined $outcome) {
         my $event = await $reading->();
         if (($event->{type} // '') ne 'http.request') {
-            # The client left mid-body: as the route's own read would.
+            # A disconnect after the closing boundary ends a complete body, as
+            # the route's own parse takes it: no token part. One before it is
+            # the client leaving mid-body, as the route's own read would see.
+            if ($fed) { $parser->finish }
+            if (!defined($outcome) || $outcome ne 'malformed') {
+                $outcome //= 'missing';
+                last;
+            }
             my $connection = $request->connection;
             my $reason = ($connection ? $connection->disconnect_reason : undef) // 'disconnect';
             die "Request body incomplete: client disconnected mid-body ($reason)\n";
@@ -426,6 +444,7 @@ async sub _multipart_token {
             if ($left <= 0) { $outcome = 'too_large'; last }
             my $slice = substr($bytes, 0, $left, '');
             $left -= length $slice;
+            $fed = 1;
             $parser->parse($slice);
         }
         next if defined $outcome;

@@ -49,7 +49,10 @@ sub layouts {
 # how many times the app's receive was called.
 sub run {
     my ($app, $events, %headers) = @_;
-    my @incoming = map { { type => 'http.request', body => $events->[$_], more => ($_ < $#$events ? 1 : 0) } } 0 .. $#$events;
+    # last_more: the last event says more is coming; the receive then reports
+    # the disconnect, as some servers end a body.
+    my @incoming = map { { type => 'http.request', body => $events->[$_],
+        more => ($_ < $#$events || $headers{last_more} ? 1 : 0) } } 0 .. $#$events;
     my ($calls, @sent) = (0);
     my $scope = { type => 'http', method => 'POST', path => '/', raw_path => '/', query_string => '', scheme => 'http',
         headers => [['content-type', $headers{content_type} // "multipart/form-data; boundary=$boundary"],
@@ -153,6 +156,28 @@ subtest 'a refuse handler is given the whole multipart form' => sub {
     });
     my ($status, $body) = run($app, [body_of(part(csrf_token => 'forged'), part(title => 'tea'))]);
     is [$status, $body], [403, 'refused title=tea failure=mismatch'];
+};
+
+subtest 'a boundary the parser cannot take is the 400, read nothing; under refuse => 0 the route runs' => sub {
+    for my $odd ('x y', 'a@b') {
+        local $boundary = $odd;
+        my $body = body_of(part(csrf_token => $token));
+        my ($status, $text, $calls) = run(app_with(), [$body], content_type => qq{multipart/form-data; boundary="$odd"});
+        is [$status, $text, $calls], [400, 'The multipart request body could not be parsed.', 0], qq{boundary "$odd"};
+        my $raw = compose(routes => [route('/' => sub { response('Text', 'ran failure=' . (csrf($_[0])->failure // 'none')) }, methods => ['POST'])],
+            middleware => [middleware('CSRF', form_field => 'csrf_token', refuse => 0)])->to_app;
+        ($status, $text) = run($raw, [$body], content_type => qq{multipart/form-data; boundary="$odd"});
+        is [$status, $text], [200, 'ran failure=missing_token'], qq{boundary "$odd", refuse => 0: the route decides};
+    }
+};
+
+subtest 'a body that ends with a disconnect after its closing boundary is a complete body' => sub {
+    my ($status) = run(app_with(), [body_of(part(title => 'hi'))], last_more => 1);
+    is $status, 403, 'no token part: refused, not an error';
+    ($status) = run(app_with(), [body_of(part(csrf_token => $token), part(title => 'hi'))], last_more => 1);
+    is $status, 200, 'the token part: passes';
+    like dies { run(app_with(), ["--$boundary\r\nContent-Disposition: form-data; name=\"title\"\r\n\r\nhal"], last_more => 1) },
+        qr/Request body incomplete: client disconnected mid-body/, 'cut off before the token: the client left, as the route would see it';
 };
 
 done_testing;

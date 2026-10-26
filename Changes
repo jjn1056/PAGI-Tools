@@ -479,9 +479,10 @@
     headers, the query string or cookies on a copy of the scope no longer
     leaves a stale parse for the Request below it. Two Requests over one
     scope each parse for themselves, and the second cannot read a body the
-    first one read: pass the one Request on. PAGI-Tools' own middleware
-    never reads the body (CSRF, MethodOverride and Authentication: see
-    their entries), so a route below them may stream it.
+    first one read: pass the one Request on. MethodOverride and
+    Authentication never read the body, and CSRF reads a form's ahead
+    only to find its token and hands the route the whole body (see their
+    entries), so a route below them may stream it.
   - Requires Perl 5.24 (was 5.18), as PAGI 0.003001 and PAGI-Server do.
     See "Perl version support" in PAGI.
   - PAGI::Test::Client: a receive after the whole HTTP request body waits,

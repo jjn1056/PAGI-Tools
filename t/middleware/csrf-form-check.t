@@ -107,6 +107,17 @@ subtest 'under refuse => 0 every outcome reaches the route, with the whole body'
         'over the budget: not read further, the route reads it all';
 };
 
+subtest 'a matching header: the body is never read' => sub {
+    require PAGI::Middleware::CSRF;
+    my ($ran, $calls) = (0, 0);
+    my $app = PAGI::Middleware::CSRF->new(form_field => 'csrf_token')->wrap(async sub { $ran++ });
+    my $tok = 'ef' x 32;
+    my $scope = { type => 'http', method => 'POST', path => '/', headers => [
+        ['content-type', 'application/x-www-form-urlencoded'], ['cookie', "csrf_token=$tok"], ['x-csrf-token', $tok]] };
+    $app->($scope, sub { $calls++; Future->done({ type => 'http.request', body => 'title=a', more => 0 }) }, sub { Future->done })->get;
+    is [$ran, $calls], [1, 0], 'the application ran, and the middleware called receive 0 times';
+};
+
 subtest 'max_form_size must be a positive integer' => sub {
     require PAGI::Middleware::CSRF;
     for my $bad (0, -1, 'x', 1.5, []) {
