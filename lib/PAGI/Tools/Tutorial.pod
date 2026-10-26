@@ -1217,9 +1217,10 @@ error's.
 C<on_error> is awaited reporting, not rendering; reporter failure is contained.
 It receives C<($error, $scope)>.
 Before response start, a handled error -- a C<catch> entry's, or an HTTP
-error's built-in answer, whatever its status -- is answered and not
-re-raised; an unhandled one is reported, rendered, then re-raised so the
-server logs it. After start it reports,
+error's built-in answer -- is answered and not re-raised, except a thrown
+HTTP error or page of 500 or more, which is answered and then re-raised so
+the server logs it; an unhandled one is reported, rendered, then re-raised
+too. After start it reports,
 emits no replacement response, and rethrows the original exception so the
 server can abort the incomplete stream. Built-in bodies are byte-correct UTF-8
 and carry C<Cache-Control: no-store>.

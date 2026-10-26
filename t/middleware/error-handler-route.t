@@ -111,7 +111,9 @@ subtest "an HTTP error's own headers are kept on the built-in answer at the rout
         routes => [route('/' => sub { PAGI::Exception::HTTP->throw(503, 'later', headers => ['Retry-After' => '30']) })],
         middleware => [middleware('ErrorHandler')],
     );
-    my $res = PAGI::Test::Client->new(app => $app)->get('/');
+    my $res;
+    like(warnings { $res = PAGI::Test::Client->new(app => $app)->get('/') },
+        [qr/\Aexception after response completed: 503 later/], 'a thrown 503 is re-raised for the server');
     is [$res->status, $res->header('Retry-After')], [503, '30'];
 };
 

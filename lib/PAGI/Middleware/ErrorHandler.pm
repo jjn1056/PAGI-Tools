@@ -68,7 +68,10 @@ it -- by the HTTP error's status, or by the exception's class or an ancestor
 error's C<client_message>, in plain text with C<Cache-Control: no-store>, and
 in development the error's text after a blank line (see
 L<PAGI::ErrorContext/default>). A thrown page answers as itself. A handled
-error is an outcome, not a failure: it is not re-raised, whatever its status.
+error is an outcome, not a failure: it is not re-raised. A thrown HTTP error or page of 500 or more is the exception: it is answered
+the same way and then re-raised after the response, so the server logs it,
+since whoever throws a 500 means "this broke"; C<on_error> hears of it once.
+(Starlette answers an C<HTTPException(500)> and logs nothing.)
 
 =item * B<The server-error boundary> answers everything else -- an ordinary
 bug, a C<status_code> claim it rejected -- with a C<catch> entry for the
@@ -154,7 +157,9 @@ own 404 or 405), so a tracker is not sent every scan for a missing page: the ori
 scope, so a reporter can record the path or a C<pagi.request_id> (present
 when L<PAGI::Middleware::RequestId> wraps this ErrorHandler; in Compose, when
 it wraps the compiled application). Immediate values and Futures are both
-accepted and awaited. Callback failures are contained and never replace the
+accepted and awaited. It runs before the error is answered, except for a
+thrown HTTP error or page of 500 or more, which is reported after its answer,
+as it is re-raised. Callback failures are contained and never replace the
 application error.
 
 It is for reporting of your own, in addition to the server's: an unhandled
@@ -392,7 +397,8 @@ sub _wrap_exceptions {
         # server-error boundary reports it.
         _reraise($error) if $started;
         my $handled = await $self->_handle_exception($error, undef, $inner, $receive, $watching);
-        _reraise($error) unless $handled;
+        # Unhandled, or answered and still a server error (a thrown 500).
+        _reraise($error) if !$handled || $handled == 2;
         return;
     };
 }
@@ -420,7 +426,12 @@ sub _has_catch_entries {
 # no body, built from the error's scope): a catch entry for an HTTP error's
 # status or for the exception's class (or an ancestor), else the built-in
 # answer to an HTTP error or a thrown page. Reports it to on_error, answers it,
-# and returns true; the error ends there, whatever the answer's status. A
+# and returns 1: the error ends there. A thrown HTTP error or page of 500 or
+# more is answered the same way, unreported here, and returns 2: the caller
+# re-raises it in its own frame (an exception whose overloads throw cannot
+# cross a Future), and the server-error boundary, seeing the response
+# started, reports it once and hands it to the server, since whoever throws
+# a 500 means "this broke". A
 # thrown page below 400 (a redirect) is sent as it is, unreported, and also
 # returns true. Any other error returns false, unreported, for the
 # server-error boundary. An entry's own failure propagates.
@@ -440,12 +451,13 @@ async sub _handle_exception {
     my ($status, $headers, $http_error) = $self->_status_for_error($error, $quiet);
     my $entry = $self->_catch_entry($error, $status, $http_error, 'exceptions');
     return 0 unless $entry || $http_error || defined $page_status;
+    my $server_error = ($http_error && $status >= 500) || (defined($page_status) && $page_status >= 500);
 
     # A routing miss -- the router's own 404 or 405, raised to an entry -- is
     # an answer, not an application error: on_error does not hear of it, as
     # it never did when the router answered it itself.
     await $self->_report_error($error, $scope)
-        unless blessed($error) && $error->isa('PAGI::Routing::_Miss');
+        unless $server_error || (blessed($error) && $error->isa('PAGI::Routing::_Miss'));
     my $error_scope = await $self->_error_scope($scope, $error, $status, $headers, $http_error);
     # Answered outside a Router's HEAD boundary (a routing miss under a bare
     # wrap, say), a HEAD answer must still send no body.
@@ -468,7 +480,7 @@ async sub _handle_exception {
         _warn_displaced($entry ? 'catch entry' : 'built-in answer', $error, $failure);
         _reraise($failure);
     }
-    return 1;
+    return $server_error ? 2 : 1;
 }
 
 # An answer's own failure goes outward as itself, and the error it was
@@ -520,7 +532,8 @@ async sub _run_at_route {
     my $error = $@;
     _reraise($error) if $started;
     my $handled = await $self->_handle_exception($error, $request, $scope, $receive, $watched, 'quiet');
-    _reraise($error) unless $handled;
+    # Unhandled, or answered and still a server error (a thrown 500).
+    _reraise($error) if !$handled || $handled == 2;
     return (0);
 }
 
@@ -578,7 +591,9 @@ sub _wrap_server_errors {
                 $handled = await $self->_handle_exception($error, undef, $inner, $receive, $wrapped_send);
                 1;
             };
-            return if $tried && $handled;
+            # Answered: done, unless it is still a server error (a thrown 500,
+            # answered and to be reported and re-raised below).
+            return if $tried && $handled && $handled != 2;
             $error = $@ unless $tried;    # the entry's own failure, from here on
         }
 
@@ -993,7 +1008,9 @@ thrown L<PAGI::Response>. Its own C<status> decides. Below 400 the page is
 sent as it is, with no C<on_error>, no handler and nothing re-raised: a
 thrown redirect. If sending it fails, that failure is handled like any other
 error. From 400 to 599 it is a handled error: C<on_error> is called and the
-page is the answer, never C<catch> or C<handler>, and nothing is re-raised.
+page is the answer, never C<catch> or C<handler>; below 500 nothing is
+re-raised, and from 500 up it is re-raised after the response, as a thrown
+HTTP 5xx is.
 That holds inside the exception boundary -- thrown from a route, or in
 Compose below the application middleware. A page from 400 up thrown by one of
 Compose's application middleware is an unhandled error, as an HTTP error from
@@ -1019,10 +1036,11 @@ C<code>) or ones relying on L<Plack::Middleware::HTTPExceptions>' C<as_psgi>
 and C<location>, probably will not work as intended: they become a 500 unless
 they implement C<status_code>, and their PSGI rendering is never used.
 
-Whether the exception is re-raised follows whether it was handled, not the
-status sent: an HTTP error, a thrown page and an error a C<catch> entry
-answered are handled and not re-raised, whatever their status; anything
-else, a claim that fell back to 500 included, is re-raised after the
+Whether the exception is re-raised follows what was thrown, not the status
+sent: an HTTP error and a thrown page below 500, and an error a C<catch> entry
+answered by class, are handled and not re-raised; a thrown HTTP error or page
+of 500 or more is answered and then re-raised, whatever its entry answered;
+anything else, a claim that fell back to 500 included, is re-raised after the
 response. An early answer is never re-raised.
 
 An exception object whose boolean or string overload throws cannot be carried

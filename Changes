@@ -233,7 +233,9 @@
   - ErrorHandler is two boundaries, as Starlette's ExceptionMiddleware and
     ServerErrorMiddleware are. The exception boundary handles an expected
     error -- an HTTP error, a thrown page, or one with a catch entry -- and
-    a handled error is not re-raised, whatever its status; the
+    a handled error is not re-raised, except a thrown HTTP error or page
+    of 500 or more, answered and then re-raised so the server logs it
+    (Starlette logs nothing for an HTTPException(500)); the
     server-error boundary answers the rest with handler (or a catch entry
     for the configured status, or the built-in 500) and always re-raises.
     An error a route's handler throws -- a coderef route, an Endpoint::HTTP
@@ -429,7 +431,8 @@
     status_code, such as a Response -- with the page itself. Below 400 it
     is sent as it is, with no on_error, handler or re-raise, so
     die response('Redirect', '/login') redirects; from 400 to 599 it is a
-    handled error: on_error runs and the page is the answer, not re-raised.
+    handled error: on_error runs and the page is the answer, re-raised only
+    from 500 up.
     A thrown Response used to be a 500.
   - $request->state, $ws->state and $sse->state always return a
     PAGI::State. Without application state it is empty, and its get and

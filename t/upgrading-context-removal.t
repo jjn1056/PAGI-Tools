@@ -155,7 +155,8 @@ subtest 'an ErrorHandler catch entry receives a Request and its explicit status 
         local $SIG{__WARN__} = sub { push @warnings, @_ };
         $response = PAGI::Test::Client->new(app => $app)->get('/');
     }
-    is(\@warnings, [], 'the 503 error, handled by its entry, is not re-raised');
+    is(\@warnings, [match(qr/\Aexception after response completed: Local::UpgradeStatusError=/)],
+        'a thrown 503, answered by its entry, is still re-raised for the server: the status thrown decides');
     isa_ok($request_seen, 'PAGI::Request');
     is($error_seen, exact_ref($error), 'the error context carries the original error');
     is($response->status, 409,

@@ -740,10 +740,12 @@ governs it and a replaced C<logger> receives it:
 
   PAGI application error (after response complete): database unreachable
 
-C</missing> gets a 404 page and nothing is logged: an HTTP error, whatever
-its status, is handled -- by a C<catch> entry or its built-in answer -- and a
-handled error is an outcome, not a failure. Only an unhandled error is
-re-raised. The same holds for an ErrorHandler you install yourself. Behind a server other than PAGI::Server,
+C</missing> gets a 404 page and nothing is logged: an HTTP error is handled
+-- by a C<catch> entry or its built-in answer -- and a handled error is an
+outcome, not a failure. A thrown HTTP error or page of 500 or more is the
+exception: it is answered, then re-raised and logged like C</boom>, since
+whoever throws a 500 means "this broke" (Starlette logs nothing for an
+C<HTTPException(500)>). Otherwise only an unhandled error is re-raised. The same holds for an ErrorHandler you install yourself. Behind a server other than PAGI::Server,
 the re-raised exception reaches whatever that server does with an application
 failure after a complete response.
 

@@ -70,9 +70,10 @@ L<PAGI::Compose> application has at its root, answers it with that status:
 its stock page shows the message for a 4xx and the reason phrase for a 5xx,
 since server errors carry no client text; an ErrorHandler C<catch> entry for
 this class or for the status answers it otherwise. A thrown HTTP error is
-handled -- by an entry, or by the built-in answer -- and is not re-raised,
-whatever its status, as Starlette's C<ExceptionMiddleware> handles an
-C<HTTPException>. An ErrorHandler C<handler> answers only unhandled errors
+handled -- by an entry, or by the built-in answer -- and below 500 it is not
+re-raised, as Starlette's C<ExceptionMiddleware> handles an C<HTTPException>.
+From 500 up it is answered the same way and then re-raised, so the server
+logs it (Starlette logs nothing for an C<HTTPException(500)>). An ErrorHandler C<handler> answers only unhandled errors
 and never sees one.
 
 There are no per-status subclasses: the status is an argument.

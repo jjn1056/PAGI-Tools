@@ -239,7 +239,7 @@ subtest 'throwing exception stringification cannot replace the safe response' =>
     );
     settle($future);
 
-    ok $future->is_done, 'its status_code claims 500: an HTTP error, handled, not re-raised';
+    ok $future->is_failed, 'its status_code claims 500: an HTTP error, answered, then re-raised';
     is $events->[0]{status}, 500, 'throwing string overload retains safe status 500';
     is refaddr($reported[0]), refaddr($error), 'reporter receives the original object';
     unlike $events->[1]{body}, qr/stringification failed/,
@@ -609,7 +609,7 @@ subtest 'a server error is rendered completely, then re-raised' => sub {
         async sub { die Local::StatusError->new(500, 'database unreachable') });
     settle($future);
     is $events->[0]{status}, 500, 'a thrown HTTP 500 is answered 500';
-    ok $future->is_done, 'and, being an HTTP error, is handled: not re-raised';
+    ok $future->is_failed, 'and, being 500 or more, is re-raised for the server';
 };
 
 subtest 'a custom renderer does not stop a server error being re-raised' => sub {

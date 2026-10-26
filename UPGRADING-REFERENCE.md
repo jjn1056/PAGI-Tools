@@ -995,8 +995,9 @@ PAGI application error (after response complete): database unreachable
 ```
 
 - An HTTP error (a `status_code` claim from 400 to 599), a thrown page and an
-  error a `catch` entry answers are handled outcomes, whatever their status:
-  answered, not re-raised, not logged.
+  error a `catch` entry answers are handled outcomes: answered, not
+  re-raised, not logged -- except a thrown HTTP error or page of 500 or
+  more, which is answered and then re-raised, so the server logs it.
 - `on_error` runs before rendering, for every error the application raises
   (not the router's own 404 or 405), and now receives `($error, $scope)`.
 - In Compose, the ErrorHandler is split around the application middleware:
@@ -1061,8 +1062,9 @@ enable 'ErrorHandler',
 Use `response('HTML', ...)` or `response('Text', ...)` the same way for the other two.
 An exception's `status_code` is kept when it is 400-599; for the built-in
 answer, 401, 405, 407 and 426 (which need a field it lacks) fall back to
-500, as does anything malformed. An HTTP error is handled whatever its
-status, and not re-raised; an unhandled error is re-raised to the server.
+500, as does anything malformed. An HTTP error below 500 is handled and not
+re-raised; a thrown HTTP error of 500 or more is answered and re-raised, as
+an unhandled error is.
 
 ## Pages replaces the stock response applications
 

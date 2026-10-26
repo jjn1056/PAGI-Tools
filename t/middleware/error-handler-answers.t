@@ -238,7 +238,7 @@ subtest 'a 5xx PAGI::Exception::HTTP shows its reason phrase, not its client mes
     my $error = PAGI::Exception::HTTP->new(503, 'back in five minutes');
     my ($status, undef, $body, $failure) = run(error => $error);
     is [$status, $body], [503, 'Service Unavailable'];
-    is $failure, undef, 'a handled HTTP error is not re-raised, whatever its status';
+    is $failure, $error, 'a thrown HTTP error of 500 or more is answered, then re-raised for the server';
 };
 
 subtest 'PAGI::Exception::HTTP stringifies as status and text' => sub {
@@ -285,7 +285,7 @@ subtest 'a thrown 503 page answers as thrown and is handled' => sub {
     my $page = response('Text', 'down for maintenance', status => 503);
     my ($status, undef, $body, $failure) = run(error => $page);
     is [$status, $body], [503, 'down for maintenance'];
-    is $failure, undef, 'a thrown page is an expected outcome: not re-raised';
+    is $failure, $page, 'a thrown page of 500 or more is answered, then re-raised for the server';
 };
 
 subtest 'a thrown Response without a status is a 200 early answer' => sub {
