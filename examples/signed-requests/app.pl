@@ -42,7 +42,6 @@ package SignedRequests::VerifySignature {
     use parent 'PAGI::Middleware';
     use Future::AsyncAwait;
     use Digest::SHA qw(hmac_sha256_hex);
-    use Scalar::Util qw(blessed);
     use PAGI::Tools qw(response);
     use PAGI::Utils::SecureCompare qw(secure_compare);
 
@@ -78,11 +77,11 @@ package SignedRequests::VerifySignature {
                 $started = 1 if $event->{type} eq 'http.response.start';
                 await $send->($event);
             };
-            my $error;
-            eval { await $app->($scope, $verifying, $watching); 1 } or $error = $@;
-            return unless defined $error;
-            die $error if $started || !(blessed($error) && $error->isa('SignedRequests::BadSignature'));
-            await $self->{refuse}->($scope, $receive, $send);
+            try { await $app->($scope, $verifying, $watching) }
+            catch ($e) {
+                die $e if $started || !($e isa SignedRequests::BadSignature);
+                await $self->{refuse}->($scope, $receive, $send);
+            }
         };
     }
 }
@@ -102,11 +101,10 @@ async sub record_event ($request) {
 async sub store_artifact ($request) {
     my $path = $request->state->get('artifacts') . '/' . $request->path_param('name');
     my $body = $request->body_stream(max_bytes => 50 * 1024 * 1024);
-    my $ok = eval { await $body->stream_to_file("$path.part"); 1 };
-    unless ($ok) {
-        my $error = $@;
+    try { await $body->stream_to_file("$path.part") }
+    catch ($e) {
         unlink "$path.part";
-        die $error;
+        die $e;
     }
     rename "$path.part", $path or die "rename $path.part: $!";
     my $sha = Digest::SHA->new(256)->addfile($path)->hexdigest;

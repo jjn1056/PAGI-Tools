@@ -34,10 +34,13 @@ async sub store_file ($request) {
     my $name = $request->path_param('name');
     my $path = $request->state->get('uploads') . "/$name";
     my $body = $request->body_stream(max_bytes => 50 * 1024 * 1024);
-    my $stored = eval { await $body->stream_to_file($path); 1 };
-    if (!$stored || $body->truncated || !$body->bytes_read) {
-        unlink $path;    # a partial or empty file is not kept
-        die $@ unless $stored;    # over max_bytes (the client's 413), or a write failure
+    try { await $body->stream_to_file($path) }
+    catch ($e) {
+        unlink $path;    # a partial file is not kept
+        die $e;          # over max_bytes (the client's 413), or a write failure
+    }
+    if ($body->truncated || !$body->bytes_read) {
+        unlink $path;    # nor an empty or cut-short one
         return response('Text', 'The upload was empty or cut short.', status => 400);
     }
     my $sha = Digest::SHA->new(256)->addfile($path)->hexdigest;

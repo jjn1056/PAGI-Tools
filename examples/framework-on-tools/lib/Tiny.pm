@@ -226,7 +226,8 @@ sub _around_middleware ($hook) {
             # The hook replaced the response: unwind the inner app, which is
             # suspended in its send of the start event, and answer instead.
             $release->fail("response replaced by around middleware\n");
-            eval { await $inner };
+            try { await $inner }
+            catch ($e) { }    # the failure of the release just failed, so nothing to report
             return await _coerce($result)->to_app->($scope, $receive, $send);
         };
     };
