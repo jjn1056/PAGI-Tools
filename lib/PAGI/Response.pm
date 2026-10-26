@@ -10,8 +10,17 @@ use Future;
 use Future::AsyncAwait;
 use PAGI::Headers ();
 use PAGI::Utils ();
-use Scalar::Util qw(blessed);
+use Scalar::Util qw(blessed refaddr);
 use Socket ();
+# A response says what it is in a string -- its class and status -- so a
+# thrown page re-raised to the server is logged as a page with a status, not
+# a hash address; it stays true, and its number is its address, so it equals
+# only itself.
+use overload
+    '""'     => sub { ref($_[0]) . ' (status ' . $_[0]->status . ')' },
+    bool     => sub { 1 },
+    '0+'     => sub { refaddr($_[0]) },
+    fallback => 1;
 
 =encoding UTF-8
 
@@ -164,6 +173,19 @@ exception thrown by the object's own C<""> propagates unchanged.
 JSON data is not stringified: L<PAGI::Response::JSON> and
 L<PAGI::Response::NDJSON> encode their data as JSON, and their encoder
 refuses every blessed object.
+
+=head1 AS A STRING
+
+A response turned into a string is its class and status, not its body:
+
+    my $page = response('Text', 'down for maintenance', status => 503);
+    print "$page";    # PAGI::Response::Text (status 503)
+
+So a thrown page that L<PAGI::Middleware::ErrorHandler> re-raises to the
+server (one of 500 or more) is logged as a page with a status. The body is
+left out: it may be large, binary, or not the log's to hold. A response is
+always true, and as a number it is its address, so C<==> is true only for
+the same response.
 
 =head1 BYTES AND CHARACTERS
 
