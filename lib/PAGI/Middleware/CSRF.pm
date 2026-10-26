@@ -8,8 +8,10 @@ use Future::AsyncAwait;
 use PAGI::Utils::Random qw(secure_random_bytes);
 use PAGI::Utils::SecureCompare qw(secure_compare);
 use Scalar::Util qw(blessed);
+use HTTP::MultiPartParser ();
 use PAGI::Exception::RequestBody ();
 use PAGI::Request ();
+use PAGI::Request::MultipartStream ();
 use PAGI::Response::Text ();
 use PAGI::Utils ();
 use PAGI::Utils::Middleware qw(record_receive);
@@ -79,10 +81,13 @@ takes the last, so that a multipart upload can stream past its token); whoever
 runs next, the application or C<refuse>, is handed a receive that delivers
 the whole body again, so the route reads its form as usual. A body over
 C<max_form_size> is answered here with a plain-text 413. A
-C<multipart/form-data> request without the header reaches the application
-with C<missing_token> recorded, for L<PAGI::CSRF/csrf_protect> on its route
-(see L</"Form flow (plain HTML forms)">). Any other body without the header,
-JSON included, is refused.
+C<multipart/form-data> request without the header is read only as far as its
+token part, in byte order, so the answer does not depend on how the client's
+bytes arrived and an upload after the token still streams to the route: a
+file part before the token is refused (put the hidden token field first --
+browsers send fields in document order), no limit is applied here to a part
+after it, and a body that cannot be parsed is answered with a plain-text 400.
+Any other body without the header, JSON included, is refused.
 
 Every unsafe request first passes an origin check, modelled on Go's
 C<CrossOriginProtection>: a C<Sec-Fetch-Site> header must be C<same-origin>
@@ -171,10 +176,12 @@ Anything else but a non-empty string dies.
 =item * max_form_size (default: 1048576, 1 MiB)
 
 The most bytes of a form body read here, ahead of the application, to find
-its token. A urlencoded body larger than this is answered with a plain-text
-413 C<Request body too large> (under C<< refuse => 0 >> it is not read
-further, C<missing_token> is recorded, and the application gets the whole
-body). A positive integer; anything else dies.
+its token -- the whole of a urlencoded body, or a multipart body up to its
+token part, however large the upload after it. A form whose token is not
+within that many bytes is answered with a plain-text 413 C<Request body too
+large> (under C<< refuse => 0 >> it is not read further, C<missing_token> is
+recorded, and the application gets the whole body). A positive integer;
+anything else dies.
 
 =item * refuse (default: a 403 text response)
 
@@ -328,7 +335,7 @@ sub wrap {
         my $downstream = $receive;
         my $content_type = PAGI::Request->new($scope, $receive)->content_type;
         if (defined($failure) && $failure eq 'missing_token' && defined($self->{form_field})
-                && $content_type eq 'application/x-www-form-urlencoded') {
+                && ($content_type eq 'application/x-www-form-urlencoded' || $content_type eq 'multipart/form-data')) {
             my ($reading, $replaying) = record_receive($receive);
             $downstream = $replaying;
             my ($outcome, $value) = await $self->_form_token($scope, $reading);
@@ -348,9 +355,7 @@ sub wrap {
             if (defined $failure) { $recorded{'pagi.csrf_failure'} = $failure }
             else                  { delete $recorded{'pagi.csrf_failure'} }
         }
-        my $for_the_handler = defined($failure) && $failure eq 'missing_token'
-            && defined($self->{form_field}) && $content_type eq 'multipart/form-data';
-        my $target = defined($failure) && $self->{refuse} && !$for_the_handler ? $self->{refuse} : $app;
+        my $target = defined($failure) && $self->{refuse} ? $self->{refuse} : $app;
         await $target->($self->modify_scope($scope, \%recorded), $downstream, $wrapped_send);
     };
 }
@@ -361,6 +366,8 @@ sub wrap {
 # cannot be read as a form. Anything else that fails propagates.
 async sub _form_token {
     my ($self, $scope, $reading) = @_;
+    my $request = PAGI::Request->new($scope, $reading);
+    return await $self->_multipart_token($request, $reading) if $request->content_type eq 'multipart/form-data';
     my $body;
     my $read = eval {
         $body = await PAGI::Request->new($scope, _counting_receive($reading, $self->{max_form_size}))->body;
@@ -379,6 +386,62 @@ async sub _form_token {
         return ('token', PAGI::Request::_url_decode($value // ''));
     }
     return ('missing');
+}
+
+# A multipart form's token, read in byte order: the events from $reading are
+# fed to the parser in slices no longer than the budget left, and the parts
+# decide as they come -- the form_field part's value, a file before it
+# (missing), the parser's error (malformed) -- and once decided nothing after
+# counts: no limit is applied to a later part here, the route's own parse
+# applies its limits to the whole body. So the answer is the same however the
+# client's bytes were split into events. Nothing is read after deciding.
+async sub _multipart_token {
+    my ($self, $request, $reading) = @_;
+    my $parameters = $request->headers->content_type_parameters;
+    my $boundary = defined($parameters) ? $parameters->{boundary} : undef;
+    return ('malformed') unless defined($boundary) && length($boundary);
+
+    my ($outcome, $value, $collecting, $collected) = (undef, undef, 0, '');
+    my $parser = HTTP::MultiPartParser->new(
+        boundary  => $boundary,
+        on_header => sub {
+            my ($lines) = @_;
+            return if defined $outcome;
+            my $part = PAGI::Request::MultipartStream::_disposition($lines);
+            if (defined $part->{filename}) { $outcome = 'missing'; return }
+            $collecting = defined($part->{name}) && $part->{name} eq $self->{form_field};
+        },
+        on_body => sub {
+            my ($chunk, $final) = @_;
+            return if defined($outcome) || !$collecting;
+            $collected .= $chunk;
+            ($outcome, $value) = ('token', $collected) if $final;
+        },
+        on_error => sub { $outcome //= 'malformed' },
+    );
+    my $left = $self->{max_form_size};
+    until (defined $outcome) {
+        my $event = await $reading->();
+        if (($event->{type} // '') ne 'http.request') {
+            # The client left mid-body: as the route's own read would.
+            my $connection = $request->connection;
+            my $reason = ($connection ? $connection->disconnect_reason : undef) // 'disconnect';
+            die "Request body incomplete: client disconnected mid-body ($reason)\n";
+        }
+        my $bytes = $event->{body} // '';
+        while (length($bytes) && !defined($outcome)) {
+            if ($left <= 0) { $outcome = 'too_large'; last }
+            my $slice = substr($bytes, 0, $left, '');
+            $left -= length $slice;
+            $parser->parse($slice);
+        }
+        next if defined $outcome;
+        unless ($event->{more}) {
+            $parser->finish;
+            $outcome //= 'missing';
+        }
+    }
+    return ($outcome, $value);
 }
 
 # The receive a form is read through: past $budget bytes of body it dies with
@@ -403,7 +466,8 @@ sub _body_error {
     my ($self, $outcome) = @_;
     return $outcome eq 'too_large'
         ? PAGI::Exception::RequestBody->new(status_code => 413, reason => 'too_large', message => 'Request body too large')
-        : PAGI::Exception::RequestBody->new(status_code => 400, reason => 'invalid_multipart', message => 'Malformed multipart body');
+        : PAGI::Exception::RequestBody->new(status_code => 400, reason => 'invalid_multipart',
+            message => 'The multipart request body could not be parsed.');    # the route's own parser's words
 }
 
 # Why a submitted token fails to match, or undef when it passes. Compared

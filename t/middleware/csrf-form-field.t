@@ -79,12 +79,12 @@ subtest 'by default there is no form flow: a form post without the header is ref
         'failure=none | stream=streams', 'the header passes, and the body is unread';
 };
 
-subtest 'with form_field, a urlencoded post is checked here; a multipart one still reaches the route unread' => sub {
+subtest 'with form_field, a form post without its token is refused here' => sub {
     my ($client, $token) = primed(form_field => 'csrf_token');
     is $client->post('/?read=stream', form => { title => 'hi' })->status, 403,
         'urlencoded without its token: refused by the middleware (t/middleware/csrf-form-check.t)';
-    is $client->post('/?read=mstream', body => multipart_body(title => 'hi'), headers => \%multipart)->text,
-        'failure=missing_token | mstream=streams', 'multipart: the same';
+    is $client->post('/?read=mstream', body => multipart_body(title => 'hi'), headers => \%multipart)->status, 403,
+        'multipart: the same (t/middleware/csrf-multipart.t)';
 };
 
 subtest 'with form_field, every other failure is still refused' => sub {
@@ -172,13 +172,13 @@ subtest 'csrf_protect: a multipart form' => sub {
     my ($client, $token) = primed(form_field => 'csrf_token');
     my $res = $client->post('/protected?read=form,uploads',
         body => multipart_body(csrf_token => $token, title => 'hi'), headers => \%multipart);
-    is [$res->status, $res->text], [200, 'failure=missing_token | form=hi | uploads=1'], 'the right field passes';
+    is [$res->status, $res->text], [200, 'failure=none | form=hi | uploads=1'], 'the right field passes, checked by the middleware';
     is $client->post('/protected', body => multipart_body(title => 'hi'), headers => \%multipart)->status, 403,
         'no field: refused';
     $res = $client->post('/protected', body => multipart_body(csrf_token => $token, big => 'x' x (1024 * 1024 + 10)),
         headers => \%multipart);
-    is [$res->status, $res->text], [413, 'Form field too large (max 1048576 bytes)'],
-        "PAGI::Request's default limits apply: Compose answers the body error";
+    is [$res->status, $res->text], [413, 'Request body too large'],
+        'a field over max_form_size before the token (fields sort: big, then csrf_token): the middleware answers';
 };
 
 subtest 'csrf_protect: form_field names the field' => sub {
@@ -229,7 +229,7 @@ subtest 'csrf_protect: every unsafe method reads the form' => sub {
 subtest "csrf_protect: a malformed multipart body is the client's 400, answered by Compose" => sub {
     my ($client) = primed(form_field => 'csrf_token');
     my $res = $client->post('/protected', body => '', headers => \%multipart);
-    is [$res->status, $res->text], [400, 'The multipart request body could not be parsed.'], 'an empty body';
+    is [$res->status, $res->text], [400, 'The multipart request body could not be parsed.'], 'an empty body: the middleware answers, in the parser\'s words';
 };
 
 subtest 'csrf_protect: the field, read as a form field' => sub {
