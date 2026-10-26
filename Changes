@@ -112,7 +112,8 @@
     a refuse application, or a redirect 303: to a location as written, or
     to path_for arguments with ?next= added. WebSocket and SSE are refused
     before they start, and route_table shows it in each entry's middleware.
-  - PAGI::Routing::OpenAPI: openapi($app, title => ..., version => ...)
+  - PAGI::Routing::OpenAPI (early beta: its interface may still change
+    incompatibly): openapi($app, title => ..., version => ...)
     returns the application, a Compose, with its OpenAPI 3.1 document as a
     route at /openapi.json, inside the application's own middleware. The
     document is built from route_table: paths and methods, typed path parameters,

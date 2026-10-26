@@ -305,6 +305,11 @@ PAGI::Routing::OpenAPI - an OpenAPI document from an application's routes
 
 =head1 DESCRIPTION
 
+B<Early beta.> This module is new, and its interface -- C<openapi>'s options,
+how a route's C<meta> describes its bodies, and the overridable methods -- may
+still change in an incompatible way in a later release. Pin the version you
+build on, and expect to revisit your C<meta> when you upgrade.
+
 An OpenAPI 3.1.0 document built from an application's
 L<route_table|PAGI::Routing::RouteEntry>: its paths and methods, typed path
 parameters, operationIds, summaries from each route's C<desc>, security from

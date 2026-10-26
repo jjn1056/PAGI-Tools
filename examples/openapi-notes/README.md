@@ -1,5 +1,8 @@
 # A notes API with a generated OpenAPI document
 
+> **Early beta.** `PAGI::Routing::OpenAPI` is new, and its interface may still
+> change incompatibly in a later release; this example will change with it.
+
 A small JSON API whose `/openapi.json` is generated from its routes by
 `PAGI::Routing::OpenAPI`: paths, typed path parameters, operationIds,
 summaries and security come from the routes themselves, and the request and
