@@ -63,9 +63,11 @@ request with no signature header at all is refused before any route runs.
   sends a forged 2MB artifact that way and checks nothing is left.
 
 - The check runs as the body is read. A route that acts without reading the
-  body gets only the "a signature header is present" check: under `/signed`
-  a `GET` with a forged header reaches the router (a 405 here). Every
-  `/signed` route reads its body.
+  body, or stops reading early, gets only the "a signature header is
+  present" check: under `/signed` a `GET` with a forged header reaches the
+  router (a 405 here). Every `/signed` route reads its whole body. To verify
+  every request whether or not its route reads, the middleware would read
+  the whole body first and hand the route a replay, giving up streaming.
 - The signature is an HMAC of the body's SHA-256, as AWS signs a payload's
   hash, so the middleware hashes each chunk as it arrives and never holds
   the body in one string. GitHub's scheme, an HMAC over the body itself,

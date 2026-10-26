@@ -12,6 +12,11 @@
 # as it arrives and never holds it in one string. The same application in
 # Starlette is app.py.
 #
+# The check covers the body a route reads: a route under /signed that does
+# not read its body, or stops reading early, is not checked. That is the
+# price of checking without reading; to verify every request whether or not
+# its route reads, read the whole body in the middleware first.
+#
 # Run:  SIGNING_SECRET=s3cret pagi-server --app examples/signed-requests/app.pl --port 5000
 # Try:  sign() { openssl dgst -sha256 | sed 's/^.* //' | tr -d '\n' \
 #                | openssl dgst -sha256 -hmac s3cret | sed 's/^.* /sha256=/'; }
@@ -40,9 +45,8 @@ package SignedRequests::BadSignature {
 
 package SignedRequests::VerifySignature {
     use parent 'PAGI::Middleware';
-    use Future::AsyncAwait;
     use Digest::SHA qw(hmac_sha256_hex);
-    use PAGI::Tools qw(response);
+    use PAGI::Tools qw(response);    # imports are per package; async is lexical, so only this one
     use PAGI::Utils::SecureCompare qw(secure_compare);
 
     sub _init ($self, $config) {
@@ -88,7 +92,8 @@ package SignedRequests::VerifySignature {
 
 my $SECRET = $ENV{SIGNING_SECRET} // 's3cret';
 
-# A build event: read by PAGI::Request, through the verifying receive.
+# A build event: read by PAGI::Request, through the verifying receive. The
+# event is a JSON object; a JSON array is a 500 here, as in app.py.
 async sub record_event ($request) {
     my $event = await $request->json;    # a 401 if unsigned, a 400 if not JSON
     push $request->state->get('events')->@*, $event;

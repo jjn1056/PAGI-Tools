@@ -3,6 +3,11 @@
 # receive it hands the routes, as Starlette's RequestBodyLimitMiddleware
 # counts bytes, and the routes read their bodies as usual.
 #
+# The check covers the body a route reads: a route under /signed that does
+# not read its body, or stops reading early, is not checked. That is the
+# price of checking without reading; to verify every request whether or not
+# its route reads, read the whole body in the middleware first.
+#
 # Run:  pip install starlette uvicorn
 #       SIGNING_SECRET=s3cret uvicorn app:app --port 8000
 
@@ -75,7 +80,8 @@ class VerifySignature:
         await JSONResponse({"error": "bad signature"}, status_code=401)(scope, receive, send)
 
 
-# A build event: read by the Request, through the verifying receive.
+# A build event: read by the Request, through the verifying receive. The
+# event is a JSON object; a JSON array is a 500 here, as in app.pl.
 async def record_event(request):
     event = await request.json()
     request.state.events.append(event)
