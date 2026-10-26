@@ -5,7 +5,7 @@ A middleware rewrites a form's body before the application reads it: the
 field is added. The route reads its form as usual and sees only the
 rewritten one. `app.py` is the same application in Starlette; both were run
 (`pagi-server` and `uvicorn`) with the requests below and gave the same
-answers.
+answers (one difference in the page's HTML escaping, below).
 
 Requires Perl 5.40.
 
@@ -52,6 +52,13 @@ there and hand it on.
   does.
 - `handle_submit` put the form's values into HTML unescaped; it now escapes
   them (`html.escape`), as the Perl one does.
+
+The page escapes with `HTML::Escape`, which also escapes `{` and `}` (as
+`&#123;` and `&#125;`), so its HTML differs from `html.escape`'s there; a
+browser shows the same text. The form is re-encoded with `URI`'s
+`query_form`, as `app.py` uses `urlencode`, and the middleware's
+`middleware_processed` replaces one the client sent, as `app.py`'s
+assignment does.
 
 Starlette changes `scope["headers"]` in place; the Perl version gives the
 application a copy of the scope, as PAGI middleware does. Two smaller

@@ -49,8 +49,11 @@ on 'test' => sub {
     # but CI should run it)
     requires 'Future::IO', '0.23';
     requires 'Time::HiRes', '1.9764';
-    # t/stringify-overloaded.t checks real objects that overload ""
+    # t/stringify-overloaded.t checks real objects that overload "";
+    # examples/modify-form-post encodes a form with it
     requires 'URI';
+    # examples/modify-form-post and auth-cookie-login escape HTML with it
+    requires 'HTML::Escape';
     requires 'Path::Tiny';
 };
 

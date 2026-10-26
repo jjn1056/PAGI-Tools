@@ -15,31 +15,37 @@
 
 use v5.40;
 use Future::AsyncAwait;
-use List::Util qw(pairmap);
+use HTML::Escape qw(escape_html);
+use List::Util qw(pairgrep pairmap);
 use PAGI::Request;
 use PAGI::Tools qw(compose middleware response route);
+use URI;
 
 # name => value pairs as an application/x-www-form-urlencoded body.
 sub form_encode (@pairs) {
-    my $escape = sub ($text) {
-        utf8::encode($text);
-        $text =~ s/([^A-Za-z0-9\-._~ ])/sprintf('%%%02X', ord $1)/ge;
-        return $text =~ tr/ /+/r;
-    };
-    return join '&', pairmap { $escape->($a) . '=' . $escape->($b) } @pairs;
+    my $uri = URI->new('', 'http');
+    $uri->query_form(\@pairs);
+    return $uri->query // '';
 }
 
 sub modify_form_post ($app) {
     return async sub ($scope, $receive, $send) {
         return await $app->($scope, $receive, $send)
-            unless $scope->{type} eq 'http' && $scope->{method} eq 'POST'
-                && (PAGI::Request->new($scope, $receive)->content_type // '') eq 'application/x-www-form-urlencoded';
+            unless $scope->{type} eq 'http' && $scope->{method} eq 'POST';
+        # The one Request this middleware reads through. Its content_type is
+        # the media type alone, lower-cased: "; charset=UTF-8" is not part
+        # of it.
+        my $request = PAGI::Request->new($scope, $receive);
+        return await $app->($scope, $receive, $send)
+            unless $request->content_type eq 'application/x-www-form-urlencoded';
 
         # Read the whole form from the client.
-        my $form = await PAGI::Request->new($scope, $receive)->form_params;
+        my $form = await $request->form_params;
 
-        # Rewrite it: clean up the username, mark it processed.
-        my @fields = pairmap { $a eq 'username' ? ($a, uc($b =~ s/\A\s+|\s+\z//gr)) : ($a, $b) } $form->flatten;
+        # Rewrite it: clean up the username, and mark it processed -- the
+        # middleware's mark replaces any the client sent.
+        my @fields = pairmap { $a eq 'username' ? ($a, uc($b =~ s/\A\s+|\s+\z//gr)) : ($a, $b) }
+            pairgrep { $a ne 'middleware_processed' } $form->flatten;
         push @fields, middleware_processed => 'true';
         my $body = form_encode(@fields);
 
@@ -60,11 +66,6 @@ sub modify_form_post ($app) {
     };
 }
 
-sub html_escape ($text) {
-    my %entity = ('&' => '&amp;', '<' => '&lt;', '>' => '&gt;', '"' => '&quot;', "'" => '&#39;');
-    return $text =~ s/([&<>"'])/$entity{$1}/gr;
-}
-
 sub show_form ($request) {
     return response('HTML', <<~'HTML');
         <form action="/submit" method="post">
@@ -82,7 +83,7 @@ async sub handle_submit ($request) {
         [received_username      => $form->get('username')],
         [received_role          => $form->get('role')],
         [injected_by_middleware => $form->get('middleware_processed')];
-    return response('HTML', '<h3>Endpoint Received:</h3><pre>' . html_escape("{$received}") . '</pre>');
+    return response('HTML', '<h3>Endpoint Received:</h3><pre>' . escape_html("{$received}") . '</pre>');
 }
 
 compose(
