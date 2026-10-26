@@ -3,6 +3,7 @@ use warnings;
 use Test2::V0;
 use PAGI::Test::Client;
 use FindBin qw($Bin);
+use lib "$Bin/../examples/framework-wrap-style/lib";    # Mini, as installed
 
 BEGIN { plan skip_all => 'examples/framework-wrap-style requires Perl 5.40' if $] < 5.040 }
 

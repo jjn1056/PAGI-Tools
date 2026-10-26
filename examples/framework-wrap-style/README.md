@@ -7,8 +7,11 @@ one request through chained matches. `app.pl` is a notes app on it.
 
 Requires Perl 5.40.
 
+Mini stands in for a framework installed from CPAN, so `lib/` goes on the path
+and `app.pl` is a single-file application:
+
 ```
-pagi-server --app examples/framework-wrap-style/app.pl --port 5000
+pagi-server -I examples/framework-wrap-style/lib --app examples/framework-wrap-style/app.pl --port 5000
 curl -i localhost:5000/tenants/acme/notes/7
 ```
 

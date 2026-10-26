@@ -1,7 +1,8 @@
 #!/usr/bin/env perl
+# Mini stands in for a framework installed from CPAN, so its lib/ goes on
+# the path, not into this file:
+#   pagi-server -I examples/framework-wrap-style/lib --app examples/framework-wrap-style/app.pl --port 5000
 use v5.40;
-use File::Basename qw(dirname);
-use lib dirname(__FILE__) . '/lib';
 use Mini;
 use PAGI::Exception::HTTP;
 
