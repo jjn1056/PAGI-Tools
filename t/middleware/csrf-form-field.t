@@ -79,10 +79,10 @@ subtest 'by default there is no form flow: a form post without the header is ref
         'failure=none | stream=streams', 'the header passes, and the body is unread';
 };
 
-subtest 'with form_field, a form post without the header reaches the route unread' => sub {
+subtest 'with form_field, a urlencoded post is checked here; a multipart one still reaches the route unread' => sub {
     my ($client, $token) = primed(form_field => 'csrf_token');
-    is $client->post('/?read=stream', form => { title => 'hi' })->text,
-        'failure=missing_token | stream=streams', 'urlencoded: missing_token recorded, the body streams';
+    is $client->post('/?read=stream', form => { title => 'hi' })->status, 403,
+        'urlencoded without its token: refused by the middleware (t/middleware/csrf-form-check.t)';
     is $client->post('/?read=mstream', body => multipart_body(title => 'hi'), headers => \%multipart)->text,
         'failure=missing_token | mstream=streams', 'multipart: the same';
 };
@@ -108,7 +108,7 @@ subtest 'form_field must be a field name or undef; body_buffer is gone' => sub {
     }
     ok lives { PAGI::Middleware::CSRF->new(form_field => undef) }, 'undef lives';
     like dies { PAGI::Middleware::CSRF->new(body_buffer => sub {}) },
-        qr/\ACSRF 'body_buffer' was removed: it never reads the body/, 'body_buffer dies';
+        qr/\ACSRF 'body_buffer' was removed: the form read is bounded by max_form_size/, 'body_buffer dies';
 };
 
 # An application that reads the body from $receive itself, as one written to
@@ -145,9 +145,9 @@ subtest 'csrf_protect: the right field passes, and the handler reads the same pa
     my $res = $client->post('/protected?read=form,body,stream',
         form => { csrf_token => $token, title => "h\xc3\xa9" });    # UTF-8, as a browser sends it
     is $res->status, 200, 'passes';
-    is $res->text, join(' | ', 'failure=missing_token', "form=h\x{e9}", "body=csrf_token=$token&title=h%C3%A9",
+    is $res->text, join(' | ', 'failure=none', "form=h\x{e9}", "body=csrf_token=$token&title=h%C3%A9",
         'stream=dies: Body already consumed; streaming not available'),
-        'form_params and body come from the parse csrf_protect made on this Request';
+        'the middleware checked the field; the handler parses the replayed body itself';
 };
 
 subtest 'csrf_protect: a missing, empty or wrong field is refused before the handler' => sub {
@@ -197,7 +197,7 @@ subtest 'csrf_protect: refuse answers, given the same Request' => sub {
         return response('Text', 'refused ' . $form->get('title') . ': ' . csrf($request)->failure, status => 403);
     });
     is [map { $_->status, $_->text } $reads->post('/protected', form => { csrf_token => 'forged', title => 'hi' })],
-        [403, 'refused hi: missing_token'], 'a Request handler reads the form csrf_protect parsed';
+        [403, 'refused hi: mismatch'], 'a Request handler, refusing for the middleware, reads the replayed form';
 };
 
 subtest 'csrf_protect: under session => 1 the field matches the session token' => sub {
@@ -234,8 +234,10 @@ subtest "csrf_protect: a malformed multipart body is the client's 400, answered 
 
 subtest 'csrf_protect: the field, read as a form field' => sub {
     my ($client, $token) = primed(form_field => 'csrf_token');
-    is $client->post('/protected', form => [[csrf_token => 'forged'], [csrf_token => $token]])->status, 200,
-        'a repeated field: the last value decides';
+    is $client->post('/protected', form => [[csrf_token => $token], [csrf_token => 'forged']])->status, 200,
+        'a repeated field: the first value decides';
+    is $client->post('/protected', form => [[csrf_token => 'forged'], [csrf_token => $token]])->status, 403,
+        'whatever follows it';
     is $client->post('/protected', body => "csrf_token=$token",
         headers => { 'Content-Type' => 'Application/X-WWW-Form-Urlencoded; charset=UTF-8' })->status, 200,
         'the form media type in any case and with parameters';
