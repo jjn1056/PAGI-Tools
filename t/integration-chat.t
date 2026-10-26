@@ -8,6 +8,7 @@ use lib "$Bin/../lib";
 use lib "$Bin/../examples/chat/lib";
 use lib "$Bin/lib";
 use PAGI::Test::Client;
+use Scalar::Util ();
 
 # The chat example is the showcase for HTTP, WebSocket and SSE together, so it
 # is written in the style the toolkit recommends: one-object handlers on
@@ -25,10 +26,10 @@ sub source_text {
 }
 
 my %source = map { $_ => source_text("$dir/$_") }
-    qw(app.pl lib/ChatApp/HTTP.pm lib/ChatApp/WebSocket.pm lib/ChatApp/SSE.pm lib/ChatApp/State.pm);
+    qw(lib/ChatApp.pm lib/ChatApp/HTTP.pm lib/ChatApp/WebSocket.pm lib/ChatApp/SSE.pm lib/ChatApp/State.pm);
 
 subtest 'the example is written in the recommended style' => sub {
-    my $app = $source{'app.pl'};
+    my $app = $source{'lib/ChatApp.pm'};
     like($app, qr/websocket\('\/ws\/chat'\s*=>\s*\\&ChatApp::WebSocket::chat\)/,
         'the WebSocket route takes a one-$ws handler');
     like($app, qr/sse\('\/events'\s*=>\s*\\&ChatApp::SSE::events\)/,
@@ -45,7 +46,7 @@ subtest 'the example is written in the recommended style' => sub {
             "$file sends no hand-built protocol events");
         unlike($source{$file}, qr/PAGI::(?:WebSocket|SSE)->new|\(\$scope,\s*\$receive,\s*\$send\)/,
             "$file builds no protocol objects from raw channels")
-            unless $file eq 'app.pl';    # app.pl's logging middleware wraps the raw app
+            unless $file eq 'lib/ChatApp.pm';    # its logging middleware wraps the raw app
     }
 
     ok(!-l "$dir/public", 'public assets are ordinary files that can ship to CPAN');
@@ -123,13 +124,15 @@ subtest 'a reconnecting SSE client gets missed and live events once, in order' =
     ChatApp::State::remove_room("order-$_") for 1 .. 3;
 };
 
-my $app = do "$dir/app.pl";
+# The application is a module: loading it returns a provider that builds
+# the application when asked.
+my $app = do "$dir/lib/ChatApp.pm";
 my $load_error = $@ || $!;
 ok(!$load_error, 'chat app loads cleanly') or diag($load_error);
-isa_ok($app, 'PAGI::Compose');
+can_ok($app, 'to_app');
 
 SKIP: {
-    skip 'chat app did not load', 1 unless ref($app) eq 'PAGI::Compose';
+    skip 'chat app did not load', 1 unless Scalar::Util::blessed($app) && $app->can('to_app');
 
     my $native_app = $app->to_app;
     my ($stderr, %starts_by_path, %res) = ('');

@@ -22,28 +22,36 @@ A comprehensive demo application showcasing PAGI's capabilities through a real-t
 ## Running the Application
 
 ```bash
-# From the PAGI-Tools root directory, with PAGI-Server installed
-pagi-server -I lib --app examples/chat/app.pl --port 5000
+# From the PAGI-Tools root directory, with PAGI-Server installed: -I lib
+# finds PAGI-Tools, -I examples/chat/lib the application
+pagi-server -I lib -I examples/chat/lib --app examples/chat/lib/ChatApp.pm --port 5000
 
 # Then open http://localhost:5000 (two tabs to chat with yourself)
 ```
 
 ## How It Is Built
 
-One `compose` declares every entry point. Each handler receives one object
+The application is `ChatApp`, a `PAGI::App::Compose` in `lib/ChatApp.pm`.
+Its `routes` declare every entry point. Each handler receives one object
 for its protocol and returns a value or awaits that object's methods:
 
 ```perl
-compose(
-    routes => [
+package ChatApp;
+use parent 'PAGI::App::Compose';
+
+sub routes {
+    return [
         websocket('/ws/chat' => \&ChatApp::WebSocket::chat),   # gets a PAGI::WebSocket
         sse('/events' => \&ChatApp::SSE::events),               # gets a PAGI::SSE
         mount('/api', app => ChatApp::HTTP::routing()),         # a Router of Request handlers
         route('/*path' => PAGI::App::File->from_app_path('public')),
-    ],
-    middleware => [middleware(\&with_logging)],
-    lifespan   => { startup => ..., shutdown => ... },
-);
+    ];
+}
+sub app_middleware { return [middleware(\&with_logging)] }
+async sub on_startup  { ... }
+async sub on_shutdown { ... }
+
+__PACKAGE__->run_if_script;
 ```
 
 - **`ChatApp::HTTP::routing()`** returns an immutable Router. Its handlers take
@@ -75,7 +83,7 @@ left".
 
 ```
 examples/chat/
-├── app.pl                    # the compose: routes, logging, lifespan
+├── lib/ChatApp.pm            # the application: routes, logging, lifespan
 ├── lib/ChatApp/
 │   ├── State.pm              # shared in-memory state
 │   ├── HTTP.pm               # JSON API (a Router mounted at /api)
