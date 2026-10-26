@@ -42,7 +42,13 @@ sub page ($request, $template, %vars) {
 
 sub flash ($request, $message) { session($request)->set(flash => $message) }
 
-sub tasks ($request) { app_state($request)->get('board') }
+sub board ($request) { app_state($request)->get('board') }
+
+# The board page, with the tasks; a re-render passes the form, its errors
+# and its status.
+sub board_page ($request, %vars) {
+    return page($request, 'index.tt', tasks => board($request)->{list}, form => {}, errors => {}, %vars);
+}
 
 sub validate ($form) {
     my %errors;
@@ -72,38 +78,57 @@ sub add_task ($board, $values) {
 
 sub find_task ($board, $id) {
     my ($task) = grep { $_->{id} == $id } @{ $board->{list} };
-    return $task // die TaskBoard::NoSuchTask->new;
+    die TaskBoard::NoSuchTask->new unless $task;
+    return $task;
 }
 
 async sub index ($request) {
-    return page($request, 'index.tt', tasks => tasks($request)->{list}, form => {}, errors => {});
+    return board_page($request);
 }
 
 async sub create ($request) {
     my $form = await $request->form_params;
     my ($values, $errors) = validate($form);
-    return page($request, 'index.tt', tasks => tasks($request)->{list},
-        form => $values, errors => $errors, status => 422)
-        if %$errors;
+    return board_page($request, form => $values, errors => $errors, status => 422) if %$errors;
 
-    add_task(tasks($request), $values);
+    add_task(board($request), $values);
     flash($request, "Added \"$values->{title}\".");
     return response('Redirect', path_for($request, 'index'), status => 303);
 }
 
 async sub toggle ($request) {
-    my $task = find_task(tasks($request), $request->path_param('id'));
-    $task->{done} = !$task->{done} || 0;
+    my $task = find_task(board($request), $request->path_param('id'));
+    $task->{done} = $task->{done} ? 0 : 1;
     flash($request, $task->{done} ? "Done: $task->{title}." : "Reopened: $task->{title}.");
     return response('Redirect', path_for($request, 'index'), status => 303);
 }
 
 async sub remove ($request) {
-    my $board = tasks($request);
+    my $board = board($request);
     my $task  = find_task($board, $request->path_param('id'));
-    @{ $board->{list} } = grep { $_ != $task } @{ $board->{list} };
+    @{ $board->{list} } = grep { $_->{id} != $task->{id} } @{ $board->{list} };
     flash($request, 'Deleted.');
     return response('Redirect', path_for($request, 'index'), status => 303);
+}
+
+# The board's errors, answered in one place (the catch entries below). An
+# entry is given the route's Request and $error, the error being answered (a
+# PAGI::ErrorContext): $error->exception is what was thrown.
+
+# A duplicate title: the board again, with the form as it was typed.
+async sub title_taken ($request, $error) {
+    my ($values) = validate(await $request->form_params);
+    return board_page($request, form => $values, status => 409,
+        errors => { title => 'There is already a task called "' . $error->exception->title . '".' });
+}
+
+sub no_such_task ($request, $error) {
+    return response('Text', 'No such task: ' . $request->path_param('id') . '.', status => 404);
+}
+
+# A page that does not exist: the router's 404.
+sub no_such_page ($request, $error) {
+    return response('Text', 'No such page: ' . $request->path . '.', status => 404);
 }
 
 compose(
@@ -125,21 +150,9 @@ compose(
         # answered at that route, with its own Request: the form create
         # read, and the id in the path.
         middleware('ErrorHandler', catch => {
-            'TaskBoard::TitleTaken' => async sub ($request, $error) {
-                my ($values) = validate(await $request->form_params);
-                return page($request, 'index.tt', tasks => tasks($request)->{list},
-                    form => $values, status => 409,
-                    errors => { title => 'There is already a task called "'
-                        . $error->exception->title . '".' });
-            },
-            'TaskBoard::NoSuchTask' => sub ($request, $error) {
-                return response('Text', 'No such task: ' . $request->path_param('id') . '.',
-                    status => 404);
-            },
-            # A page that does not exist: the router's 404, answered here.
-            404 => sub ($request, $error) {
-                return response('Text', 'No such page: ' . $request->path . '.', status => 404);
-            },
+            'TaskBoard::TitleTaken' => \&title_taken,
+            'TaskBoard::NoSuchTask' => \&no_such_task,
+            404                     => \&no_such_page,
         }),
     ],
     lifespan => {

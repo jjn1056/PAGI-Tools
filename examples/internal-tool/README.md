@@ -55,7 +55,7 @@ installed; it is not a dependency of PAGI-Tools.
   `app_state($request)`.
 
 Measured with the gut-check line counter (code lines, imports in
-parentheses): PAGI-Tools 97 (11), Flask 74 (2). The templates are 47 and 44
+parentheses): PAGI-Tools 95 (11), Flask 74 (2). The templates are 47 and 44
 lines. The difference is the batteries: Flask's `render_template` and
 `flash`/`get_flashed_messages` are the `page` and `flash` helpers here,
 `url_for('static', ...)` is the template's `url('static', ...)`, and Flask's
