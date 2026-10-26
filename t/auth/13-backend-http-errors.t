@@ -187,4 +187,41 @@ subtest 'a catch table is checked at construction' => sub {
         qr/\AAuthentication catch key '\+Foo' is neither a status/, 'a bad key';
 };
 
+# Whatever a backend throws is handled as the same value thrown from a route
+# is: a catch entry for its class, anything with status_code, a page; the
+# rest is a server error. The same values, the same catch table, both places.
+{
+    package Local::AuthError; sub new { bless { message => $_[1] }, $_[0] } sub message { $_[0]{message} }
+    package Local::Locked;    sub new { bless {}, shift } sub status_code { 403 } sub client_message { 'Account locked.' }
+    package Local::NoChallenge; sub new { bless {}, shift } sub status_code { 401 }
+}
+subtest 'a backend\'s error is answered as the same error thrown from a route' => sub {
+    my %catch = ('Local::AuthError' => sub {
+        my ($request, $context) = @_;
+        return response('JSON', { error => $context->exception->message }, status => 401);
+    });
+    my %thrown = (
+        'its own class, keyed in catch' => sub { die Local::AuthError->new('Bad token.') },
+        'a status_code of its own'      => sub { die Local::Locked->new },
+        'a page from 400 up'            => sub { die response('Text', 'Forbidden here.', status => 403) },
+        'a page below 400'              => sub { die response('Text', '', status => 303, headers => [Location => '/login']) },
+        'a status claim it cannot use'  => sub { die Local::NoChallenge->new },
+        'a plain error'                 => sub { die "backend bug\n" },
+    );
+    my $answer = sub {
+        my ($app) = @_;
+        my ($res, @warnings);
+        { local $SIG{__WARN__} = sub { push @warnings, $_[0] }; $res = PAGI::Test::Client->new(app => $app->to_app)->get('/') }
+        s/\s+at \S+ line \d+\.?\n?\z//, s/=HASH\(0x[0-9a-f]+\)/=HASH/g for @warnings;
+        return [$res->status, $res->text, $res->header('Location'), [sort @warnings]];
+    };
+    for my $name (sort keys %thrown) {
+        my $from_backend = $answer->(compose(routes => [route('/' => \&whoami)],
+            middleware => [middleware('Authentication', backend => $thrown{$name}, catch => \%catch)]));
+        my $from_route = $answer->(compose(routes => [route('/' => $thrown{$name})],
+            middleware => [middleware('ErrorHandler', catch => \%catch)]));
+        is $from_backend, $from_route, "$name: status $from_route->[0], the same answer and log";
+    }
+};
+
 done_testing;

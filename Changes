@@ -92,10 +92,11 @@
     and PAGI::Middleware::Authentication. Its backend reads the request's
     headers and cookies, never the body (as Starlette's backend gets an
     HTTPConnection); a request signed over its body is checked in the
-    handler. A PAGI::Exception::HTTP the backend throws is the client's
-    answer (as Starlette answers a backend's AuthenticationError): answered
-    as a route's thrown error is, by the ErrorHandler the route is inside or
-    with the built-in answer, and a WebSocket or SSE is refused with it.
+    handler. What the backend throws is handled as the same value thrown
+    from a route is (as Starlette answers a backend's AuthenticationError):
+    an HTTP error, a class with a catch entry, or a page is answered, by the
+    ErrorHandler the route is inside or with the built-in answer, and a
+    WebSocket or SSE is refused with it; anything else is a server error.
     Its catch option (an ErrorHandler-shaped table; Starlette's on_error)
     shapes those answers wherever it is placed, so one table can serve
     ErrorHandler and Authentication: ErrorHandler's catch answers what the

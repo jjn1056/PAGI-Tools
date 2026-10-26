@@ -72,17 +72,20 @@ sub wrap {
         };
         unless ($authenticated) {
             my $error = $@;
-            # An HTTP error the backend throws is the client's answer, as
-            # Starlette's middleware answers its backend's
-            # AuthenticationError with its on_error: by this middleware's
-            # catch table, else as a route's thrown error is -- by the
-            # ErrorHandler this request is inside (on a route) or with the
-            # built-in answer -- then re-raised from 500 up. Anything else is
-            # a server error, as before.
-            die $error unless blessed($error) && $error->isa('PAGI::Exception::HTTP');
-            my $answering = !$self->{own_catch} && $type eq 'http' && $scope->{'pagi.error_handler'}
-                ? $scope->{'pagi.error_handler'} : $self->{answers};
-            my $handled = await $answering->_handle_exception($error, $request, $scope, $receive, $send, 'quiet');
+            # What the backend throws is handled as the same value thrown
+            # from a route is, as Starlette's middleware answers its
+            # backend's AuthenticationError with its on_error: by this
+            # middleware's catch table, else by the ErrorHandler this request
+            # is inside (on a route) or with the built-in answers -- an entry
+            # for its class, anything with status_code, a page. Answered from
+            # 500 up, or not handled, it is re-raised: a server error.
+            # Quiet under an ErrorHandler (on a route): an error re-raised
+            # here meets that boundary, which diagnoses a rejected status
+            # claim; elsewhere this is the only chance to say why.
+            my $outer = $type eq 'http' ? $scope->{'pagi.error_handler'} : undef;
+            my $answering = $outer && !$self->{own_catch} ? $outer : $self->{answers};
+            my $handled = await $answering->_handle_exception($error, $request, $scope, $receive, $send,
+                $outer ? 'quiet' : undef);
             die $error if !$handled || $handled == 2;
             return;
         }
@@ -159,18 +162,23 @@ body; see examples/signed-requests).
 The result is installed under C<pagi.auth> in a shallow child scope and the
 downstream application always continues. Guest and rejected results do not
 select responses; applications make that decision explicitly. No
-C<authenticated> scope is granted implicitly.
+C<authenticated> scope is granted implicitly. An application can read the
+result with C<auth($scope)> or C<auth($request)>; absence is a configuration
+error rather than an implicit guest.
 
-A L<PAGI::Exception::HTTP> the backend throws, or fails its Future with, is
-the client's answer, as Starlette's AuthenticationMiddleware answers its
-backend's C<AuthenticationError>: the request goes no further, and the error
-is answered as one thrown from a route is. On a route, inside an
-L<PAGI::Middleware::ErrorHandler>, that ErrorHandler answers it, with its
-C<catch> entries and C<on_error>; elsewhere -- in Compose's C<middleware>
-list, say -- with the built-in answer: its status, its C<client_message> as
-plain text, its C<headers> (a 401's C<WWW-Authenticate>, say). A WebSocket
-or SSE connection is refused with that answer. From 500 up it is answered
-and then re-raised, so the server logs it. That includes the 400 a
+What the backend throws, or fails its Future with, is handled as the same
+value thrown from a route is, as Starlette's AuthenticationMiddleware answers
+its backend's C<AuthenticationError>: the request goes no further. A
+L<PAGI::Exception::HTTP> (or anything with C<status_code>), a value with a
+C<catch> entry for its class, or a thrown page is answered; anything else is
+a server error. With L</catch>, this middleware's table answers it; without,
+on a route inside an L<PAGI::Middleware::ErrorHandler>, that ErrorHandler
+does, with its C<catch> entries and C<on_error>; elsewhere -- in Compose's
+C<middleware> list, say -- the built-in answer does: an HTTP error's status,
+its C<client_message> as plain text, its C<headers> (a 401's
+C<WWW-Authenticate>, say). A WebSocket or SSE connection is refused with that
+answer. From 500 up it is answered and then re-raised, so the server logs it.
+That includes the 400 a
 L<PAGI::Request> auth helper throws with C<raise_on_error> when the client
 sent a malformed or duplicate C<Authorization> field:
 
@@ -181,8 +189,7 @@ sent a malformed or duplicate C<Authorization> field:
         ...
     });
 
-Anything else the backend throws, and every error from downstream,
-propagates as a server error.
+Every error from downstream propagates as it would without this middleware.
 
 =head2 catch
 
@@ -215,14 +222,13 @@ hook.
 Keys are statuses from 400 to 599 or exact class names; an entry receives
 the backend's Request (with no body) and an L<PAGI::ErrorContext>, and
 returns a response, as an ErrorHandler entry does. The table is checked when
-the middleware is constructed. It answers only the backend's
-L<PAGI::Exception::HTTP> errors, wherever the middleware is placed, before
-any ErrorHandler around it; an error no entry matches gets the built-in
-answer. Without C<catch>, the backend's error is answered by the ErrorHandler
-this middleware is inside, on a route, and with the built-in answer
-elsewhere. An application can read the
-result with C<auth($scope)> or C<auth($request)>; absence is a configuration
-error rather than an implicit guest.
+the middleware is constructed. It answers what the backend throws, wherever
+the middleware is placed, before any ErrorHandler around it -- a class key
+answers the backend's own error class, as Starlette's C<on_error> answers
+C<AuthenticationError> -- and an HTTP error no entry matches gets the
+built-in answer. Without C<catch>, the backend's error is answered by the
+ErrorHandler this middleware is inside, on a route, and with the built-in
+answer elsewhere.
 
 Other scope types are passed through unchanged without constructing a request
 or invoking the backend.
