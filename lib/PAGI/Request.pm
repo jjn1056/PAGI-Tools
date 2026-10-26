@@ -1178,6 +1178,8 @@ L<PAGI::Exception::RequestBody> (400); see L</BAD REQUEST BODIES>.
     my $form = await $req->form_params(raw => 1);     # Skip UTF-8 decoding
 
 Parse URL-encoded or multipart form data, returning a L<Hash::MultiValue>.
+A field sent more than once keeps every value: C<get> returns the last,
+C<get_all> all of them, in the order sent.
 Multipart boundary parameters use the same quoted parameter parsing as
 C<multipart_stream>, subject to the parser's boundary character restriction
 described above. Part C<Content-Disposition> parameters handle quoted escapes,
