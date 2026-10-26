@@ -6,12 +6,10 @@ use Future::AsyncAwait;
 
 use PAGI::Pages qw(not_found);
 use PAGI::Response qw(response);
-use PAGI::State qw(app_state);
 
 async sub get {
     my ($self, $request) = @_;
-    my $state = app_state($request)
-        or die 'endpoint-class-demo requires Compose lifespan state';
+    my $state = $request->state;
     $state->get('metrics')->{requests}++;
 
     my $user_id = $request->path_param('user_id');

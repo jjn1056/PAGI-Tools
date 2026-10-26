@@ -115,8 +115,8 @@ compose(
     routes => [
         mount('/signed',
             routes => [
-                route('/events' => \&record_event, methods => 'POST'),
-                route('/artifacts/{name:[\w-]+(?:\.[\w-]+)*}' => \&store_artifact, methods => 'POST'),
+                route('/events' => \&record_event, methods => ['POST']),
+                route('/artifacts/{name:[\w-]+(?:\.[\w-]+)*}' => \&store_artifact, methods => ['POST']),
             ],
             middleware => [middleware(SignedRequests::VerifySignature->new(secret => $SECRET))],
         ),

@@ -52,7 +52,7 @@ installed; it is not a dependency of PAGI-Tools.
   named `static`, so the layout links the stylesheet with
   `url('static', { path = 'style.css' })`, which keeps a proxy prefix.
 - **State at startup.** The board lives in lifespan state and is read with
-  `app_state($request)`.
+  `$request->state`.
 
 Measured with the gut-check line counter (code lines, imports in
 parentheses): PAGI-Tools 95 (11), Flask 74 (2). The templates are 47 and 44

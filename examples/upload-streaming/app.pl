@@ -98,10 +98,10 @@ async sub shout ($request) {
 
 compose(
     routes => [
-        route('/files/{name:[\w-]+(?:\.[\w-]+)*}' => \&store_file, methods => 'PUT'),
-        route('/import' => \&import_csv, methods => 'POST'),
-        route('/events' => \&import_events, methods => 'POST'),
-        route('/shout'  => \&shout,      methods => 'POST'),
+        route('/files/{name:[\w-]+(?:\.[\w-]+)*}' => \&store_file, methods => ['PUT']),
+        route('/import' => \&import_csv, methods => ['POST']),
+        route('/events' => \&import_events, methods => ['POST']),
+        route('/shout'  => \&shout,      methods => ['POST']),
     ],
     lifespan => {
         startup => sub ($state, $scope) { $state->{uploads} = tempdir(CLEANUP => 1) },

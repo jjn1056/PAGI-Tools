@@ -21,7 +21,7 @@ use Template;
 use PAGI::App::File;
 use PAGI::CSRF qw(csrf);
 use PAGI::Session qw(session);
-use PAGI::Tools qw(app_state compose middleware mount path_for response route);
+use PAGI::Tools qw(compose middleware mount path_for response route);
 use PAGI::Utils qw(app_path);
 
 my $tt = Template->new(INCLUDE_PATH => app_path('templates'), ENCODING => 'utf8');
@@ -42,7 +42,7 @@ sub page ($request, $template, %vars) {
 
 sub flash ($request, $message) { session($request)->set(flash => $message) }
 
-sub board ($request) { app_state($request)->get('board') }
+sub board ($request) { $request->state->get('board') }
 
 # The board page, with the tasks; a re-render passes the form, its errors
 # and its status.

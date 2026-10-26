@@ -7,7 +7,6 @@ use PAGI::App::File;
 use PAGI::Response qw(response);
 use PAGI::Routing qw(endpoint mount route websocket);
 use PAGI::Routing::URL qw(path_for);
-use PAGI::State qw(app_state);
 use PAGI::Utils qw(app_path);
 
 sub new {
@@ -36,8 +35,7 @@ sub routes {
 
 async sub home {
     my ($self, $request) = @_;
-    my $state = app_state($request)
-        or die 'endpoint-class-demo requires Compose lifespan state';
+    my $state = $request->state;
     $state->get('metrics')->{requests}++;
 
     my $api_index = path_for($request, '/api/index');
