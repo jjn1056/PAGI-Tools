@@ -298,6 +298,10 @@ these same plain responses, byte for byte.
 All leaves accept C<name>, C<desc>, C<meta> (see L</meta>), C<middleware>,
 C<constraints>, and C<declaration_package>.
 C<methods> is HTTP-only: one token, an arrayref, or the explicit string C<*>.
+Without C<methods>, an HTTP route answers GET (and HEAD), as Starlette's
+C<Route> does, so C<route('/notes' =E<gt> \&list)> does not take the
+C<POST> of a C<methods =E<gt> ['POST']> route on the same path; only
+C<< methods => '*' >> answers every method.
 For an app object, an explicit finite method set still consults
 C<allowed_methods> once during immutable Route construction and must be a
 restriction of its normalized snapshot. Without explicit
