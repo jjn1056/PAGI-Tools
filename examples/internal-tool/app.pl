@@ -16,15 +16,15 @@
 
 use v5.40;
 use utf8;
-use File::Basename qw(dirname);
 use Future::AsyncAwait;
 use Template;
 use PAGI::App::File;
 use PAGI::CSRF qw(csrf);
 use PAGI::Session qw(session);
 use PAGI::Tools qw(app_state compose middleware mount path_for response route);
+use PAGI::Utils qw(app_path);
 
-my $tt = Template->new(INCLUDE_PATH => dirname(__FILE__) . '/templates', ENCODING => 'utf8');
+my $tt = Template->new(INCLUDE_PATH => app_path('templates'), ENCODING => 'utf8');
 
 # Render a template to an HTML Response. Every page gets the CSRF token,
 # the flash message set by the previous request, and a link builder.
