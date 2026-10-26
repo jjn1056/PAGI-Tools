@@ -24,7 +24,7 @@ challenge (see [auth-cookie-login](../auth-cookie-login/README.md)).
 Use Perl 5.40 with PAGI::Tools and PAGI::Server available. From the repository root:
 
 ```sh
-PERL5LIB=lib:examples/auth-notes/lib pagi-server --app examples/auth-notes/app.pl --port 5000
+pagi-server -I lib -I examples/auth-notes/lib --app examples/auth-notes/app.pl --port 5000
 prove -lv t/integration-auth-notes.t
 ```
 

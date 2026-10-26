@@ -11,7 +11,7 @@ From the repository root:
 ```sh
 perlbrew exec --with perl-5.40.0@default perl -Ilib examples/auth-extensions/01-users-and-results.pl
 perlbrew exec --with perl-5.40.0@default perl -Ilib examples/auth-extensions/06-header-primitives.pl
-PERL5LIB=lib perlbrew exec --with perl-5.40.0@default pagi-server --app examples/auth-extensions/02-basic-backend.pl --port 5000
+perlbrew exec --with perl-5.40.0@default pagi-server -I lib --app examples/auth-extensions/02-basic-backend.pl --port 5000
 perlbrew exec --with perl-5.40.0@default prove -lv t/auth/11-extension-examples.t
 ```
 
