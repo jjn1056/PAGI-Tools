@@ -785,7 +785,7 @@ pages answer as they are without one:
       'PAGI::Exception::HTTP' => sub {
           my ($request, $error) = @_;
           return response('JSON', { error => $error->message },
-              headers => $error->exception->headers);
+              headers => $error->headers);
       },
   })
 

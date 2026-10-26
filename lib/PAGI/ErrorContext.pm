@@ -75,6 +75,7 @@ sub new {
 
 sub exception       { $_[0]{error}{exception} }
 sub status          { $_[0]{error}{status} }
+sub headers         { [ map { [@$_] } @{ $_[0]{error}{headers} // [] } ] }
 sub is_client_error { my $s = $_[0]->status; $s >= 400 && $s < 500 ? 1 : 0 }
 sub is_server_error { $_[0]->status >= 500 ? 1 : 0 }
 
@@ -115,7 +116,7 @@ sub default {
     my $detail = $self->detail;
     $body .= "\n\n$detail" if defined($detail) && length($detail);
     # The exception's own headers, with no-store unless it sets Cache-Control.
-    my @headers = map { [@$_] } @{ $self->{error}{headers} // [] };
+    my @headers = @{ $self->headers };
     unshift @headers, ['Cache-Control' => 'no-store']
         unless grep { lc($_->[0]) eq 'cache-control' } @headers;
     return PAGI::Response::Text->new($body,
@@ -142,7 +143,7 @@ PAGI::ErrorContext - The error an ErrorHandler handler is answering
             'PAGI::Exception::HTTP' => sub {
                 my ($request, $error) = @_;
                 return response('JSON', { error => $error->message },
-                    headers => $error->exception->headers);
+                    headers => $error->headers);
             },
         },
         # The 500 page for everything else: the handler reads it.
@@ -192,6 +193,15 @@ What was thrown, unchanged.
 The status ErrorHandler chose, 400-599: the exception's C<status_code> when it
 claims one in that range, a thrown page's own status, otherwise ErrorHandler's
 C<status> option (a page without a usable status is 500).
+
+=head2 headers
+
+    response('JSON', { error => $error->message }, headers => $error->headers);
+
+The error's own headers -- an HTTP error's (a 401's C<WWW-Authenticate>, a
+C<Retry-After>), as ErrorHandler checked them -- as a new C<[[name, value],
+...]> list each call; an empty list when there are none. An entry passes them
+on itself: ErrorHandler adds none to its answer but a 405's C<Allow>.
 
 =head2 reason
 

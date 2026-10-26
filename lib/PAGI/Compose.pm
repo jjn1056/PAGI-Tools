@@ -545,7 +545,7 @@ wrap Compose in the middleware that must cover its responses:
                 catch    => { 'PAGI::Exception::HTTP' => sub {
                     my ($request, $error) = @_;
                     return response('JSON', { error => $error->message },
-                        headers => $error->exception->headers);
+                        headers => $error->headers);
                 } },
                 handler  => \&server_error,
                 on_error => \&report_error),

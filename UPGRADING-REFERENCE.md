@@ -548,7 +548,7 @@ catch => {
     'PAGI::Exception::HTTP' => sub {
         my ($request, $error) = @_;
         return response('JSON', { error => $error->message },
-            headers => $error->exception->headers);   # a Retry-After, say
+            headers => $error->headers);   # a Retry-After, say
     },
 },
 handler => sub {
@@ -1049,7 +1049,7 @@ enable 'ErrorHandler',
         'PAGI::Exception::HTTP' => sub {
             my ($request, $error) = @_;
             return response('JSON', { error => $error->message },
-                headers => $error->exception->headers);
+                headers => $error->headers);
         },
     },
     # Everything else: the unhandled errors, the 500.

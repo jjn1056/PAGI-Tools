@@ -197,7 +197,7 @@ Every error from downstream propagates as it would without this middleware.
         my ($request, $context) = @_;
         return response('JSON', { error => $context->message },
             status  => $context->status,
-            headers => $context->exception->headers);
+            headers => $context->headers);
     });
 
     compose(

@@ -49,7 +49,7 @@ async sub boom ($request) {
 # The errors the app expects become JSON. A response with no status of its
 # own takes the error's; its headers are passed on.
 sub json_errors ($request, $error) {
-    return response('JSON', { error => $error->message }, headers => $error->exception->headers);
+    return response('JSON', { error => $error->message }, headers => $error->headers);
 }
 
 compose(

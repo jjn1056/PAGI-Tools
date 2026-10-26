@@ -85,7 +85,8 @@
     write_item is write.
   - PAGI::Pages: negotiated welcome, error and redirect responses.
   - PAGI::ErrorContext (error_context): the error an ErrorHandler handler
-    answers. PAGI::Exception::RequestBody gains client_message, and is a
+    answers. Its headers are the error's own (a 401's WWW-Authenticate),
+    for an entry to pass on as headers => $error->headers. PAGI::Exception::RequestBody gains client_message, and is a
     PAGI::Exception::HTTP (with no headers), so one catch entry for
     PAGI::Exception::HTTP answers a bad body too.
   - PAGI::Auth (auth, auth_result, unauth_result, www_authenticate)

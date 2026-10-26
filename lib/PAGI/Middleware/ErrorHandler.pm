@@ -238,9 +238,11 @@ A key that is an integer from 400 to 599 is a status; any other key is an
 exact package name (no leading C<+>: nothing is loaded). An entry is called
 with a Request and the L<PAGI::ErrorContext>, and returns what a C<handler>
 returns; a Response that set no status of its own is sent with the error's
-status. An entry answers in full: an HTTP error's C<headers> (a
-C<Retry-After>, say) are sent only if it passes them on, as
-C<< headers => $error->exception->headers >>, as a Starlette exception
+status: an HTTP error's own, and for any other class the C<status> option
+(500 by default), so an entry for an application's own exception class sets
+the status it means, as C<MyApp::Conflict>'s does above. An entry answers in
+full: an HTTP error's C<headers> (a C<Retry-After>, say) are sent only if it
+passes them on, as C<< headers => $error->headers >>, as a Starlette exception
 handler replaces the default one that sends them. The one exception is
 C<Allow>, which a 405 must carry: an entry's 405 that sends none gets the
 error's (for a routing 405, the router's method union), wherever the
