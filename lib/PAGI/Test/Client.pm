@@ -12,6 +12,7 @@ use PAGI::Test::ConnectionState;
 use PAGI::Test::Response;
 use PAGI::Test::_Drive;
 use PAGI::Utils ();
+use PAGI::Utils::Scope ();
 
 # Extension sets this mock genuinely implements, one per scope type. Each is
 # the single source of truth threaded into BOTH that scope's advertised
@@ -771,11 +772,9 @@ sub _request_target {
     return ($raw_path, $query_string, $path);
 }
 
-sub _url_encode {
-    my ($str) = @_;
-    $str =~ s/([^A-Za-z0-9_\-.])/sprintf("%%%02X", ord($1))/eg;
-    return $str;
-}
+# A form or query value is characters, sent UTF-8 percent-encoded as a
+# browser sends it, like the path and json =>.
+sub _url_encode { return PAGI::Utils::Scope::_encode_component(@_) }
 
 # HTTP/1.1 connection-specific header stripping (PAGI spec: "Over HTTP/1.1
 # the server must ignore or strip application-supplied Transfer-Encoding and
@@ -1329,6 +1328,11 @@ Query string parameters. Supports multiple formats:
     # Arrayref of pairs
     query => [['tag', 'perl'], ['tag', 'async']]
 
+Keys and values are characters, sent UTF-8 percent-encoded, as a browser
+sends them and as the path is: C<< query => { q => "caf\x{e9}" } >> sends
+C<q=caf%C3%A9>, and the application reads C<"caf\x{e9}">. Pass characters, not
+encoded bytes: a byte string is encoded again.
+
 B<Note:> Query params are B<appended> to any existing query string in the path.
 To avoid duplicates, put all params either in the path or in the query option,
 not both with the same key.
@@ -1340,7 +1344,9 @@ JSON request body. Automatically sets Content-Type to application/json.
 =item form => { ... } or [ [...], [...] ]
 
 Form-encoded request body. Sets Content-Type to application/x-www-form-urlencoded.
-Supports multiple formats:
+Keys and values are characters, sent UTF-8 percent-encoded as a browser sends
+a form (and as C<json> is UTF-8); for bytes of your own, pass C<body> and a
+Content-Type. Supports multiple formats:
 
     # Simple hash
     form => { user => 'admin', pass => 'secret' }

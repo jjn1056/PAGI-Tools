@@ -3,7 +3,6 @@ package PAGI::Routing::Resolver;
 use strict;
 use warnings;
 use Carp qw(croak);
-use Encode qw(encode FB_CROAK);
 use Scalar::Util qw(blessed refaddr);
 use PAGI::Authority ();
 use PAGI::Routing::Mount ();
@@ -632,12 +631,7 @@ sub _join_root_path {
     return $root_path . $path . $suffix;
 }
 
-sub _encode_component {
-    my ($value) = @_;
-    my $bytes = encode('UTF-8', $value, FB_CROAK);
-    $bytes =~ s/([^A-Za-z0-9\-._~])/sprintf('%%%02X', ord($1))/ge;
-    return $bytes;
-}
+sub _encode_component { return PAGI::Utils::Scope::_encode_component(@_) }
 
 sub named_routes {
     my ($self) = @_;

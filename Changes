@@ -479,6 +479,13 @@
     Tutorial link to one statement of each rule instead of restating it.
 
   [Breaking -- see UPGRADING.md]
+  - PAGI::Test::Client's form and query values are characters, sent UTF-8
+    percent-encoded, as its path and json already were: each character
+    was sent as one byte, so "caf\x{e9}" reached the application as
+    "caf\x{FFFD}" and a character beyond U+00FF ("\x{263A}") became
+    "%263A", read as "&3A". A value pre-encoded to bytes is now encoded
+    twice. The encoder is the one path_for uses (PAGI::Utils::Scope).
+    PAGI::App's run encodes its command-line fields itself, as bytes.
   - PAGI::Middleware::ErrorHandler: a handler's or catch entry's Request has
     no body to read; body, form_params, json and the rest die at once,
     naming the handler's line (as Starlette's ServerErrorMiddleware hands

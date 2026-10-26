@@ -154,8 +154,9 @@ subtest 'the grammar' => sub {
     is [(PAGI::App::_parse_request('/echo'))[0, 1]], ['GET', '/echo'], 'the method defaults to GET';
     my ($m, $p, %o) = PAGI::App::_parse_request(GET => '/echo?a=1', 'X-Thing:', 'v', 'b=2 3');
     is [$m, $p, $o{headers}], ['GET', '/echo?a=1&b=2%203', [['X-Thing', 'v']]], 'a header; a field joins the query';
-    (undef, undef, %o) = PAGI::App::_parse_request(POST => '/echo', 'b=2');
-    is $o{form}, [['b', '2']], 'a field is a form body for POST';
+    (undef, undef, %o) = PAGI::App::_parse_request(POST => '/echo', 'b=2 3');
+    is [$o{body}, $o{headers}], ['b=2%203', [['Content-Type', 'application/x-www-form-urlencoded']]],
+        'a field is a urlencoded body for POST';
     (undef, undef, %o) = PAGI::App::_parse_request(POST => '/raw', 'Content:', 'hi');
     is $o{body}, 'hi', 'Content: is the body';
     (undef, $p, %o) = PAGI::App::_parse_request('ann:pw@/echo');
@@ -165,6 +166,13 @@ subtest 'the grammar' => sub {
     like dies { PAGI::App::_parse_request(POST => '/x', 'Content:', 'a', 'b=1') }, qr/cannot be combined/, 'Content: with fields';
     (undef, $p) = PAGI::App::_parse_request("/caf\xC3\xA9?q=\xC3\xA9");
     is $p, '/caf%C3%A9?q=%C3%A9', 'non-ASCII path bytes are percent-encoded, not encoded twice';
+};
+
+subtest 'a field is bytes, as the command line gives it, and sent once encoded' => sub {
+    my (undef, $out) = run_cli(Local::Echo->new, POST => '/raw', "t=caf\xC3\xA9");
+    is $out, 'raw:t=caf%C3%A9', 'a POST field: UTF-8 bytes percent-encoded, not encoded twice';
+    (undef, $out) = run_cli(Local::Echo->new, GET => '/echo', "t=caf\xC3\xA9");
+    like $out, qr/"query":"t=caf%C3%A9"/, 'a GET field, the same';
 };
 
 subtest 'run prints the response and returns the exit status' => sub {

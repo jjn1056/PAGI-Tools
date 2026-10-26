@@ -118,12 +118,15 @@ sub _parse_request {
             [Authorization => 'Basic ' . MIME::Base64::encode_base64($credentials, '')];
     }
     my %options = (headers => \@headers);
+    # The fields are bytes, so they are encoded here, as the path is, rather
+    # than handed to the test client, which takes characters.
+    my $encoded = join '&', map { _escape($_->[0]) . '=' . _escape($_->[1]) } @fields;
     if (@fields && $HAS_BODY{$method}) {
-        $options{form} = \@fields;
+        push @headers, ['Content-Type' => 'application/x-www-form-urlencoded'];
+        $options{body} = $encoded;
     }
     elsif (@fields) {
-        $path .= ($path =~ /\?/ ? '&' : '?')
-            . join '&', map { _escape($_->[0]) . '=' . _escape($_->[1]) } @fields;
+        $path .= ($path =~ /\?/ ? '&' : '?') . $encoded;
     }
     $options{body} = $content if defined $content;
     return ($method, $path, %options);

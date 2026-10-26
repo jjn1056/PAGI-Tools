@@ -142,7 +142,7 @@ subtest 'an application reading $receive gets the body untouched' => sub {
 subtest 'the form check: the right field passes, and the handler reads the whole form' => sub {
     my ($client, $token) = primed(form_field => 'csrf_token');
     my $res = $client->post('/?read=form,body,stream',
-        form => { csrf_token => $token, title => "h\xc3\xa9" });    # UTF-8, as a browser sends it
+        form => { csrf_token => $token, title => "h\x{e9}" });    # sent UTF-8, as a browser sends it
     is $res->status, 200, 'passes';
     is $res->text, join(' | ', 'failure=none', "form=h\x{e9}", "body=csrf_token=$token&title=h%C3%A9",
         'stream=dies: Body already consumed; streaming not available'),
