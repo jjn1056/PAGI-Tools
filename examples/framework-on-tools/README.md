@@ -9,8 +9,11 @@ marked with the seam it uses.
 
 ## Run
 
+Tiny stands in for a framework installed from CPAN, so `lib/` goes on the
+path and `app.pl` is a single-file application:
+
 ```bash
-pagi-server --app examples/framework-on-tools/app.pl --port 5000
+pagi-server -I examples/framework-on-tools/lib --app examples/framework-on-tools/app.pl --port 5000
 ```
 
 ## What the application looks like

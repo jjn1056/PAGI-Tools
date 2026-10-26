@@ -2,7 +2,7 @@ use strict;
 use warnings;
 use Test2::V0;
 use FindBin qw($Bin);
-use lib "$Bin/../lib";
+use lib "$Bin/../lib", "$Bin/../examples/framework-on-tools/lib";    # Tiny, as installed
 use PAGI::Test::Client;
 use PAGI::Compose ();
 use PAGI::Routing ();
