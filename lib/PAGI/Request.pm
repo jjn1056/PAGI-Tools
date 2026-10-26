@@ -480,7 +480,7 @@ async sub json {
     return $data;
 }
 
-# Parse URL-encoded form body (async, returns Hash::MultiValue, cached in scope)
+# Parse URL-encoded form body (async, returns Hash::MultiValue, kept on this Request)
 # Options: strict => 1 (croak on invalid UTF-8), raw => 1 (skip UTF-8 decoding)
 async sub form_params {
     my ($self, %opts) = @_;
@@ -552,7 +552,7 @@ async sub raw_form_param {
     return await $self->form_param($name, raw => 1);
 }
 
-# Parse multipart form (internal, cached in scope)
+# Parse multipart form (internal, kept on this Request)
 async sub _parse_multipart_form {
     my ($self, %opts) = @_;
     my $scope_type = $self->_require_body_scope;
@@ -591,7 +591,7 @@ async sub _parse_multipart_form {
     return $form;
 }
 
-# Get all uploads as Hash::MultiValue (cached in scope)
+# Get all uploads as Hash::MultiValue (kept on this Request)
 async sub uploads {
     my ($self, %opts) = @_;
     $self->_require_body_scope;
