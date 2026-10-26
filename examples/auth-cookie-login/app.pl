@@ -2,6 +2,7 @@
 use v5.40;
 
 use Future::AsyncAwait;
+use HTML::Escape qw(escape_html);
 
 use PAGI::Auth qw(auth_result unauth_result);
 use PAGI::Auth::SimpleUser;
@@ -22,28 +23,23 @@ sub session_user ($request) {
     return auth_result(user => PAGI::Auth::SimpleUser->new(identity => $username));
 }
 
-sub html_escape ($text) {
-    my %entity = ('&' => '&amp;', '<' => '&lt;', '>' => '&gt;', '"' => '&quot;', "'" => '&#39;');
-    return $text =~ s/([&<>"'])/$entity{$1}/gr;
-}
-
 # Every form carries the CSRF token as a hidden field. The token lives in
 # the session (session => 1), so the page is what hands it back.
 sub csrf_field ($request) {
     return sprintf(qq{<input type="hidden" name="csrf_token" value="%s">},
-        html_escape(csrf($request)->token));
+        escape_html(csrf($request)->token));
 }
 
 # Every URL comes from path_for, so the pages stay correct wherever the
 # account area is mounted or the whole app is served under a prefix.
 sub login_page ($request, $next, $error = undef) {
-    my $action = html_escape(path_for($request, 'login'));
+    my $action = escape_html(path_for($request, 'login'));
     my $csrf = csrf_field($request);
     my $message = defined $error
         ? qq{<p role="alert">$error</p>}
         : '';
     my $next_field = defined $next
-        ? sprintf(qq{<input type="hidden" name="next" value="%s">}, html_escape($next))
+        ? sprintf(qq{<input type="hidden" name="next" value="%s">}, escape_html($next))
         : '';
 
     return response('HTML', <<"HTML");
@@ -66,7 +62,7 @@ HTML
 }
 
 async sub home($request) {
-    my $logout = html_escape(path_for($request, 'logout'));
+    my $logout = escape_html(path_for($request, 'logout'));
     my $csrf = csrf_field($request);
     return response('HTML', <<"HTML");
 <!doctype html>

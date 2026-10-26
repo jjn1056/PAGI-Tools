@@ -42,6 +42,10 @@ for my $case (['at the root', '', $app], ['under /app', '/app', compose(routes =
         my $form = $client->get("$p/account/login?next=$here")->text;
         like($form, qr{<form method="post" action="\Q$p\E/account/login">}, 'the form posts to the mounted login route');
         like($form, qr{<input type="hidden" name="next" value="\Q$p\E/account/">}, 'the form carries next');
+        # next comes from the query string and is echoed into an attribute.
+        my $hostile = $client->get("$p/account/login?next=" . '%22%3E%3Cscript%3Ex%3C%2Fscript%3E')->text;
+        like($hostile, qr{name="next" value="&quot;&gt;&lt;script&gt;x&lt;/script&gt;">}, 'a hostile next is escaped');
+        unlike($hostile, qr{<script>}, 'and never reaches the page as markup');
         my $anonymous_id = $client->cookie('hello_session');
         like($anonymous_id, qr/\A[a-f0-9]{64}\z/, 'anonymous request gets the session cookie');
         my $token = form_token($form);
