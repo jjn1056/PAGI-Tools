@@ -28,7 +28,8 @@ my $JSON   = JSON::PP->new->canonical;
 # $request->body, not the parsed data. A constant-time compare keeps the
 # secret from leaking by timing.
 sub signature_ok ($request, $bytes) {
-    my $given = $request->header('x-hub-signature-256') // return 0;
+    my $given = $request->header('x-hub-signature-256');
+    return 0 unless defined $given;
     my $want  = 'sha256=' . hmac_sha256_hex($bytes, $SECRET);
     return length($given) == length($want)
         && !(unpack('%32C*', $given ^. $want));

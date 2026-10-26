@@ -56,7 +56,9 @@ on_error 'Note::NotFound' => sub ($req, $exc) {
 };
 
 sub find_note ($req, $id) {
-    return $req->svc('notes')->{by_id}{$id} // die Note::NotFound->new($id);
+    my $note = $req->svc('notes')->{by_id}{$id};
+    die Note::NotFound->new($id) unless $note;
+    return $note;
 }
 
 # Handlers return plain values: a hashref or arrayref is JSON, a string is HTML.

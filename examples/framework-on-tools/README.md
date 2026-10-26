@@ -73,7 +73,8 @@ Written the other way round, `/notes/9` lost its `X-Powered-By`.
 RequestClass comes first, so everything inside it, the ErrorHandler
 included, gets a `Tiny::Request`.
 
-Tiny is 175 code lines; the plugin 13; the application 47.
+Tiny is 150 code lines; the plugin 13; the application 50 (the gut-check
+line counter, `examples/gut-check/README.md`).
 
 ## Try
 

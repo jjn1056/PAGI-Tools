@@ -51,8 +51,9 @@ async sub rename_note ($request) {
 }
 
 async sub delete_note ($request) {
-    delete $NOTES{ 0 + $request->path_param('id') }
-        // return response('Text', 'No such note.', status => 404);
+    my $id = 0 + $request->path_param('id');
+    return response('Text', 'No such note.', status => 404) unless exists $NOTES{$id};
+    delete $NOTES{$id};
     return response('Redirect', '/notes', status => 303);
 }
 
