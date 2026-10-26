@@ -24,6 +24,14 @@ is($res->status, 303, '?_method=PUT reaches the PUT route');
 like($client->get('/notes')->text, qr/value="oat &#60;milk&#62;"/,
     'which read the form body MethodOverride left untouched');
 
+# The id is Starlette's int converter: [0-9]+, read as a number.
+is($client->post('/notes/01?_method=PUT', form => { text => 'oat <milk>' })->status, 303,
+    '/notes/01 is note 1, as {id:int} reads it');
+for my $id ('abc', '-1') {
+    my $miss = $client->post("/notes/$id?_method=DELETE");
+    is([$miss->status, $miss->text], [404, 'Not Found'], "/notes/$id is not a note id: the router's 404");
+}
+
 $res = $client->post('/notes/1', form => { _method => 'DELETE' });
 is([$res->status, $res->header('Allow')], [405, 'PUT, DELETE'],
     'a _method field in the body is not an override: the POST stays a POST');

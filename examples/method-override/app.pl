@@ -44,24 +44,27 @@ async sub add_note ($request) {
 # Reached as PUT: the form was POSTed to /notes/{id}?_method=PUT, and its
 # body is read here, where MethodOverride left it.
 async sub rename_note ($request) {
-    my $id = $request->path_param('id');
+    my $id = 0 + $request->path_param('id');
     return response('Text', 'No such note.', status => 404) unless exists $NOTES{$id};
     $NOTES{$id} = (await $request->form_params)->get('text') // '';
     return response('Redirect', '/notes', status => 303);
 }
 
 async sub delete_note ($request) {
-    delete $NOTES{ $request->path_param('id') }
+    delete $NOTES{ 0 + $request->path_param('id') }
         // return response('Text', 'No such note.', status => 404);
     return response('Redirect', '/notes', status => 303);
 }
 
+# {id:[0-9]+} is Starlette's {id:int}: the router matches digits only, and
+# the handlers read the id as a number, so /notes/01 is note 1. A constraint
+# checks the text; it never converts it.
 compose(
     routes => [
-        route('/notes' => \&list_notes),
+        route('/notes' => \&list_notes, methods => ['GET']),
         route('/notes' => \&add_note, methods => ['POST']),
-        route('/notes/{id}' => \&rename_note, methods => ['PUT']),
-        route('/notes/{id}' => \&delete_note, methods => ['DELETE']),
+        route('/notes/{id:[0-9]+}' => \&rename_note, methods => ['PUT']),
+        route('/notes/{id:[0-9]+}' => \&delete_note, methods => ['DELETE']),
     ],
     middleware => [middleware('MethodOverride')],
 );
