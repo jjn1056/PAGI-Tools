@@ -147,6 +147,20 @@ for my $case (@cases) {
                     id   => 3,
                     text => 'Direct request object',
                 }, 'created message preserves the JSON request data');
+
+                # The SSE endpoint keeps its subscriber id in the stream's
+                # stash, which the route's Stash middleware provides.
+                my @timing;
+                {
+                    local $SIG{__WARN__} = sub { push @timing, $_[0] };
+                    my $events = $client->sse('/events');
+                    ok(!$events->refused, 'the event stream opens');
+                    is($events->receive_event, { event => 'connected', data => '{"subscriber_id":1}', id => undef, retry => undef },
+                        'and greets the subscriber');
+                    $events->close;
+                }
+                like(\@timing, [qr{\A\[timing\] GET /events [0-9.]+ms\n\z}],
+                    'the timing middleware times the stream');
             }
         }
     };

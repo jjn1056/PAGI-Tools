@@ -41,11 +41,11 @@ its application, so every layer below it shares one stash: a value a handler
 stores is seen by each middleware between this one and the handler,
 including after the handler returns.
 
-Without it, L<PAGI::Stash> creates the stash on first use, on whatever scope
-it is given. Middleware hand their applications copies of the scope, so a
-stash first created below a copy is held only by that copy, and a layer
-above the copy never sees what was stored in it. Stack this middleware above
-every layer that reads the stash after its application returns.
+Without it there is no stash, and L<PAGI::Stash> dies: stack this
+middleware above every layer that uses the stash. It is one stash for the
+request because it is created once, above them: middleware hand their
+applications copies of the scope, and a stash created wherever it was first
+used would, below a copy, be held only by that copy.
 
 The stash goes on the copy this middleware passes on, so layers above it do
 not see it: it is shared below wherever it is stacked. A scope that already

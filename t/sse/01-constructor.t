@@ -46,6 +46,7 @@ subtest 'basic accessors' => sub {
         path         => '/events',
         query_string => 'token=abc',
         scheme       => 'https',
+        'pagi.stash' => {},
         headers      => [
             ['last-event-id', '42'],
             ['authorization', 'Bearer xyz'],

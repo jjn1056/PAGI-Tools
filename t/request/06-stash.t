@@ -17,7 +17,7 @@ subtest 'scope accessor returns scope hashref' => sub {
 };
 
 subtest 'stash basic usage' => sub {
-    my $scope = { type => 'http', method => 'GET', headers => [] };
+    my $scope = { type => 'http', method => 'GET', headers => [], 'pagi.stash' => {} };
     my $req = PAGI::Request->new($scope, $no_body);
     ok($stash_factory, 'stash factory is available') or return;
     my $stash = $stash_factory->($req);
@@ -34,7 +34,7 @@ subtest 'stash basic usage' => sub {
 };
 
 subtest 'stash persists on same request' => sub {
-    my $scope = { type => 'http', method => 'GET', headers => [] };
+    my $scope = { type => 'http', method => 'GET', headers => [], 'pagi.stash' => {} };
     my $req = PAGI::Request->new($scope, $no_body);
     ok($stash_factory, 'stash factory is available') or return;
     my $stash = $stash_factory->($req);
@@ -47,7 +47,7 @@ subtest 'stash persists on same request' => sub {
 };
 
 subtest 'stash lives in scope' => sub {
-    my $scope = { type => 'http', method => 'GET', headers => [] };
+    my $scope = { type => 'http', method => 'GET', headers => [], 'pagi.stash' => {} };
     my $req = PAGI::Request->new($scope, $no_body);
     ok($stash_factory, 'stash factory is available') or return;
     my $stash = $stash_factory->($req);
@@ -60,7 +60,7 @@ subtest 'stash lives in scope' => sub {
 
 subtest 'stash shared via scope' => sub {
     # Same scope = same stash (important for middleware flow)
-    my $scope = { type => 'http', method => 'GET', headers => [] };
+    my $scope = { type => 'http', method => 'GET', headers => [], 'pagi.stash' => {} };
     ok($stash_factory, 'stash factory is available') or return;
     my $stash1 = $stash_factory->($scope);
     my $stash2 = $stash_factory->($scope);
@@ -72,8 +72,8 @@ subtest 'stash shared via scope' => sub {
 
 subtest 'stash isolated with different scopes' => sub {
     # Different scopes = different stashes
-    my $scope1 = { type => 'http', method => 'GET', headers => [] };
-    my $scope2 = { type => 'http', method => 'GET', headers => [] };
+    my $scope1 = { type => 'http', method => 'GET', headers => [], 'pagi.stash' => {} };
+    my $scope2 = { type => 'http', method => 'GET', headers => [], 'pagi.stash' => {} };
     ok($stash_factory, 'stash factory is available') or return;
     my $stash1 = $stash_factory->($scope1);
     my $stash2 = $stash_factory->($scope2);

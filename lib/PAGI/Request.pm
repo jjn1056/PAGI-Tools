@@ -689,7 +689,7 @@ PAGI::Request - Convenience wrapper for PAGI request scope
         my $token = $req->bearer_token;
         my ($user, $pass) = $req->basic_auth;
 
-        # Per-request shared state
+        # Per-request shared state (with middleware('Stash') above)
         use PAGI::Stash;
         my $stash = PAGI::Stash->new($req);
         $stash->set(user => $current_user);
@@ -1420,7 +1420,8 @@ against the complete native triplet:
 =head2 Per-Request Shared State
 
 See L<PAGI::Stash> for per-request shared state between middleware
-and handlers. Construct from a Request object or scope:
+and handlers; L<PAGI::Middleware::Stash>, stacked above them, provides it.
+Construct from a Request object or scope:
 
     use PAGI::Stash;
     my $stash = PAGI::Stash->new($req);

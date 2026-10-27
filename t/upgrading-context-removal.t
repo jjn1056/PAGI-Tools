@@ -13,6 +13,7 @@ use PAGI::ErrorContext ();
 use PAGI::Response qw(response);
 use PAGI::Routing qw(route router sse websocket);
 use PAGI::Stash qw(stash);
+use PAGI::Middleware::Stash;
 use PAGI::Test::Client;
 
 {
@@ -66,7 +67,7 @@ subtest 'declarative Router callbacks remain direct protocol objects' => sub {
     }),
     ]);
 
-    my $client = PAGI::Test::Client->new(app => $routing);
+    my $client = PAGI::Test::Client->new(app => PAGI::Middleware::Stash->new->wrap($routing->to_app));
     my $response = $client->get('/request/world');
     is($response->text, 'hello world',
         'Router HTTP callback remains Request-first and returns a Response');

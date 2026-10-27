@@ -8,10 +8,8 @@
 
   [New]
   - PAGI::Middleware::Stash (middleware('Stash')) gives every layer below
-    it one shared stash. PAGI::Stash creates its stash on first use, on the
-    scope it is given, so a value a handler stored below a middleware's
-    scope copy never reached a layer above that copy; with this middleware
-    above it, it does.
+    it one shared stash, so a middleware sees what a handler stored, after
+    the handler returns, through any scope copies between them.
   - PAGI::Tools::Extending: a guide for building frameworks and add-ons on
     PAGI-Tools -- what a framework may rely on, the two ways to build one,
     and a link to the rule for each; examples/framework-wrap-style and
@@ -292,6 +290,11 @@
     option is its cleanup, for a source or a producer.
 
   [Changed]
+  - PAGI::Stash (stash()) dies on a scope with no stash, naming
+    middleware('Stash'); it used to create one on first use. A stash first
+    created below a middleware's scope copy was held only by that copy, so a
+    layer above it silently never saw what was stored. Stack
+    middleware('Stash') above every layer that uses the stash.
   - Tests: the two that would meet Future::XS's "lost a sequence Future"
     warning skip under a Future::XS older than 0.16, which fixes it
     (RT #181389); PAGI-Server's --future-xs requires 0.16.

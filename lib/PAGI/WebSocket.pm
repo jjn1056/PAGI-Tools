@@ -1058,7 +1058,8 @@ Case-insensitive header access through L<PAGI::Headers>.
 
 =head2 Per-Connection Shared State
 
-See L<PAGI::Stash> for per-connection shared state:
+See L<PAGI::Stash> for per-connection shared state, which
+L<PAGI::Middleware::Stash> stacked above the handler provides:
 
     use PAGI::Stash;
     my $stash = PAGI::Stash->new($ws);

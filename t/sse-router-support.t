@@ -29,6 +29,7 @@ subtest 'stash accessor' => sub {
     my $scope = sse_scope(
         path    => '/events',
         headers => [],
+        'pagi.stash' => {},
     );
     my $sse = PAGI::SSE->new($scope, $receive, $send);
     my $stash = PAGI::Stash->new($sse);
@@ -43,6 +44,7 @@ subtest 'stash lives in scope' => sub {
     my $scope = sse_scope(
         path    => '/events',
         headers => [],
+        'pagi.stash' => {},
     );
     my $sse = PAGI::SSE->new($scope, $receive, $send);
     my $stash = PAGI::Stash->new($sse);

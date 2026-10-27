@@ -36,8 +36,10 @@ my $reader = sub {
 
 subtest 'a layer below the middleware sees what the handler stored' => sub {
     %seen = ();
-    PAGI::Test::Client->new(app => $reader->($copying->($handler)))->get('/');
-    is $seen{user}, 'not visible', 'without it, the handler stored into a stash only the copy holds';
+    my $res = PAGI::Test::Client->new(app => $reader->($copying->($handler)))->get('/');
+    is $res->status, 500, 'without it, there is no stash, and the handler dies';
+    like $res->exception, qr/\APAGI::Stash: this scope has no stash; stack middleware\('Stash'\) above this layer/,
+        'naming the middleware';
 
     %seen = ();
     my $app = PAGI::Middleware::Stash->new->wrap($reader->($copying->($handler)));

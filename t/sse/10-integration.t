@@ -18,6 +18,7 @@ subtest 'complete SSE session' => sub {
     my $scope = sse_scope(
         path    => '/events',
         headers => [['last-event-id', '5']],
+        'pagi.stash' => {},
     );
 
     my $sse = PAGI::SSE->new($scope, sub {}, $send);

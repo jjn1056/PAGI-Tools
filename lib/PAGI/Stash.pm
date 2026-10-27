@@ -2,6 +2,7 @@ package PAGI::Stash;
 
 use strict;
 use warnings;
+use Carp qw(croak);
 use Exporter 'import';
 use PAGI::Utils::Scope ();
 
@@ -16,6 +17,9 @@ PAGI::Stash - Standalone helper for per-request shared state
 =head1 SYNOPSIS
 
     use PAGI::Stash qw(stash);
+
+    # middleware('Stash') goes above both: it provides the stash, and
+    # stash() dies without it.
 
     # Middleware sets shared state for downstream handlers
     my $auth_middleware = sub ($app) {
@@ -46,11 +50,11 @@ for keys that may or may not be present.
 
 The stash lives in the PAGI scope hashref and is shared across all
 middleware, handlers, and protocol objects processing the same request.
-It is created on first use, on whatever scope it is given; below a
-middleware's copy of the scope, that is a stash only the copy holds. A layer
-that reads the stash after its application returns therefore needs
-L<PAGI::Middleware::Stash> above it, which gives everything below it one
-stash.
+L<PAGI::Middleware::Stash> puts it there, one stash shared by everything
+below that middleware, and C<new> dies on a scope without one. A stash
+created wherever it was first used would, below a middleware's copy of the
+scope, be held only by that copy, and a layer above the copy would never see
+what was stored in it.
 
 The stash holds what code I<writes> for the layers below it. A value the
 application declares once and wants built on first use, per request, is a
@@ -79,9 +83,10 @@ sub stash { return __PACKAGE__->new(@_) }
     my $stash = PAGI::Stash->new($request);   # any object with ->scope
 
 Scope-based constructor. Resolves to the C<< $scope->{'pagi.stash'} >>
-hashref, creating it lazily if it does not exist. Accepts a scope hashref
-directly, or an object with a C<scope()> method. Exactly one source argument
-is required.
+hashref that L<PAGI::Middleware::Stash> put there, and dies if the scope has
+none: stack that middleware above every layer that uses the stash. Accepts a
+scope hashref directly, or an object with a C<scope()> method. Exactly one
+source argument is required.
 
 =head2 from_data
 
@@ -95,7 +100,8 @@ backing data, bypassing scope resolution.
 sub new {
     my ($class, @args) = @_;
     my $scope = PAGI::Utils::Scope::scope_from_source($class, @args);
-    $scope->{'pagi.stash'} //= {};
+    croak "PAGI::Stash: this scope has no stash; stack middleware('Stash') above this layer"
+        unless ref $scope->{'pagi.stash'} eq 'HASH';
     return bless { _data => $scope->{'pagi.stash'} }, $class;
 }
 

@@ -70,12 +70,14 @@ sub on_disconnect {
 Endpoint callbacks receive their protocol object directly: HTTP methods receive a
 `PAGI::Request`, WebSocket hooks receive a `PAGI::WebSocket`, and SSE hooks
 receive a `PAGI::SSE`. The SSE example imports `PAGI::Stash qw(stash)` to keep
-connection-local subscriber state with the stream that owns it.
+connection-local subscriber state with the stream that owns it; the route's
+`middleware('Stash')` gives each stream that stash.
 
 ### Middleware Examples
 
 - `PAGI::Middleware::AccessLog` - Request logging
 - Coderef middleware - Request timing, JSON validation
+- `PAGI::Middleware::Stash` - the SSE stream's stash
 
 The JSON-validation middleware is a native PAGI application, so its terminal
 branch constructs a source-free stock application and delegates the exact
@@ -105,7 +107,7 @@ compose(routes => [
     websocket('/ws/echo' => endpoint('EchoWS'),
         middleware => [middleware($timing)]),
     sse('/events' => endpoint('MessageEvents'),
-        middleware => [middleware($timing)]),
+        middleware => [middleware('Stash'), middleware($timing)]),
     route('/*path' => PAGI::App::File->from_app_path('public')),
 ]);
 ```

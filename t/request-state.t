@@ -58,7 +58,7 @@ subtest 'malformed present state is rejected' => sub {
 };
 
 subtest 'application state is separate from request stash' => sub {
-    my $scope = { type => 'http', state => { db => 'connection' } };
+    my $scope = { type => 'http', state => { db => 'connection' }, 'pagi.stash' => {} };
     my $request = request_for($scope);
     my $stash = PAGI::Stash->new($request);
     $stash->set(user => 'alice');

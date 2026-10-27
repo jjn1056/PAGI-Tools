@@ -19,6 +19,7 @@ in [UPGRADING-REFERENCE.md](UPGRADING-REFERENCE.md).
 | Handlers receive a Context (`$ctx`) | handlers receive the `PAGI::Request`, `PAGI::WebSocket` or `PAGI::SSE` ([details](UPGRADING-REFERENCE.md#breaking-replace-the-pagi-context-family-with-the-protocol-owner)) |
 | `$ctx->json`/`text`/`html`/`redirect`, `$request->response`, the mutable Response builder | return `response('JSON', ...)`, `response('Text', ...)`, ... ([details](UPGRADING-REFERENCE.md#breaking-choose-a-concrete-response-class)) |
 | `$ctx->stash`, `session`, `state`, `csrf_verify`, `on_drain` | `stash($request)`, `session($request)`, `app_state($request)`, `csrf($request)`, `transport($request)` ([details](UPGRADING-REFERENCE.md#import-optional-capabilities-from-their-owners)) |
+| `stash($request)` created the stash on first use | it dies without one: stack `middleware('Stash')` above every layer that uses the stash (PAGI::Middleware::Stash) |
 | App::Router handlers as native `($scope, $receive, $send)` apps | Route CODE gets one Request; wrap natives with `as_app_object` ([details](UPGRADING-REFERENCE.md#migrate-app-router-declarations)) |
 | `PAGI::App::NotFound`, `PAGI::App::Redirect` | `PAGI::Pages` `not_found`, `redirect` ([details](UPGRADING-REFERENCE.md#pages-replaces-the-stock-response-applications)) |
 | `Test::SSE`/`Test::WebSocket`: an app that died in an unfinished refusal had the detail "refusal started but never completed" | the error's first line, as for any failure, and as PAGI-Server records it ([details](UPGRADING-REFERENCE.md#running-against-pagi-server-0002007)) |
