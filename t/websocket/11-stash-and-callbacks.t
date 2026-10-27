@@ -24,7 +24,7 @@ sub create_ws {
     };
 
     # Fresh scope for each call (important for singleton caching)
-    my $scope = ws_scope();
+    my $scope = ws_scope('pagi.stash' => {});
     my $receive = receive_from($scope,
         { type => 'websocket.connect' },
         (map { { type => 'websocket.receive', text => $_ } } @messages),

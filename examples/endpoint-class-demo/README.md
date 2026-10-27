@@ -176,15 +176,13 @@ the path string; `PAGI::App::File` owns file serving.
 
 Compose startup creates the resource and metrics hashes, and shutdown marks the
 mock resource closed. Lifespan callbacks receive those mutable hashrefs because
-they initialize and clean up application state. Request-time handlers can use
-either equivalent spelling: `app_state($request)` is the functional,
-protocol-neutral helper form, while `$request->state`, `$websocket->state`, and
-`$sse->state` are direct forms returning the same `PAGI::State` facade (empty,
-with a `get` that names the likely cause, when there is no application state;
-`app_state` returns `undef` there).
-The WebSocket and SSE endpoint classes demonstrate the direct methods; the HTTP
-handlers deliberately retain `app_state($request)`. The assembler and endpoint
-objects neither receive nor mirror mutable lifespan state.
+they initialize and clean up application state. Request-time handlers read it
+with `$request->state`, `$websocket->state` or `$sse->state`, each the same
+`PAGI::State` facade (empty, with a `get` that names the likely cause, when
+there is no application state). `app_state($request)` is the same facade as a
+function, for code that holds a scope rather than a Request; it returns
+`undef` when there is no state. The examples use the methods. The assembler
+and endpoint objects neither receive nor mirror mutable lifespan state.
 
 ## Running
 

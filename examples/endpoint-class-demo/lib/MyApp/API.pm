@@ -8,7 +8,6 @@ use PAGI::Request;
 use PAGI::Response qw(response);
 use PAGI::Routing qw(endpoint middleware mount route router sse);
 use PAGI::Routing::URL qw(path_for);
-use PAGI::State qw(app_state);
 use PAGI::Utils qw(invoke_app);
 
 sub new {
@@ -67,8 +66,7 @@ sub require_demo_token {
 
 async sub index {
     my ($self, $request) = @_;
-    my $state = app_state($request)
-        or die 'endpoint-class-demo requires Compose lifespan state';
+    my $state = $request->state;
     $state->get('metrics')->{requests}++;
 
     my $alice = path_for($request, 'show', { user_id => 1 });
@@ -84,8 +82,7 @@ HTML
 
 async sub status {
     my ($self, $request) = @_;
-    my $state = app_state($request)
-        or die 'endpoint-class-demo requires Compose lifespan state';
+    my $state = $request->state;
     return response('JSON', {
         status   => 'ready',
         resource => $state->get('resource')->{name},

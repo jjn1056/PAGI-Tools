@@ -75,6 +75,7 @@ sub new {
 
 sub exception       { $_[0]{error}{exception} }
 sub status          { $_[0]{error}{status} }
+sub headers         { [ map { [@$_] } @{ $_[0]{error}{headers} // [] } ] }
 sub is_client_error { my $s = $_[0]->status; $s >= 400 && $s < 500 ? 1 : 0 }
 sub is_server_error { $_[0]->status >= 500 ? 1 : 0 }
 
@@ -106,13 +107,16 @@ sub default {
     my ($self) = @_;
     # A thrown page answers as thrown; ErrorHandler took its status from it.
     my $exception = $self->exception;
+    # A routing miss answers as the router would have (internal).
+    return $exception->_default_answer
+        if blessed($exception) && $exception->can('_default_answer');
     return $exception
         if _is_page($exception) && (_page_status($exception) // 0) == $self->status;
     my $body = $self->message;
     my $detail = $self->detail;
     $body .= "\n\n$detail" if defined($detail) && length($detail);
     # The exception's own headers, with no-store unless it sets Cache-Control.
-    my @headers = map { [@$_] } @{ $self->{error}{headers} // [] };
+    my @headers = @{ $self->headers };
     unshift @headers, ['Cache-Control' => 'no-store']
         unless grep { lc($_->[0]) eq 'cache-control' } @headers;
     return PAGI::Response::Text->new($body,
@@ -133,18 +137,31 @@ PAGI::ErrorContext - The error an ErrorHandler handler is answering
 
     use PAGI::ErrorContext qw(error_context);
 
-    middleware('ErrorHandler', handler => sub {
-        my ($request) = @_;
-        my $error = error_context($request);
-        return $error->default if $error->is_server_error;
-        return response('JSON', { error => $error->message });
-    });
+    middleware('ErrorHandler',
+        # The errors the application expects: an entry is given the error.
+        catch => {
+            'PAGI::Exception::HTTP' => sub {
+                my ($request, $error) = @_;
+                return response('JSON', { error => $error->message },
+                    headers => $error->headers);
+            },
+        },
+        # The 500 page for everything else: the handler reads it.
+        handler => sub {
+            my ($request) = @_;
+            my $error = error_context($request);
+            return $error->default if $error->detail;   # development: the built-in page
+            return response('HTML', '<h1>Something went wrong</h1>', status => $error->status);
+        },
+    );
 
 =head1 DESCRIPTION
 
 L<PAGI::Middleware::ErrorHandler> puts the error it is handling in the scope
 it gives its C<handler>, as C<pagi.error>. This class reads it. A C<catch>
-entry is given one as its second argument. It is not an
+entry is given one as its second argument, and reads it from there: an entry
+answering a route's error gets the route's own Request, whose scope does not
+carry the error, so C<error_context($request)> dies there. It is not an
 exception class: nothing throws it.
 
 =head1 FUNCTIONS
@@ -176,6 +193,15 @@ What was thrown, unchanged.
 The status ErrorHandler chose, 400-599: the exception's C<status_code> when it
 claims one in that range, a thrown page's own status, otherwise ErrorHandler's
 C<status> option (a page without a usable status is 500).
+
+=head2 headers
+
+    response('JSON', { error => $error->message }, headers => $error->headers);
+
+The error's own headers -- an HTTP error's (a 401's C<WWW-Authenticate>, a
+C<Retry-After>), as ErrorHandler checked them -- as a new C<[[name, value],
+...]> list each call; an empty list when there are none. An entry passes them
+on itself: ErrorHandler adds none to its answer but a 405's C<Allow>.
 
 =head2 reason
 

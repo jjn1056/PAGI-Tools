@@ -239,9 +239,7 @@ subtest 'throwing exception stringification cannot replace the safe response' =>
     );
     settle($future);
 
-    is(($future->failure)[0],
-        "PAGI ErrorHandler: the application raised an exception that cannot be used as a value\n",
-        'throwing string overload is re-raised as a safe substitute');
+    ok $future->is_failed, 'its status_code claims 500: an HTTP error, answered, then re-raised';
     is $events->[0]{status}, 500, 'throwing string overload retains safe status 500';
     is refaddr($reported[0]), refaddr($error), 'reporter receives the original object';
     unlike $events->[1]{body}, qr/stringification failed/,
@@ -440,10 +438,10 @@ subtest 'last-resort send failures propagate without retry' => sub {
         my $send_error = bless {}, 'Local::LastResortSendFailure';
         my @reported;
         my @attempted;
-        # A handler that dies sends the last resort.
+        # A handler that answers nothing gets the last resort.
         my $middleware = PAGI::Middleware::ErrorHandler->new(
             on_error => sub { push @reported, $_[0]; return Future->done },
-            handler  => sub { die "renderer failure\n" },
+            handler  => PAGI::Utils::as_app_object(async sub { return }),
         );
         my $future;
         {
@@ -593,7 +591,7 @@ subtest 'Compose resolver failure is a diagnostic and renders safely' => sub {
 # server error is re-raised once the 500 is complete, so the server logs it
 # (PAGI::Spec::Www, "Exceptions after the terminal event").
 subtest 'a server error is rendered completely, then re-raised' => sub {
-    my $original = Local::StatusError->new(500, 'database unreachable');
+    my $original = bless { why => 'database unreachable' }, 'Local::Unhandled';
     my ($future, $events) = invoke(
         PAGI::Middleware::ErrorHandler->new,
         async sub { die $original },
@@ -606,6 +604,12 @@ subtest 'a server error is rendered completely, then re-raised' => sub {
     ok $future->is_failed, 'the handling Future then fails';
     is refaddr(($future->failure)[0]), refaddr($original),
         'with the original exception object';
+
+    ($future, $events) = invoke(PAGI::Middleware::ErrorHandler->new,
+        async sub { die Local::StatusError->new(500, 'database unreachable') });
+    settle($future);
+    is $events->[0]{status}, 500, 'a thrown HTTP 500 is answered 500';
+    ok $future->is_failed, 'and, being 500 or more, is re-raised for the server';
 };
 
 subtest 'a custom renderer does not stop a server error being re-raised' => sub {

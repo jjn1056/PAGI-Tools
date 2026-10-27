@@ -12,6 +12,7 @@ use PAGI::Test::ConnectionState;
 use PAGI::Test::Response;
 use PAGI::Test::_Drive;
 use PAGI::Utils ();
+use PAGI::Utils::Scope ();
 
 # Extension sets this mock genuinely implements, one per scope type. Each is
 # the single source of truth threaded into BOTH that scope's advertised
@@ -117,15 +118,21 @@ sub _request {
     # Build scope
     my $scope = $self->_build_scope($method, $path, \%opts);
 
-    # Build receive (returns request body)
+    # Build receive: the request body, then -- as on a real server -- a
+    # receive that waits until the response is complete and then reports the
+    # disconnect. An application that reads a consumed body again waits, and
+    # the drive timeout below says so.
     my $body = $opts{body} // '';
     my $receive_called = 0;
+    my ($response_complete, $waiting_after_body) = (0, undef);
     my $receive = async sub {
         if (!$receive_called) {
             $receive_called = 1;
             return { type => 'http.request', body => $body, more => 0 };
         }
-        return { type => 'http.disconnect' };
+        return { type => 'http.disconnect' } if $response_complete;
+        $waiting_after_body //= Future->new;
+        return await $waiting_after_body;
     };
 
     # Build send (captures response). Strict: illegal events (per
@@ -183,6 +190,11 @@ sub _request {
         $response->_capture_event(\%captured);
 
         $scope->{'pagi.connection'}->_mark_complete if $sv->complete;
+        if ($sv->complete && !$response_complete) {
+            $response_complete = 1;
+            $waiting_after_body->done({ type => 'http.disconnect' })
+                if $waiting_after_body && !$waiting_after_body->is_ready;
+        }
     };
 
     # Call app (with exception handling like real server). The app may be
@@ -199,9 +211,16 @@ sub _request {
         $app_future->get unless $timed_out;
     };
     if ($timed_out) {
+        # Whether it was waiting for more body: read before the cancel, which
+        # cancels the receive it awaits too.
+        my $waited_after_body = $waiting_after_body && !$waiting_after_body->is_ready;
         # Cancel the abandoned application so its pending wait cannot resume
         # later, in some other test, with nobody holding its Future.
         $app_future->cancel;
+        croak "PAGI request did not complete within $PAGI::Test::_Drive::TIMEOUT seconds: "
+            . 'the application waited for more of the request body after receiving all of it '
+            . '(a second read of a body already read? Pass the one Request on.)'
+            if $waited_after_body;
         croak "PAGI request did not complete within $PAGI::Test::_Drive::TIMEOUT seconds."
             . PAGI::Test::_Drive::loop_hint();
     }
@@ -753,11 +772,9 @@ sub _request_target {
     return ($raw_path, $query_string, $path);
 }
 
-sub _url_encode {
-    my ($str) = @_;
-    $str =~ s/([^A-Za-z0-9_\-.])/sprintf("%%%02X", ord($1))/eg;
-    return $str;
-}
+# A form or query value is characters, sent UTF-8 percent-encoded as a
+# browser sends it, like the path and json =>.
+sub _url_encode { return PAGI::Utils::Scope::_encode_component(@_) }
 
 # HTTP/1.1 connection-specific header stripping (PAGI spec: "Over HTTP/1.1
 # the server must ignore or strip application-supplied Transfer-Encoding and
@@ -1233,6 +1250,15 @@ The loop driven is L<Future::IO>'s. An application that waits on an event
 loop of its own needs one line in its test; see L</TESTING AN APPLICATION
 THAT COMMITS TO AN EVENT LOOP>.
 
+The request body is delivered once. A receive after the whole body has been
+delivered waits, as on a real server, until the response is complete, and
+then reports C<http.disconnect>; an application that waits for the client to
+go after answering is told at once. So an application that reads a consumed
+body again -- a second Request over the same receive -- fails here as it
+hangs on a server: the request dies with C<PAGI request did not complete
+within 5 seconds: the application waited for more of the request body after
+receiving all of it>. Pass the one Request on instead.
+
 =head2 get
 
     my $res = $client->get($path, %options);
@@ -1302,6 +1328,11 @@ Query string parameters. Supports multiple formats:
     # Arrayref of pairs
     query => [['tag', 'perl'], ['tag', 'async']]
 
+Keys and values are characters, sent UTF-8 percent-encoded, as a browser
+sends them and as the path is: C<< query => { q => "caf\x{e9}" } >> sends
+C<q=caf%C3%A9>, and the application reads C<"caf\x{e9}">. Pass characters, not
+encoded bytes: a byte string is encoded again.
+
 B<Note:> Query params are B<appended> to any existing query string in the path.
 To avoid duplicates, put all params either in the path or in the query option,
 not both with the same key.
@@ -1313,7 +1344,9 @@ JSON request body. Automatically sets Content-Type to application/json.
 =item form => { ... } or [ [...], [...] ]
 
 Form-encoded request body. Sets Content-Type to application/x-www-form-urlencoded.
-Supports multiple formats:
+Keys and values are characters, sent UTF-8 percent-encoded as a browser sends
+a form (and as C<json> is UTF-8); for bytes of your own, pass C<body> and a
+Content-Type. Supports multiple formats:
 
     # Simple hash
     form => { user => 'admin', pass => 'secret' }

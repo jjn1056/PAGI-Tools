@@ -36,13 +36,14 @@ either operation.
 
 ## CSRF protection
 
-Both forms are protected by `PAGI::Middleware::CSRF`. They post plain HTML, so
-the token travels in a hidden `csrf_token` field, the field the middleware
-reads by default: it takes the token from the posted form and answers a
-missing or wrong token with a 403 before any handler runs, so the handlers
-never mention CSRF. The token lives in the session (`session => 1`), so there
-is no CSRF cookie to plant, and login replaces it. A cross-site post is
-refused by the middleware's origin check, token or not.
+Both forms post plain HTML, so the token travels in a hidden `csrf_token`
+field. `PAGI::Middleware::CSRF` runs with `form_field => 'csrf_token'`: it
+reads that field from the body of each POST and answers a missing or wrong
+token with a 403 before any route runs, handing the route the whole body to
+read as usual; the handlers themselves never mention CSRF. The
+token lives in the session (`session => 1`), so there is no CSRF cookie to
+plant, and login replaces it. A cross-site post is refused by the
+middleware's origin check, token or not.
 
 ## Serving it under a prefix
 

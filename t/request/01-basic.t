@@ -268,8 +268,10 @@ subtest 'content-type parameter stripping' => sub {
     $req_plain->headers->set('Content-Type', 'application/json; charset=');
     is($req_plain->content_type, '', 'malformed parameters have empty-string fallback');
     ok(!$req_plain->is_json, 'malformed media type does not match JSON');
-    like dies { $req_plain->content_type(raise_on_error => 1) }, qr/content_type|parse_header_parameters/i,
-        'shortcut forwards reporting option';
+    my $refused = dies { $req_plain->content_type(raise_on_error => 1) };
+    is [ref($refused) && $refused->isa('PAGI::Exception::HTTP') ? ($refused->status_code, $refused->client_message) : "$refused"],
+        [400, 'The Content-Type header could not be parsed.'],
+        'shortcut forwards reporting option: the client\'s malformed field is a 400';
     for my $type ('application/vnd.api+json', 'Application/Problem+JSON; charset=utf-8') {
         $req_plain->headers->set('Content-Type', $type);
         is($req_plain->is_json, 1, "a +json media type is JSON: $type");
@@ -476,8 +478,8 @@ subtest 'headers returns the exact cached object used by Request lookups' => sub
 
     is $req->header('host'), 'x.com', 'ordinary lookup initializes the header cache';
     my $headers = $req->headers;
-    is refaddr($headers), refaddr($scope->{'pagi.request.headers'}),
-        'headers returns the cached PAGI::Headers object';
+    ok !exists $scope->{'pagi.request.headers'},
+        'the cache is the Request\'s own, not in the scope';
     is refaddr($req->headers), refaddr($headers),
         'later headers calls return the same object';
 

@@ -226,7 +226,8 @@ sub _around_middleware ($hook) {
             # The hook replaced the response: unwind the inner app, which is
             # suspended in its send of the start event, and answer instead.
             $release->fail("response replaced by around middleware\n");
-            eval { await $inner };
+            try { await $inner }
+            catch ($e) { }    # the failure of the release just failed, so nothing to report
             return await _coerce($result)->to_app->($scope, $receive, $send);
         };
     };
@@ -236,9 +237,10 @@ sub _around_middleware ($hook) {
 # Errors. Seam: ErrorHandler's `catch` maps statuses and exception classes
 # to answers, most specific class first, as Starlette's exception_handlers
 # do; Tiny only adapts each one to its own handler shape and plain values.
-# The entry sees the request as that layer sees it: a Tiny::Request,
-# because RequestClass is outside it, but no path_params, which Starlette's
-# handlers also lack.
+# A route's error is answered at the route, so the entry gets the route's
+# own Tiny::Request -- its path_params included, as a Starlette exception
+# handler gets the endpoint's Request; an error from elsewhere gets a
+# Tiny::Request for the scope, because RequestClass is outside the entry.
 
 sub _catch ($self) {
     my %on_error = %{ $self->{on_error} };
@@ -256,10 +258,11 @@ sub to_compose ($self) {
     my @services = @{ $self->{services} };
     my $compose  = compose(
         routes => $self->{routes},
-        # The around hooks wrap the error handler, as Starlette's user middleware
-        # wraps its ExceptionMiddleware, so a mapped error response passes
-        # through them too. An error in a hook itself reaches Compose's own
-        # last-resort ErrorHandler.
+        # The around hooks wrap the error handler's exception boundary, as
+        # Starlette's user middleware wraps its ExceptionMiddleware, so a mapped
+        # error response passes through them too. An unmapped error passes
+        # through them as an exception (call_next raises, as in Starlette) and
+        # is answered outside them, as is an error in a hook itself.
         middleware => [
             middleware('RequestClass', class => 'Tiny::Request'),
             (map { middleware(_around_middleware($_)) } @{ $self->{around} }),

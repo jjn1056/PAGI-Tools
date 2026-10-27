@@ -37,7 +37,7 @@ The log defaults to `/tmp/deliveries.jsonl`; set `WEBHOOK_LOG` to move it.
   return the response directly.
 
 Measured with the gut-check line counter (code lines, imports in
-parentheses): PAGI-Tools 53 (5), Flask 47 (2), Go 93 (2). All three answer
+parentheses): PAGI-Tools 54 (5), Flask 47 (2), Go 93 (2). All three answer
 the curl sequence below with the same statuses.
 
 ## Try

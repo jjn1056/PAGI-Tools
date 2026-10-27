@@ -13,6 +13,7 @@ use PAGI::ErrorContext ();
 use PAGI::Response qw(response);
 use PAGI::Routing qw(route router sse websocket);
 use PAGI::Stash qw(stash);
+use PAGI::Middleware::Stash;
 use PAGI::Test::Client;
 
 {
@@ -66,7 +67,7 @@ subtest 'declarative Router callbacks remain direct protocol objects' => sub {
     }),
     ]);
 
-    my $client = PAGI::Test::Client->new(app => $routing);
+    my $client = PAGI::Test::Client->new(app => PAGI::Middleware::Stash->new->wrap($routing->to_app));
     my $response = $client->get('/request/world');
     is($response->text, 'hello world',
         'Router HTTP callback remains Request-first and returns a Response');
@@ -139,15 +140,15 @@ subtest 'direct Response factories replace the four HTTP shortcuts' => sub {
         'redirect constructs the complete response directly');
 };
 
-subtest 'ErrorHandler handler receives a Request and its explicit status wins' => sub {
+subtest 'an ErrorHandler catch entry receives a Request and its explicit status wins' => sub {
     my ($request_seen, $error_seen);
     my $error = Local::UpgradeStatusError->new(503);
     my $app = PAGI::Middleware::ErrorHandler->new(
-        handler => sub {
-            ($request_seen) = @_;
-            $error_seen = PAGI::ErrorContext->new($request_seen)->exception;
+        catch => { 503 => sub {
+            ($request_seen, my $context) = @_;
+            $error_seen = $context->exception;
             return response('Text', 'custom error', status => 409);
-        },
+        } },
     )->wrap(sub { die $error });
 
     my (@warnings, $response);
@@ -155,7 +156,8 @@ subtest 'ErrorHandler handler receives a Request and its explicit status wins' =
         local $SIG{__WARN__} = sub { push @warnings, @_ };
         $response = PAGI::Test::Client->new(app => $app)->get('/');
     }
-    is(\@warnings, [], 'the 503 error answered 409 is not re-raised: the status sent decides');
+    is(\@warnings, [match(qr/\Aexception after response completed: Local::UpgradeStatusError=/)],
+        'a thrown 503, answered by its entry, is still re-raised for the server: the status thrown decides');
     isa_ok($request_seen, 'PAGI::Request');
     is($error_seen, exact_ref($error), 'the error context carries the original error');
     is($response->status, 409,

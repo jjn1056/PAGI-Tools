@@ -52,6 +52,7 @@ subtest 'state is separate from stash' => sub {
     my $scope = ws_scope(
         path  => '/ws',
         state => { db => 'connection' },
+        'pagi.stash' => {},
     );
 
     my $ws = PAGI::WebSocket->new($scope, sub { }, sub { });

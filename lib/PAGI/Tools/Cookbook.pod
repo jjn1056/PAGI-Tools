@@ -630,19 +630,60 @@ only C<middleware(...)> descriptions.
 =head2 Compose Safety and Application Error Policy
 
 Compose installs the same root safety graph around the distinct root Router it
-constructs from C<routes>:
+constructs from C<routes>. It takes the ErrorHandler out of C<middleware>,
+wherever it is listed, and places its two halves as Starlette builds an
+application -- C<ServerErrorMiddleware> outermost, C<ExceptionMiddleware>
+around the router:
 
   outer idempotent application-root HEAD boundary
-    automatic ErrorHandler
-      response-completion guard
-        author middleware, in listed order
-          Compose root Router
+    Compose's emergency ErrorHandler (server errors only)
+      your ErrorHandler's server-error boundary: handler, on_error
+        response-completion guard
+          author middleware, in listed order
+            your ErrorHandler's exception boundary: catch
+              Compose root Router
 
-Router 404/405 responses pass through this graph unchanged. Compose's stock
-error response is a plain-text, no-store 500, with a final hardcoded UTF-8
-text 500 only if an author handler itself fails. Put the application's
-official error policy inside request IDs, access logging, and security
-middleware so those layers observe it:
+An error a route throws reaches the exception boundary first: a C<catch> entry
+or an HTTP error's built-in answer handles it there, inside every author
+middleware. Anything unhandled -- an ordinary bug, or any error an author
+middleware throws -- is answered by C<handler> (or the stock 500) outside
+them, reported, and re-raised for the server. Without an ErrorHandler of your
+own, the emergency one's exception boundary is the one around the router.
+Compose's stock error response is a plain-text, no-store 500, with a final
+hardcoded UTF-8 text 500 only if an author handler itself fails. One stock
+ErrorHandler per Compose: a second dies when the application is built. A
+subclass of ErrorHandler is not split; it wraps what follows it, where it is
+listed.
+
+Because the 500 is rendered outside the author middleware, and a PAGI scope
+is copied rather than changed in place, nothing an author middleware adds
+reaches it: not RequestId's C<pagi.request_id> or its C<X-Request-ID> header,
+not AccessLog's line for it, not a header SecurityHeaders or CORS sets.
+Middleware listed in C<middleware> see the error pass through them as an
+exception. Starlette's middleware have the same limit. Request identity,
+access logging and globally enforced response headers that must cover
+server-error responses wrap Compose instead, with the middleware's own
+C<wrap>:
+
+  use PAGI::Middleware::AccessLog;
+  use PAGI::Middleware::RequestId;
+  use PAGI::Middleware::SecurityHeaders;
+
+  my $composed = compose(
+      routes => [mount('/' => app => $routing)],
+      middleware => [
+          middleware('ErrorHandler',
+              handler  => \&server_error,
+              on_error => \&report_error),
+      ],
+  );
+
+  # Outermost first: every response, the 500 included, gets a request ID, an
+  # access-log line and the security headers; on_error and the handler see
+  # the same pagi.request_id.
+  my $app = PAGI::Middleware::RequestId->new->wrap(
+      PAGI::Middleware::AccessLog->new->wrap(
+          PAGI::Middleware::SecurityHeaders->new->wrap($composed->to_app)));
 
 A bare Router has no root ErrorHandler, response-completion guard, or lifespan
 owner, but its compiled app already installs a Router HeadBoundary. If a
@@ -650,18 +691,6 @@ selected application sends nothing, a direct Router call completes without
 synthesizing a response. Compose wraps that same Router in the safety graph
 above; the outer idempotent HEAD boundary becomes the wire owner, and the guard
 converts pre-start silence into its production-safe 500.
-
-  my $app = compose(
-      routes => [mount('/' => app => $routing)],
-      middleware => [
-          middleware('RequestId'),
-          middleware('AccessLog'),
-          middleware('SecurityHeaders'),
-          middleware('ErrorHandler',
-              handler  => \&server_error,
-              on_error => \&report_error),
-      ],
-  )->to_app;
 
 For example, a database failed Future before response start is awaited by the
 author ErrorHandler, reported through C<on_error>, rendered by
@@ -674,8 +703,9 @@ start, and rethrows the original database exception so the server can abort.
 Ordinary ErrorHandler instances default to static production mode and never
 consult C<PAGI_ENV>. Compose's private outer instance resolves development per
 handled request and falls back to safe production output if resolution fails.
-The built-in answer is plain text. To answer another way, give ErrorHandler a
-C<handler>:
+The built-in answer is plain text. To answer an unhandled error another way,
+give ErrorHandler a C<handler>; the errors the application expects get
+C<catch> entries (see L</Thrown pages and house-styled errors>):
 
   use PAGI::ErrorContext qw(error_context);
   use PAGI::Response qw(response);
@@ -684,13 +714,15 @@ C<handler>:
       handler => sub {
           my ($request) = @_;
           my $error = error_context($request);
-          return $error->default if $error->is_server_error;   # the built-in answer
-          return response('JSON', { error => $error->message });
+          return response('HTML', '<h1>Something went wrong</h1>', status => 500)
+              unless $error->detail;                  # production
+          return $error->default;                     # development: the built-in page, with the detail
       })
 
-C<error_context($request)> gives the error, its status and a client-safe
-message; returning C<< $error->default >> leaves an error to the built-in
-answer. A handler is authoritative for its own content and headers.
+A C<handler> answers only unhandled errors: HTTP errors and thrown pages never
+reach it. C<error_context($request)> gives the error, its status and a
+client-safe message; returning C<< $error->default >> leaves it to the
+built-in answer. A handler is authoritative for its own content and headers.
 
 =head3 Who reports an application error
 
@@ -708,9 +740,12 @@ governs it and a replaced C<logger> receives it:
 
   PAGI application error (after response complete): database unreachable
 
-C</missing> gets a 404 page and nothing is logged: an exception that claims a
-4xx status is a handled outcome, not an error. The same holds for an
-ErrorHandler you install yourself. Behind a server other than PAGI::Server,
+C</missing> gets a 404 page and nothing is logged: an HTTP error is handled
+-- by a C<catch> entry or its built-in answer -- and a handled error is an
+outcome, not a failure. A thrown HTTP error or page of 500 or more is the
+exception: it is answered, then re-raised and logged like C</boom>, since
+whoever throws a 500 means "this broke" (Starlette logs nothing for an
+C<HTTPException(500)>). Otherwise only an unhandled error is re-raised. The same holds for an ErrorHandler you install yourself. Behind a server other than PAGI::Server,
 the re-raised exception reaches whatever that server does with an application
 failure after a complete response.
 
@@ -723,7 +758,7 @@ the server's log, such as an error tracker or paging:
           my ($error, $scope) = @_;
           $tracker->capture($error,
               path       => $scope->{path},
-              request_id => $scope->{'pagi.request_id'});  # with RequestId installed
+              request_id => $scope->{'pagi.request_id'});  # with RequestId around Compose
           return;
       }),
 
@@ -740,44 +775,96 @@ should capture that warning.
 
 Return responses; throw only from code far from the handler. When you do,
 L<PAGI::Exception::HTTP> says what went wrong and a thrown Response is an
-answer in itself. One ErrorHandler handler can honour thrown pages as they
-are and give every other client error the house style:
+answer in itself. One ErrorHandler C<catch> entry gives HTTP errors the house
+style, as Starlette's C<exception_handlers={HTTPException: ...}> does; thrown
+pages answer as they are without one:
 
-  use Scalar::Util qw(blessed);
-  use PAGI::ErrorContext qw(error_context);
   use PAGI::Response qw(response);
 
-  middleware('ErrorHandler', handler => sub {
-      my ($request) = @_;
-      my $error = error_context($request);
-      my $thrown = $error->exception;
-      # Server errors first: default is a 5xx page itself, or the stock 500
-      # for anything that could not be read as one.
-      return $error->default if $error->is_server_error;
-      # A page: no status_code, a to_app. Facts are checked first.
-      return $thrown
-          if blessed($thrown) && !$thrown->can('status_code') && $thrown->can('to_app');
-      return response('JSON', { error => $error->message });
+  middleware('ErrorHandler', catch => {
+      'PAGI::Exception::HTTP' => sub {
+          my ($request, $error) = @_;
+          return response('JSON', { error => $error->message },
+              headers => $error->headers);
+      },
   })
 
-The server-error line comes first so that a thrown object ErrorHandler could
-not read as a page -- one with C<to_app> but no usable status, such as an
-exception written for Plack -- gets the stock 500 instead of being run. A
-thrown page below 400, such as C<die response('Redirect', '/login')>, never
-reaches the handler: ErrorHandler sends it at once.
+An entry answers in full, as a Starlette exception handler does: the error's
+headers -- a C<Retry-After>, say -- are sent only if it passes them on. The
+exception is a 405's C<Allow>: an entry's 405 that sends none gets the
+router's.
 
-Routing misses never reach the handler either: they are answers, not errors.
-The router answers a path nothing matches (404) and a method a matched path
-does not allow (405) itself, in plain text. Give the 404 the house style with
-C<http_default>, beside C<routes>:
+A thrown page answers as itself, whatever its status, and never reaches
+C<catch>. A thrown object ErrorHandler cannot read as a page -- one with
+C<to_app> but no usable status, such as an exception written for Plack -- is
+an ordinary error: the stock 500, and its C<to_app> is never run. A thrown
+page below 400, such as C<die response('Redirect', '/login')>, is sent at once.
 
-  http_default => sub {
+Routing misses reach the entry too. When the innermost ErrorHandler around a
+router has C<catch> entries, the router raises a path nothing matches as a 404 HTTP error and a
+method a matched path does not allow as a 405 carrying C<Allow>, as
+Starlette's router raises C<HTTPException> -- so the entry above answers them
+in JSON, and a C<404> or C<405> status entry answers just those. With no entry
+for them, they get the router's own plain-text answers, unchanged. A Router
+mounted inside raises its misses the same way, unless an ErrorHandler nearer
+it decides for it: the innermost ErrorHandler answers, as Starlette's
+innermost C<ExceptionMiddleware> does, so an outer C<catch> table never
+reaches past an inner ErrorHandler, and a Compose mounted inside answers its
+own errors. An explicit C<http_default> still answers a path nothing
+matches, before any entry sees it.
+
+=head3 Re-render a form from an error handler
+
+A route can leave the errors its domain raises to one place and still answer
+with the form the user typed. A C<catch> entry answering an error a route's
+handler threw gets that route's own Request, as a Starlette exception handler
+gets the endpoint's: the form the route read, its C<path_param>s, and the
+scope keys of middleware inside the ErrorHandler (the session, the CSRF
+token).
+
+  use Future::AsyncAwait;
+  use PAGI::Tools qw(compose middleware response route);
+
+  package My::TitleTaken { sub new { my ($class, %f) = @_; bless {%f}, $class } }
+
+  my %taken;
+
+  sub html { my ($text) = @_; $text =~ s/([&<>"])/'&#' . ord($1) . ';'/ge; $text }
+
+  sub task_form {
+      my ($title, $error, @options) = @_;
+      return response('HTML', (defined $error ? '<p class="error">' . html($error) . '</p>' : '')
+          . '<form method="post"><input name="title" value="' . html($title) . '">'
+          . '<button>Add</button></form>', @options);
+  }
+
+  # The route reads the form and raises the board's error; it does not
+  # answer it.
+  async sub create {
       my ($request) = @_;
-      return response('JSON', { error => 'Not Found' }, status => 404);
-  },
+      my $title = (await $request->form_params)->get('title') // '';
+      die My::TitleTaken->new(title => $title) if $taken{lc $title};
+      $taken{lc $title} = 1;
+      return response('Redirect', '/', status => 303);
+  }
 
-A 405 is changed by a middleware that rewrites it (see L<PAGI::Routing>), and
-a mounted Router answers its own misses.
+  my $app = compose(
+      routes => [route('/tasks' => \&create, methods => ['POST'])],
+      middleware => [middleware('ErrorHandler', catch => {
+          # The route's own Request: the form create read is there.
+          'My::TitleTaken' => async sub {
+              my ($request, $error) = @_;
+              my $title = (await $request->form_params)->get('title');
+              return task_form($title, qq{There is already a task called "$title".}, status => 409);
+          },
+      })],
+  );
+
+This is the route-level part of ErrorHandler only: an error an author
+middleware throws gets C<handler>, with a Request that has no body. The
+complete application, with templates, the session's CSRF token and a
+missing-task entry that names the id from C<path_param>, is
+F<examples/internal-tool>, beside the same board in Flask.
 
 =head2 Real Catch-All Routes
 
@@ -1643,7 +1730,10 @@ C<< $request->basic_auth(raise_on_error =E<gt> 1) >> similarly returns
 C<(username, password)> in list context. The default read instead returns
 C<undef> for unusable Bearer input (or C<(undef, undef)> for Basic), so it
 cannot distinguish a malformed credential from an absent one. Neither helper
-verifies a credential or constructs a response. See L<PAGI::Request/AUTH HELPERS>.
+verifies a credential or constructs a response. Without the C<eval>, a
+malformed or duplicate field is a L<PAGI::Exception::HTTP> 400, C<The
+Authorization header could not be parsed.>, which the Authentication middleware
+answers before the application runs. See L<PAGI::Request/AUTH HELPERS>.
 
 =head2 Read upload parameters and write download parameters
 
@@ -1707,7 +1797,8 @@ you a L<PAGI::Headers> copy and sends a new event with your changes:
 
 Use C<add> for a header that repeats (C<Set-Cookie>) and C<set_default> to keep
 a value the response already has. To hear back from layers further in, seed a
-shared reference before calling inward -- L<PAGI::Stash>, or the spec
+shared reference before calling inward -- L<PAGI::Middleware::Stash> above
+you and L<PAGI::Stash> to read it, or the spec
 Cookbook's "Reporting back to an outer layer" recipe.
 
 =head2 Vary on a request header you branch on
@@ -2762,25 +2853,127 @@ without naming an event loop.
 
 See C<examples/10-forms-and-uploads/> for complete examples.
 
+=head2 Watching or changing the request body
+
+Whoever reads a request body hands the application a receive that delivers
+a body (L<PAGI::Middleware/Reading the request body>). To watch or change
+it as it streams, a middleware wraps C<$receive>, and the application reads
+through the wrapper: the middleware sees
+each C<http.request> event as it goes past, and may hand on a changed one.
+These two are plain C<app-E<gt>app> functions, which C<middleware> takes as
+factories. The first only watches, as the body streams. The second hands
+the application a gzip-encoded body decompressed: the first time the
+application asks for the body, it reads the whole compressed body inside
+that receive and returns the plain one, as msgpack-asgi (which Starlette's
+documentation points to) converts a body. That reads ahead, so it bounds
+both sizes -- a small gzip body can decompress to gigabytes:
+
+  use v5.40;
+  use Future::AsyncAwait;
+  use IO::Uncompress::Gunzip ();
+  use PAGI::Exception::HTTP;
+  use PAGI::Tools qw(compose middleware response route);
+
+  my $MAX_BODY = 10 * 1024 * 1024;    # compressed or not
+
+  # Watching: the body's size, counted as the application reads it.
+  sub logged_body_size ($app) {
+      return async sub ($scope, $receive, $send) {
+          return await $app->($scope, $receive, $send) unless $scope->{type} eq 'http';
+          my $size = 0;
+          my $counting = async sub {
+              my $event = await $receive->();
+              if ($event->{type} eq 'http.request') {
+                  $size += length($event->{body} // '');
+                  warn "request body: $size bytes\n" unless $event->{more};
+              }
+              return $event;
+          };
+          await $app->($scope, $counting, $send);
+      };
+  }
+
+  # Changing: a Content-Encoding: gzip body reaches the application as the
+  # plain body, in one event, with the encoding and length headers gone.
+  sub gunzip_body ($app) {
+      return async sub ($scope, $receive, $send) {
+          my ($encoding) = map { $_->[1] }
+              grep { lc($_->[0]) eq 'content-encoding' } @{ $scope->{headers} // [] };
+          return await $app->($scope, $receive, $send)
+              unless $scope->{type} eq 'http' && defined($encoding) && lc($encoding) eq 'gzip';
+          my $plain_scope = { %$scope, headers => [
+              grep { lc($_->[0]) ne 'content-encoding' && lc($_->[0]) ne 'content-length' }
+                  @{ $scope->{headers} } ] };
+          my $decoded = 0;
+          my $decoding = async sub {
+              return await $receive->() if $decoded;
+              my $packed = '';
+              while (1) {
+                  my $event = await $receive->();
+                  if ($event->{type} ne 'http.request') {
+                      return $event unless length $packed;    # no body: hand it on
+                      die "Request body incomplete: client disconnected mid-body\n";
+                  }
+                  $packed .= $event->{body} // '';
+                  PAGI::Exception::HTTP->throw(413, 'Request body too large.')
+                      if length $packed > $MAX_BODY;
+                  last unless $event->{more};
+              }
+              $decoded = 1;
+              my $gunzip = IO::Uncompress::Gunzip->new(\$packed, Transparent => 0)
+                  or PAGI::Exception::HTTP->throw(400, 'The gzip request body could not be decoded.');
+              my $plain = '';
+              while (1) {
+                  my $read = $gunzip->read(my $block, 64 * 1024);
+                  PAGI::Exception::HTTP->throw(400, 'The gzip request body could not be decoded.')
+                      if $read < 0;
+                  last if $read == 0;
+                  $plain .= $block;
+                  PAGI::Exception::HTTP->throw(413, 'Request body too large.')
+                      if length $plain > $MAX_BODY;
+              }
+              return { type => 'http.request', body => $plain, more => 0 };
+          };
+          await $app->($plain_scope, $decoding, $send);
+      };
+  }
+
+  my $app = compose(
+      routes => [route('/echo' => async sub ($request) {
+          response('Text', ($request->header('content-encoding') // 'identity') . ': ' . await $request->body);
+      }, methods => ['POST'])],
+      # gunzip_body is outermost, so logged_body_size counts the plain body.
+      middleware => [middleware(\&gunzip_body), middleware(\&logged_body_size)],
+  );
+
+Both run only as far as the application reads: a route that never reads the
+body never decompresses or counts it. To change a body as it streams,
+change each event in the receive and hand it on, as C<logged_body_size>
+hands each one on. A middleware that refuses on the body
+throws from the read that decides, as C<gunzip_body> does for a body that is
+not gzip; examples/signed-requests refuses a forged signature on the last
+chunk that way. examples/modify-form-post reads a whole form first instead,
+and hands the application the rewritten body.
+
 =head2 CSRF on a streamed upload
 
-L<PAGI::Middleware::CSRF> reads the token from a form's C<csrf_token>
-field, and L<PAGI::Request> then serves that parse rather than stream the
-body. A route that streams a plain HTML
-form's upload with C<multipart_stream> runs its own CSRF middleware, which
-never reads the body or refuses, and checks the token itself:
+A route that streams a plain HTML form's upload with C<multipart_stream>
+needs no CSRF code of its own. L<PAGI::Middleware::CSRF> reads a multipart
+form only as far as its C<csrf_token> field, checks it, and hands the route
+the whole body, so the upload after the token streams to the route as it
+arrives. The form puts its token field before the file -- browsers send
+fields in document order -- and a file part before the token is refused:
 
   use v5.40;
   use Future::AsyncAwait;
   use File::Temp qw(tempdir);
   use PAGI::CSRF qw(csrf);
-  use PAGI::Tools qw(compose middleware mount response route);
+  use PAGI::Tools qw(compose middleware response route);
 
   my $uploads = tempdir(CLEANUP => 1);
   my $files   = 0;
 
-  # The page's upload form puts its csrf_token field before the file, and
-  # browsers send fields in document order, so the token arrives first.
+  # The page's upload form puts its csrf_token field before the file.
   async sub notes ($request) {
       my $token = csrf($request)->token;
       return response('HTML', <<"HTML");
@@ -2791,21 +2984,11 @@ never reads the body or refuses, and checks the token itself:
   HTML
   }
 
-  # A script whose X-CSRF-Token header matched has passed (valid), and one
-  # whose header did not match is refused. A request without the header must
-  # send the token as the first part, checked before any file.
+  # Only a request whose token the middleware matched gets here: an
+  # X-CSRF-Token header, or the form's field, read before the file.
   async sub upload ($request) {
       my $stream = $request->multipart_stream;
-      my $check  = csrf($request);
-      unless ($check->valid) {
-          return response('Text', 'CSRF token validation failed', status => 403)
-              unless ($check->failure // '') eq 'missing_token';
-          my $first = await $stream->next;
-          return response('Text', 'CSRF token validation failed', status => 403)
-              unless defined($first) && $first->name eq 'csrf_token' && !$first->is_file
-                  && $check->verify(await $first->value);
-      }
-      my $bytes = 0;
+      my $bytes  = 0;
       while (defined(my $part = await $stream->next)) {
           next unless $part->is_file;
           $bytes += await $part->stream_to_file("$uploads/upload-" . ++$files);
@@ -2815,36 +2998,15 @@ never reads the body or refuses, and checks the token itself:
 
   my $app = compose(
       routes => [
-          # The page and the app's form routes, under the default CSRF, which
-          # reads their csrf_token field.
-          mount('/notes', routes => [
-              route('/' => \&notes, methods => ['GET']),
-          ], middleware => [middleware('CSRF')]),
-          # The streamed upload: outside every middleware list that carries a
-          # body-reading CSRF, with its own that only records the check.
-          route('/upload' => \&upload, methods => ['POST'],
-              middleware => [middleware('CSRF', form_field => undef, refuse => 0)]),
+          route('/notes' => \&notes, methods => ['GET']),
+          route('/upload' => \&upload, methods => ['POST']),
       ],
+      middleware => [middleware('CSRF', form_field => 'csrf_token')],
   );
 
-=over 4
-
-=item * The route sits outside every CSRF that reads the body: not under
-Compose's C<middleware>, and not inside a mount or Router whose
-C<middleware> carries one, because route middleware runs inside both (the order is in
-L<PAGI::Routing/MIDDLEWARE AND HEAD>, and Compose's C<middleware> wraps
-the whole router). Under either, the outer CSRF reads the upload first and
-C<multipart_stream> dies "Body already consumed".
-
-=item * The two middlewares share the token: the same cookie, or under
-C<< session => 1 >> the same session key.
-
-=item * C<valid> is true when the route's own middleware matched an
-C<X-CSRF-Token> header, so a script that sends the header uploads in any
-part order. C<verify> also fails a request the middleware found to be
-cross-origin.
-
-=back
+A script that sends the C<X-CSRF-Token> header uploads in any part order:
+the middleware then reads nothing. A form's token must come within
+C<max_form_size> bytes (1 MiB by default), however large the file after it.
 
 =head2 A huge upload in a legacy encoding
 
@@ -2949,18 +3111,16 @@ it; one that wants its own response catches the error:
       route('/notes/kindly' => \&create_note_kindly, methods => ['POST']),
   ]);
 
-To give every route the same shape instead, give ErrorHandler a C<handler>.
-C<error_context($request)> carries the RequestBody exception; its C<message>
-is the exception's client-safe sentence, and its C<cause> holds the
-underlying error for logs:
-
-  use PAGI::ErrorContext qw(error_context);
+To give every route the same shape instead, give ErrorHandler a C<catch>
+entry for L<PAGI::Exception::RequestBody>. The entry gets the Request and the
+error: its C<message> is the exception's client-safe sentence, and its
+C<cause> holds the underlying error for logs:
 
   my $uniform = compose(
-      middleware => [middleware('ErrorHandler', handler => sub ($request) {
-          my $error = error_context($request);
-          return $error->default if $error->is_server_error;
-          return response('JSON', { error => $error->message });
+      middleware => [middleware('ErrorHandler', catch => {
+          'PAGI::Exception::RequestBody' => sub ($request, $error) {
+              return response('JSON', { error => $error->message });
+          },
       })],
       routes => [route('/notes' => \&create_note, methods => ['POST'])],
   );

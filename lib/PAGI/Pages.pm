@@ -821,8 +821,9 @@ sub _select_representation {
     my $no_body = sub {
         return Future->fail('metadata-only Request cannot consume a body');
     };
-    # Request lazily installs its header cache; keep those writes local while
-    # descriptor factories retain the original scope identity.
+    # Negotiation reads a metadata view of the scope, without a header cache a
+    # WebSocket or SSE helper keeps there, while descriptor factories retain
+    # the original scope identity.
     my $request = PAGI::Request->new(
         _metadata_scope($scope), $no_body,
     );
@@ -1193,8 +1194,8 @@ See L<PAGI::Pages::Application/response_for>.
 
 Factory C<headers> options take the shapes in L</"HEADERS AND CACHE POLICY">. For request
 negotiation, Pages builds an isolated metadata view and reads repeated request
-fields through L<PAGI::Headers>; it does not reuse or mutate the source scope's
-C<pagi.request.headers> cache.
+fields through L<PAGI::Headers>; it does not reuse or mutate a header cache a
+WebSocket or SSE helper keeps in the source scope.
 
 Pages rejects lifespan and unknown scopes before receive, rendering, or send.
 Pages does not handle lifespan. At a bare server root,

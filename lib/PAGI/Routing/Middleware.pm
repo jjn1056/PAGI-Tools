@@ -48,21 +48,28 @@ sub _wrap {
         return _compile_wrapped_app($wrapped, 'middleware factory');
     }
 
-    my $object;
-    if (blessed($target)) {
-        $object = $target;
-    } else {
-        my $class = _resolve_class($target);
-        my $error = PAGI::Utils::_load_class($class, "middleware('$target')", sub { $_[0]->can('new') }, $target);
-        croak $error if defined $error;
-
-        $object = $class->new(%{$self->{config}});
-        croak "middleware class $class did not construct an object with wrap"
-            unless blessed($object) && $object->can('wrap');
-    }
-
-    my $wrapped = $object->wrap($inner_app);
+    my $wrapped = $self->_resolve->wrap($inner_app);
     return _compile_wrapped_app($wrapped, 'middleware wrap');
+}
+
+# The middleware object this description names: the object it was given, or
+# one constructed from its class and config; undef for a factory. Each call
+# constructs anew, so a caller that needs the object once keeps it (Compose's
+# compiler does, to place an ErrorHandler; internal).
+sub _resolve {
+    my ($self) = @_;
+    my $target = $self->{factory};
+    return undef if (reftype($target) // '') eq 'CODE';
+    return $target if blessed($target);
+
+    my $class = _resolve_class($target);
+    my $error = PAGI::Utils::_load_class($class, "middleware('$target')", sub { $_[0]->can('new') }, $target);
+    croak $error if defined $error;
+
+    my $object = $class->new(%{$self->{config}});
+    croak "middleware class $class did not construct an object with wrap"
+        unless blessed($object) && $object->can('wrap');
+    return $object;
 }
 
 sub _require_descriptors {

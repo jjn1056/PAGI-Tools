@@ -104,6 +104,7 @@ a larger framework:
 =item * L<PAGI::Routing> and L<PAGI::Routing::URL>
 
 =item * L<PAGI::Routing::OpenAPI> for an OpenAPI document from an application's routes
+(early beta: its interface may still change)
 
 =item * L<PAGI::Compose> and L<PAGI::Lifespan>
 

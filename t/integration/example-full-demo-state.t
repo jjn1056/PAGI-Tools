@@ -66,6 +66,6 @@ sub first_chunk_line {
     is(first_chunk_line('/stream'), 'Stream started (request #1)', 'the second sees the shared count');
     $server->shutdown->get;
 }
-like($stderr, qr/handled 2 requests/, 'and shutdown reports both');
+like($stderr, qr/2 stream requests/, 'and shutdown reports both');
 
 done_testing;

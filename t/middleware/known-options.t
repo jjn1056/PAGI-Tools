@@ -15,14 +15,16 @@ my %required = (
 );
 # Options _init reads only to reject them with a message of their own.
 my %rejected = (
-    CSRF               => ['enforce', 'secret'],
+    Authentication     => ['body_buffer'],
+    CSRF               => ['enforce', 'secret', 'body_buffer'],
     ContentNegotiation => ['strict', 'default_type'],
+    MethodOverride     => ['check_form', 'body_buffer'],
     RateLimit          => ['backend'],
 );
 my @classes = qw(AccessLog Authentication ConditionalGet ContentLength ContentNegotiation
     Cookie CORS CSRF Debug ErrorHandler ETag GZip Head Healthcheck HTTPSRedirect Lint
     Maintenance MethodOverride RateLimit RequestId ReverseProxy Rewrite Runtime
-    SecurityHeaders Session SSE::Retry Static TrustedHosts XSendfile RequestClass);
+    SecurityHeaders Session SSE::Retry Stash Static TrustedHosts XSendfile RequestClass);
 
 # Session's default store announces itself once per process; take that here
 # so the loop's output stays clean.

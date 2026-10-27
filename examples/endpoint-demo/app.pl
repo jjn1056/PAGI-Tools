@@ -196,13 +196,14 @@ my $require_json = sub {
 #   HTTP only, so it goes on HTTP routes.
 # - $require_json: validates Content-Type for POST (coderef middleware)
 # - $timing: works for any protocol, so the WebSocket and SSE routes use it
+# - Stash: gives the SSE endpoint the stash it keeps its subscriber id in
 compose(routes => [
     route('/api/messages' => endpoint('MessageAPI'),
         middleware => [middleware($access_log), middleware($require_json)]),
     websocket('/ws/echo' => endpoint('EchoWS'),
         middleware => [middleware($timing)]),
     sse('/events' => endpoint('MessageEvents'),
-        middleware => [middleware($timing)]),
+        middleware => [middleware('Stash'), middleware($timing)]),
     # Static files for every other HTTP path (no middleware). A Route is
     # HTTP-only, so a WebSocket or SSE request to an unknown path gets the
     # Router's refusal instead of reaching the file application.

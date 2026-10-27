@@ -15,13 +15,12 @@ use PAGI::Routing qw(route middleware);
     sub authenticate {
         my ($self, $request) = @_;
         my ($username, $password);
-        my $parsed = eval {
-            ($username, $password) = $request->basic_auth(raise_on_error => 1);
-            1;
-        };
-        return PAGI::Auth::unauth_result(failure => {
-            code => 'malformed_authorization', message => 'Supply one valid Basic credential.',
-        }) unless $parsed;
+        try { ($username, $password) = $request->basic_auth(raise_on_error => 1) }
+        catch ($e) {
+            return PAGI::Auth::unauth_result(failure => {
+                code => 'malformed_authorization', message => 'Supply one valid Basic credential.',
+            });
+        }
         return PAGI::Auth::unauth_result() unless defined($username) && defined($password);
         # This fixture additionally accepts printable ASCII identity/password bytes.
         return PAGI::Auth::unauth_result(failure => {

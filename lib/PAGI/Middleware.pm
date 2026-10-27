@@ -118,7 +118,8 @@ lifespan C<state> namespace, the stash -- are shared, so the inner app still see
 the same connection state and shared objects. A deep copy would sever those. One
 corollary worth knowing: a plain B<scalar> set as a top-level scope key does not
 propagate back to outer layers, so to share mutable state across layers you mutate
-B<through a reference> (see L<PAGI::Stash>). The full model -- and why it works
+B<through a reference> (see L<PAGI::Stash>, and L<PAGI::Middleware::Stash>, which
+puts one stash on the scope for every layer below it). The full model -- and why it works
 this way -- is in L<PAGI::Building/MIDDLEWARE>.
 
 The copy also carries a L<PAGI::WebSocket> or L<PAGI::SSE> object already
@@ -219,11 +220,28 @@ sub intercept_send {
 Collect all request body chunks into a single string.
 Returns the complete body and the final http.request event.
 
-Croaks if the client disconnects mid-body rather than returning the partial
-body as if it were complete.
+This is the read half of the read-ahead pattern
+(L<PAGI::Utils::Middleware/Why this helper exists>): the loop that collects
+C<http.request> events until one has no C<more>. It croaks if the client
+disconnects mid-body rather than returning the partial body as if it were
+complete. A disconnect before any byte arrived returns C<''> with the
+C<http.disconnect> event as C<$final_event>: check its C<type> to tell a
+client that left from a POST with an empty body.
 
-The body is consumed: to pass it on to the inner app, read through
-L<PAGI::Utils::Middleware/record_receive> (see L</Reading the request body>).
+The body is consumed: an inner app given the same C<$receive> afterwards
+receives none of it. Complete the pattern by handing the app a receive that
+delivers a body (see L</Reading the request body>). To pass on the same
+body, read through L<PAGI::Utils::Middleware/record_receive>:
+
+    my ($reading, $replaying) = record_receive($receive);
+    my ($body) = await $self->buffer_request_body($reading);
+    ...
+    await $app->($scope, $replaying, $send);
+
+To pass on a different one, write the receive yourself, delivering the new
+body once and then the client's receive, with a C<Content-Length> to match
+(examples/modify-form-post). A middleware that answers the request itself
+needs neither.
 
 =cut
 
@@ -296,21 +314,72 @@ application and can:
 
 =head2 Reading the request body
 
-A request body can be received only once. A middleware that reads it must
-give the inner app a C<$receive> that delivers it again; given the C<$receive>
-the middleware read from, an app that reads the body waits for an event the
-client will never send. Read through L<PAGI::Utils::Middleware/record_receive>
-and pass on its replay:
+A request body can be received only once. Whoever reads it hands the
+application a C<$receive> that delivers a body: given the C<$receive> a
+middleware read from, an application that reads the body waits for an
+event the client will never send.
+
+To look at the body, or change it as it streams, wrap C<$receive> and give
+the application the wrapper. The application reads the body through it, and the
+middleware sees each C<http.request> event as it goes past -- to count it,
+hash it, or hand on a changed one. This is the pattern Starlette documents
+("wrapping the receive ASGI callable allows you to access or modify the HTTP
+request body").
+
+    async sub wrap_logged_body_size {
+        my ($app) = @_;
+        return async sub {
+            my ($scope, $receive, $send) = @_;
+            return await $app->($scope, $receive, $send) unless $scope->{type} eq 'http';
+            my $size = 0;
+            my $counting = async sub {
+                my $event = await $receive->();
+                if ($event->{type} eq 'http.request') {
+                    $size += length($event->{body} // '');
+                    warn "request body: $size bytes\n" unless $event->{more};
+                }
+                return $event;
+            };
+            await $app->($scope, $counting, $send);
+        };
+    }
+
+A middleware that must refuse on the body does it in the wrapper too: it
+throws from the read of the chunk that decides (an
+L<PAGI::Exception::HTTP>), so the application's read fails instead of
+returning, and answers that itself when nothing was sent yet, as
+Starlette's body-size limit does. examples/signed-requests checks a
+signature over the body that way. A check made this way runs only as far
+as the application reads: a route that reads no body is not checked.
+A middleware may also read the whole body before the application runs, and
+then hand the application a receive that delivers a body:
+
+=over 4
+
+=item * B<The same body>, after reading it to decide something: read
+through L<PAGI::Utils::Middleware/record_receive> and give the application
+its replay. It keeps the events (in memory unless you give it a buffer),
+delivers them once, and then carries on with the client's receive, so the
+application still gets the disconnect.
 
     my ($reading, $replaying) = record_receive($receive);
     my $form = await PAGI::Request->new($scope, $reading)->form_params;
+    return await $self->{refuse}->($scope, $replaying, $send)
+        unless defined $form->get('ticket');
     await $app->($scope, $replaying, $send);
 
-Every middleware that reads the body does this, each from the C<$receive> it
-was given. L<PAGI::Middleware::CSRF>, which reads a form's token,
-L<PAGI::Middleware::MethodOverride>, which reads a form's C<_method>, and
-L<PAGI::Middleware::Authentication>, whose backend may read the body, are
-examples.
+=item * B<A different body>, to rewrite a small form, say: write the
+receive yourself, delivering the new body once and then the client's
+receive, with a C<Content-Length> to match (examples/modify-form-post).
+
+=back
+
+Reading ahead holds the body before the application starts, so the
+application cannot stream it as it arrives; wrap the receive instead when
+it should. Where this pattern comes from, and the mistakes the usual
+hand-written versions make, is in
+L<PAGI::Utils::Middleware/Why this helper exists>.
+L<PAGI::Tools::Cookbook/Watching or changing the request body> has more.
 
 =head2 Example: Logging Middleware
 

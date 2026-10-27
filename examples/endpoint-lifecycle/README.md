@@ -8,12 +8,12 @@ author decides.
 | --- | --- | --- |
 | `NotesApp::Note`, `NotesApp::Watch` | no `BUILD_APP`: `->new(%args)` for each request, or each WebSocket connection | one request, or one connection |
 | `NotesApp::Notes` | `BUILD_APP` returns a builder, which runs per request and fills `current_user` from it | one request |
-| `NotesApp::Health` | `BUILD_APP` returns `->new(version => '1.0')`, built once, when app.pl loads | every request (its hit counter is shared, per worker) |
+| `NotesApp::Health` | `BUILD_APP` returns `->new(version => '1.0')`, built once, when the application is built | every request (its hit counter is shared, per worker) |
 
 ## The contract
 
-`endpoint('Class', %args)` loads `Class` (a class defined in app.pl itself
-needs no file) and then:
+`endpoint('Class', %args)` loads `Class` (a class already defined, as in a
+single-file app, needs no file) and then:
 
 - with no `BUILD_APP`, calls `Class->new(%args)` for each request (each
   connection, for WebSocket and SSE). The object belongs to that request, so
@@ -46,7 +46,8 @@ The builder reads only what the request already carries (headers, cookies,
 query and path parameters, state). The WebSocket builder gets a Request too,
 not the WebSocket: the object it builds accepts, sends and closes.
 
-`endpoint()` runs when app.pl loads, before lifespan startup, so the store
+`endpoint()` runs when the application is built (in `NotesApp`'s `routes`),
+before lifespan startup, so the store
 built at startup is reached at request time through `$request->state` and
 `$websocket->state`.
 
@@ -55,7 +56,8 @@ built at startup is reached at request time through `$request->state` and
 The framework calls only your `new` or `BUILD_APP`, so Moo's `required` and
 `default` work. `NotesApp::Notes` requires `current_user`, and a builder that
 forgot it fails on that request; `NotesApp::Health` requires `version`, and
-because its object is built once, a missing one fails when app.pl loads. A
+because its object is built once, a missing one fails when the application
+is built. A
 Moose class extending an Endpoint base needs `use MooseX::NonMoose` after
 `use Moose`; `endpoint()` refuses one without it.
 
@@ -68,8 +70,11 @@ endpoint, which answers 204 with `Allow`; `HEAD` is answered by `get`.
 
 ## Run
 
+The application is `lib/NotesApp.pm`, a `PAGI::App::Compose`:
+
 ```bash
-pagi-server --app examples/endpoint-lifecycle/app.pl --port 5000
+pagi-server -I examples/endpoint-lifecycle/lib \
+    --app examples/endpoint-lifecycle/lib/NotesApp.pm --port 5000
 ```
 
 ```text
@@ -131,7 +136,7 @@ Server: PAGI::Server/0.003000
 {"status":"ok","version":"1.0","hits":2}
 ```
 
-The curl lines are in app.pl's header. `t/example-endpoint-lifecycle.t`
+The curl lines are in `lib/NotesApp.pm`'s header. `t/example-endpoint-lifecycle.t`
 proves the three lifecycles, including two overlapping POSTs that each answer
 with their own user, and two requests to `NotesApp::Note` that each keep their
 own note on `$self`.

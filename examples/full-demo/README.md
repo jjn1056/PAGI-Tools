@@ -65,8 +65,10 @@ curl -X POST -H "Content-Type: application/json" -d '{nope' http://localhost:500
 ```
 
 `$request->json` raises a 400 for a body that is not JSON. The ErrorHandler at
-the end of `app.pl` reads it with `error_context($request)` and answers the
-client's mistakes in JSON; server errors get the built-in plain-text answer.
+the end of `app.pl` has one `catch` entry, `json_error`, registered for
+`PAGI::Exception::HTTP` -- a body error, `PAGI::Exception::RequestBody`, is one
+-- which answers the client's mistakes in JSON; server errors get the built-in
+plain-text answer.
 
 ### HTTP Streaming
 
@@ -132,28 +134,30 @@ ws.onopen = () => ws.send('Hello from browser!');
 ## Code Structure
 
 ```perl
-# Routing with immutable declarations
-my @routes = (
-    route('/' => sub { return response('Text', 'Hello, World!') },
-        name => 'hello'),
-    route('/echo' => async sub {
-        my ($request) = @_;
-        return PAGI::Response->new(await $request->body);
-    }, methods => ['POST'], name => 'echo'),
-    websocket('/ws/echo' => async sub {
-        my ($ws) = @_;
-        await $ws->accept;
-        await $ws->each_message(async sub { ... });
-    }),
-    sse('/events' => async sub {
-        my ($sse) = @_;
-        await $sse->send_event(...);
-    }),
-);
+use PAGI::Tools qw(compose middleware path_for response route sse url_for websocket);
 
-# Complete application and lifespan callbacks
 compose(
-    routes => \@routes,
+    # Routes match in source order.
+    routes => [
+        route('/' => sub { return response('Text', 'Hello, World!') },
+            name => 'hello'),
+        route('/echo' => async sub {
+            my ($request) = @_;
+            return PAGI::Response->new(await $request->body);
+        }, methods => ['POST'], name => 'echo'),
+        websocket('/ws/echo' => async sub {
+            my ($ws) = @_;
+            await $ws->accept;
+            await $ws->each_message(async sub { ... });
+        }),
+        sse('/events' => async sub {
+            my ($sse) = @_;
+            await $sse->start;
+            await $sse->send_event(...) ...;
+            await $sse->close;
+        }),
+    ],
+    middleware => [middleware('ErrorHandler', catch => { 'PAGI::Exception::HTTP' => \&json_error })],
     lifespan => {
         startup  => async sub { ... },
         shutdown => async sub { ... },
@@ -178,7 +182,7 @@ The lifespan startup hook initializes shared state accessible to all requests:
 ```perl
 startup => async sub {
     my ($state) = @_;
-    $state->{stats} = { requests => 0 };
+    $state->{stats} = { stream_requests => 0 };
     $state->{started_at} = time();
     # Initialize DB connections, caches, etc. here
 }
@@ -191,15 +195,15 @@ names no event loop.
 Access in HTTP handlers through the Request's state facade:
 
 ```perl
-my $counter = $request->state->data->{stats}{requests}++;
+my $counter = $request->state->get('stats')->{stream_requests}++;
 ```
 
 Each request receives a *shallow copy* of the lifespan state (see
-`PAGI::Spec::Lifespan`, "Lifespan State"). Changing a top-level key --
-`$request->state->data->{request_counter}++` -- would change only that
-request's copy, so every request would report `#0`. Values requests change
-live in a container stored once at startup and are changed through its
-reference.
+`PAGI::Spec::Lifespan`, "Lifespan State"), so a top-level value a request
+replaced would change only that request's copy, and every request would
+report `#0`. Values requests change live in a container stored once at
+startup -- the `stats` hash here -- reached with `get` and changed through
+its reference.
 
 ## See Also
 

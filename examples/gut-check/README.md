@@ -33,7 +33,7 @@ written against it; the Starlette versions are unchanged.
 
 | Pair | What it does | Behaviour | PAGI lines (imports) | Starlette lines (imports) |
 |---|---|---|---|---|
-| `01-errors-as-responses` | throw a 404 from the model, real bugs get a 500, unmatched paths get the same JSON | identical (PAGI styles the routing 404 with `http_default`; Starlette's router raises it to the handler) | 23 (4) | 19 (4) |
+| `01-errors-as-responses` | throw a 404 from the model, real bugs get a 500, unmatched paths get the same JSON | identical: both routers raise their 404 and 405 to the handler; PAGI's 405 keeps `Allow`, which the Starlette handler as written drops | 20 (4) | 19 (4) |
 | `02-notes-resource` | CRUD resource: class endpoints, lifespan store, named links, typed `{id}` | identical, incl. 204 and the typed-path 404 | 48 (17) | 44 (5) |
 | `03-broadcast-hub` | WebSocket chat + SSE watcher + HTTP announce on one fan-out | identical where Starlette can be tested (see below) | 32 (4) | 46 (5) |
 | `04-everyday-middleware` | `Server-Timing` and maintenance mode, hand-written | identical | 25 (4) | 26 (7) |
@@ -85,7 +85,7 @@ Run any PAGI one with `pagi-server --app examples/gut-check/<file> --port 5000`.
     Starlette has nothing comparable built in.
   - **Throwing (01).** `PAGI::Exception::HTTP->throw(404, ...)` from deep in
     the model answers 404 with no configuration, as Starlette's `HTTPException`
-    does; 01's one small handler only renders the errors it expects as JSON. A
+    does; 01's one small `catch` entry only renders the errors it expects as JSON. A
     thrown response answers itself too: `die response('Redirect', '/login')`
     redirects. Starlette can raise only `HTTPException`; raising a response
     object gives a 500 there (checked).
@@ -128,8 +128,8 @@ Most important first, as found; each now says what PAGI-Tools 0.003000 does.
    error (`PAGI::Exception::HTTP` is the one Tools ships); a response, or
    anything else with `to_app`, answers itself unless a handler renders it: a
    page below 400, such as a redirect, always answers itself. 01 now
-   throws `PAGI::Exception::HTTP` and keeps its handler only for the JSON house
-   style.
+   throws `PAGI::Exception::HTTP` and keeps one `catch` entry only for the JSON
+   house style.
 
 3. **The query accessors disagreed across Request, WebSocket and SSE.**
    Changed: all three have exactly `query_param`, `query_params`,
@@ -231,7 +231,7 @@ Each pair's Starlette version, as measured and run during the gut check
 
 ### 01-errors-as-responses
 
-Starlette sends a routing 404 through the same exception handler as a thrown one; PAGI's router answers its own misses (`http_default` styles them).
+Both send a routing 404 and 405 through the same exception handler as a thrown error. Run on Starlette 1.10.0, this version answers `POST /notes/1` with a JSON 405 and no `Allow` header, because its handler does not pass on `exc.headers`; PAGI's entry passes on the error's headers, and ErrorHandler adds a 405's `Allow` when an entry sends none.
 
 ```python
 from starlette.applications import Starlette

@@ -9,8 +9,11 @@ marked with the seam it uses.
 
 ## Run
 
+Tiny stands in for a framework installed from CPAN, so `lib/` goes on the
+path and `app.pl` is a single-file application:
+
 ```bash
-pagi-server --app examples/framework-on-tools/app.pl --port 5000
+pagi-server -I examples/framework-on-tools/lib --app examples/framework-on-tools/app.pl --port 5000
 ```
 
 ## What the application looks like
@@ -58,7 +61,7 @@ tiny;
 | `around` with Starlette's `call_next` | a native middleware wrapping `$send`: `$next` starts the inner app and resolves on `http.response.start`; the start event is held until the hook returns | 38 lines of raw-protocol code, the only such code in Tiny, and the delicate part: replacing the response has to fail the held send to unwind the handler |
 | services built at startup | Compose `lifespan => { startup }`, read with `$request->state` | none |
 | typed path parameters | the compact `{id:&Int}`, or `constraints => { id => Int }` | `route()` looks a compact provider up in its caller, which is Tiny, so Tiny passes `declaration_package` (the application's package). Either form reaches the OpenAPI document: `route_table` reports each capture's constraints as declared |
-| `on_error` class-to-response mapping | ErrorHandler's `catch`, each entry adapted to Tiny's handler shape | none; the entry gets a `Tiny::Request`, because RequestClass is listed before the ErrorHandler. The most specific class answers, whatever the declaration order, and a status works as a key |
+| `on_error` class-to-response mapping | ErrorHandler's `catch`, each entry adapted to Tiny's handler shape | none; the entry gets a `Tiny::Request`: a route's error is answered at the route, with its own Request, and any other inside RequestClass, as Compose places the entries inside every application middleware. The most specific class answers, whatever the declaration order, and a status works as a key |
 | plugins | a package with `register($app)` using the same hooks | none |
 | the raw escape hatch | `route($path => as_app_object($code), methods => '*')` | none |
 | an OpenAPI document | `PAGI::Routing::OpenAPI->document($compose)`, which reads `route_table` and each route's `meta => { openapi => {...} }` | none: Tiny keeps no generator of its own, so the document follows PAGI::Routing::OpenAPI's rules (an unrestricted `raw` route is a GET, HEAD folds into GET, two routes on one OpenAPI path are an error, an operationId is the method and the route's address, `get_notes`) |
@@ -70,7 +73,8 @@ Written the other way round, `/notes/9` lost its `X-Powered-By`.
 RequestClass comes first, so everything inside it, the ErrorHandler
 included, gets a `Tiny::Request`.
 
-Tiny is 175 code lines; the plugin 13; the application 47.
+Tiny is 150 code lines; the plugin 13; the application 50 (the gut-check
+line counter, `examples/gut-check/README.md`).
 
 ## Try
 

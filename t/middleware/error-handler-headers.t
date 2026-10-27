@@ -159,15 +159,15 @@ subtest "a handler or catch entry answers whatever the exception's headers are" 
     # headers neither change the status nor are diagnosed.
     my @seen;
     my %answerer = (
-        handler => { handler => sub {
-            push @seen, error_context($_[0])->status;
+        'catch by class' => { catch => { 'Local::Unavailable' => sub {
+            push @seen, $_[1]->status;
             response('JSON', { error => 'unavailable' });
-        } },
+        } } },
         catch => { catch => { 503 => sub {
             push @seen, $_[1]->status;
             response('JSON', { error => 'unavailable' });
         } } },
-        'handler returning the default' => { handler => sub { error_context($_[0])->default } },
+        'catch returning the default' => { catch => { 503 => sub { $_[1]->default } } },
     );
     for my $case (
         [ 'a wrong shape',   { a => 1 } ],
@@ -190,10 +190,10 @@ subtest "a handler or catch entry answers whatever the exception's headers are" 
     }
 };
 
-subtest 'a custom handler gets no automatic merge' => sub {
+subtest 'a custom catch entry gets no automatic merge' => sub {
     my ($status, $pairs) = run(
         error   => PAGI::Exception::HTTP->new(503, 'x', headers => [ 'Retry-After' => '30' ]),
-        options => { handler => sub { response('Text', 'custom', status => 503) } },
+        options => { catch => { 503 => sub { response('Text', 'custom', status => 503) } } },
     );
     is($status, 503, 'its answer');
     is(values_of($pairs, 'Retry-After'), [], 'without the exception headers');

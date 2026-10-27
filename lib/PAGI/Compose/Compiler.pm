@@ -34,15 +34,22 @@ sub compile {
         return;
     };
 
-    my $author_app = PAGI::Routing::Middleware->_wrap_descriptors(
-        $description->middleware,
-        $dispatcher,
-    );
-    my $http_app = PAGI::Compose::ResponseGuard->wrap($author_app);
-    # The failsafe renders the 500 and re-raises; the server reports it.
-    $http_app = PAGI::Middleware::ErrorHandler->_new_compose_failsafe(
+    # Starlette's application stack: the configured ErrorHandler's
+    # server-error boundary outside the application middleware, its exception
+    # boundary inside them, around the router. Compose's emergency
+    # ErrorHandler is outermost and server-only; without a configured stock
+    # ErrorHandler, its own exception half is the one around the router.
+    my $failsafe = PAGI::Middleware::ErrorHandler->_new_compose_failsafe(
         _development_resolver => sub { return PAGI::Utils::is_development() },
-    )->wrap($http_app);
+    );
+    my ($configured, $descriptors, $has_subclass) = $class->_split_error_handler($description->middleware);
+    my $around_router = $configured // ($has_subclass ? undef : $failsafe);
+    my $routed = $around_router ? $around_router->_wrap_exceptions($dispatcher) : $dispatcher;
+    my $author_app = PAGI::Routing::Middleware->_wrap_descriptors($descriptors, $routed);
+    my $http_app = PAGI::Compose::ResponseGuard->wrap($author_app);
+    $http_app = $configured->_wrap_server_errors($http_app) if $configured;
+    # The failsafe renders the 500 and re-raises; the server reports it.
+    $http_app = $failsafe->_wrap_server_errors($http_app);
 
     return async sub {
         my ($scope, $receive, $send) = @_;
@@ -57,6 +64,30 @@ sub compile {
         await Future->wrap($returned);
         return;
     };
+}
+
+# Takes the stock ErrorHandler out of Compose's middleware descriptions, so
+# its two halves can be placed (each description resolved once; the
+# composition itself is not changed). Returns (that ErrorHandler or undef,
+# the other descriptions in order, whether a subclass of ErrorHandler is
+# among them). A subclass is not split: its own wrap may matter.
+sub _split_error_handler {
+    my ($class, $descriptors) = @_;
+    my ($configured, $has_subclass, @rest);
+    for my $descriptor (@$descriptors) {
+        my $object = blessed($descriptor) && $descriptor->isa('PAGI::Routing::Middleware')
+            ? $descriptor->_resolve : undef;
+        if (ref($object) eq 'PAGI::Middleware::ErrorHandler') {
+            croak 'compose middleware has more than one ErrorHandler; '
+                . 'put section-local ones on a Router, Mount or Route'
+                if $configured;
+            $configured = $object;
+            next;
+        }
+        $has_subclass = 1 if blessed($object) && $object->isa('PAGI::Middleware::ErrorHandler');
+        push @rest, $object ? PAGI::Routing::Middleware->new($object) : $descriptor;
+    }
+    return ($configured, \@rest, $has_subclass);
 }
 
 sub _prepare_lifespan_scope {

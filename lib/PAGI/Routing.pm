@@ -272,8 +272,15 @@ construction validates it but does not compile it.
 When no child matches, the Router calls C<http_default>, or answers a
 plain-text C<404 Not Found> without one. When a path matches but its method
 does not, it answers the built-in plain-text C<405 Method Not Allowed> with
-one authoritative C<Allow> union; to answer it differently, put a middleware
-around the Router that rewrites 405 responses.
+one authoritative C<Allow> union. When the innermost
+L<PAGI::Middleware::ErrorHandler> around it has C<catch> entries, the Router
+raises the 404 (when there is no
+C<http_default>) and the 405 instead, as HTTP errors -- the 405 carrying
+C<Allow> -- as Starlette's router raises C<HTTPException> inside an
+application: to answer them differently, register a C<catch> entry for the
+status or for C<PAGI::Exception::HTTP> (or put a middleware around the Router
+that rewrites the responses). With no entry for them, they are answered with
+these same plain responses, byte for byte.
 
 =head2 route, websocket, sse
 
@@ -291,6 +298,10 @@ around the Router that rewrites 405 responses.
 All leaves accept C<name>, C<desc>, C<meta> (see L</meta>), C<middleware>,
 C<constraints>, and C<declaration_package>.
 C<methods> is HTTP-only: one token, an arrayref, or the explicit string C<*>.
+Without C<methods>, an HTTP route answers GET (and HEAD), as Starlette's
+C<Route> does, so C<route('/notes' =E<gt> \&list)> does not take the
+C<POST> of a C<methods =E<gt> ['POST']> route on the same path; only
+C<< methods => '*' >> answers every method.
 For an app object, an explicit finite method set still consults
 C<allowed_methods> once during immutable Route construction and must be a
 restriction of its normalized snapshot. Without explicit

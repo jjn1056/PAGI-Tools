@@ -65,8 +65,20 @@ subtest 'from_data dies without hashref' => sub {
 # new($scope) — scope-based constructor
 # ===================
 
-subtest 'class and factory construct separate facades over raw scope data' => sub {
+subtest 'a scope without a stash dies, naming the middleware' => sub {
     my $scope = { type => 'http' };
+    like dies { PAGI::Stash->new($scope) },
+        qr/\APAGI::Stash: this scope has no stash; stack middleware\('Stash'\) above this layer at \Q${\ __FILE__}\E/,
+        'from the caller\'s line';
+    ok !exists $scope->{'pagi.stash'}, 'and creates none';
+    my $fake_req = bless { _scope => $scope }, 'FakeReqForStash';
+    like dies { PAGI::Stash->new($fake_req) }, qr/this scope has no stash/, 'an object\'s scope too';
+    like dies { PAGI::Stash->new({ type => 'http', 'pagi.stash' => 'nope' }) }, qr/this scope has no stash/,
+        'a stash that is not a hash is none';
+};
+
+subtest 'class and factory construct separate facades over raw scope data' => sub {
+    my $scope = { type => 'http', 'pagi.stash' => {} };
     my $class_stash = PAGI::Stash->new($scope);
     my $factory = Local::Stash::Named->can('stash');
     ok($factory, 'named stash export is callable') or return;
@@ -75,7 +87,7 @@ subtest 'class and factory construct separate facades over raw scope data' => su
     is($factory_stash->get('user'), 'bob', 'factory sees class mutation');
     $factory_stash->set(role => 'admin');
     is($class_stash->get('role'), 'admin', 'class sees factory mutation');
-    is($scope->{'pagi.stash'}{user}, 'bob', 'stash is created lazily in scope');
+    is($scope->{'pagi.stash'}{user}, 'bob', 'both write the scope\'s stash');
 };
 
 subtest 'new from scope with existing pagi.stash' => sub {
@@ -85,7 +97,7 @@ subtest 'new from scope with existing pagi.stash' => sub {
 };
 
 subtest 'new from object with ->scope' => sub {
-    my $scope = { type => 'http' };
+    my $scope = { type => 'http', 'pagi.stash' => {} };
     my $fake_req = bless { _scope => $scope }, 'FakeReqForStash';
     my $stash = PAGI::Stash->new($fake_req);
     $stash->set(x => 42);
@@ -304,13 +316,12 @@ subtest 'data mutations visible through methods' => sub {
     is($stash->data->{y}, 99, 'set visible via data');
 };
 
-subtest 'data creates pagi.stash lazily in scope' => sub {
-    my $scope = { type => 'http' };
+subtest 'data is the scope\'s own pagi.stash' => sub {
+    my $scope = { type => 'http', 'pagi.stash' => {} };
     my $stash = PAGI::Stash->new($scope);
     my $raw = $stash->data;
     is(ref($raw), 'HASH', 'data returns hashref');
-    ok(exists $scope->{'pagi.stash'}, 'pagi.stash created in scope');
-    is($scope->{'pagi.stash'}, $raw, 'same reference');
+    ok($scope->{'pagi.stash'} == $raw, 'same reference');
 };
 
 # ===================
@@ -318,7 +329,7 @@ subtest 'data creates pagi.stash lazily in scope' => sub {
 # ===================
 
 subtest 'multiple Stash instances share same scope data' => sub {
-    my $scope = { type => 'http' };
+    my $scope = { type => 'http', 'pagi.stash' => {} };
     my $s1 = PAGI::Stash->new($scope);
     my $s2 = PAGI::Stash->new($scope);
 
@@ -327,8 +338,8 @@ subtest 'multiple Stash instances share same scope data' => sub {
 };
 
 subtest 'different scopes are independent' => sub {
-    my $scope1 = { type => 'http' };
-    my $scope2 = { type => 'http' };
+    my $scope1 = { type => 'http', 'pagi.stash' => {} };
+    my $scope2 = { type => 'http', 'pagi.stash' => {} };
     my $s1 = PAGI::Stash->new($scope1);
     my $s2 = PAGI::Stash->new($scope2);
 

@@ -8,7 +8,9 @@
 # middleware with call_next, and an OpenAPI document. Plus the raw PAGI
 # escape hatch, which none of those have.
 #
-# Run:  pagi-server --app examples/framework-on-tools/app.pl --port 5000
+# Tiny stands in for a framework installed from CPAN, so its lib/ goes on
+# the path, not into this file:
+# Run:  pagi-server -I examples/framework-on-tools/lib --app examples/framework-on-tools/app.pl --port 5000
 # Try:  curl -i localhost:5000/notes
 #       curl -i -X POST localhost:5000/notes -H 'Content-Type: application/json' -d '{"text":"buy milk"}'
 #       curl -i localhost:5000/notes/1
@@ -20,8 +22,6 @@
 #       curl -s localhost:5000/openapi.json | python3 -m json.tool
 
 use v5.40;
-use File::Basename qw(dirname);
-use lib dirname(__FILE__) . '/lib';
 use Future::AsyncAwait;
 use Types::Standard qw(Int);
 use Tiny;
@@ -56,7 +56,9 @@ on_error 'Note::NotFound' => sub ($req, $exc) {
 };
 
 sub find_note ($req, $id) {
-    return $req->svc('notes')->{by_id}{$id} // die Note::NotFound->new($id);
+    my $note = $req->svc('notes')->{by_id}{$id};
+    die Note::NotFound->new($id) unless $note;
+    return $note;
 }
 
 # Handlers return plain values: a hashref or arrayref is JSON, a string is HTML.

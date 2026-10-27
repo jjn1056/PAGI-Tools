@@ -129,7 +129,7 @@ compose(
         mount('/notes',
             routes => [
                 route('/'     => \&list,   name => 'notes'),
-                route('/'     => \&create, methods => 'POST'),
+                route('/'     => \&create, methods => ['POST']),
                 route('/{id}' => \&show,   name => 'note', constraints => { id => Int }),
             ],
             middleware => [

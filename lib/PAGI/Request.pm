@@ -14,6 +14,7 @@ use Scalar::Util qw(blessed);
 use PAGI::Request::MultiPartHandler;
 use PAGI::Request::Upload;
 use PAGI::ContentNegotiation;
+use PAGI::Exception::HTTP ();
 use PAGI::Exception::RequestBody;
 use PAGI::Request::BodyStream;
 use PAGI::Request::_BodyInput ();
@@ -114,7 +115,7 @@ sub host {
 # Content-Type shortcut
 sub content_type {
     my ($self, @opts) = @_;
-    return $self->headers->content_type(@opts) // '';
+    return $self->_client_header('content_type', 'Content-Type', @opts) // '';
 }
 
 # The Content-Type charset parameter, as sent (undef when there is none)
@@ -130,11 +131,10 @@ sub content_length {
     return $self->header('content-length');
 }
 
-# Private cache: the source of truth for header lookups (built once per request).
+# Private cache: the source of truth for header lookups (built once per object).
 sub _header_snapshot {
     my $self = shift;
-    return $self->{scope}{'pagi.request.headers'}
-        //= PAGI::Headers->new($self->{scope}{headers} // []);
+    return $self->{_headers} //= PAGI::Headers->new($self->{scope}{headers} // []);
 }
 
 # Public: the cached PAGI::Headers object used by all Request header lookups.
@@ -146,7 +146,7 @@ sub header     { return $_[0]->_header_snapshot->get($_[1]) }
 # All values for a header
 sub header_all { return $_[0]->_header_snapshot->get_all($_[1]) }
 
-# Query params as Hash::MultiValue (cached in scope)
+# Query params as Hash::MultiValue (cached on the object)
 # Options: strict => 1 (croak on invalid UTF-8), raw => 1 (skip UTF-8 decoding)
 sub query_params {
     my ($self, %opts) = @_;
@@ -154,8 +154,8 @@ sub query_params {
     my $raw    = delete $opts{raw}    // 0;
     croak("Unknown options to query_params: " . join(', ', keys %opts)) if %opts;
 
-    my $cache_key = $raw ? 'pagi.request.query.raw' : ($strict ? 'pagi.request.query.strict' : 'pagi.request.query');
-    return $self->{scope}{$cache_key} if $self->{scope}{$cache_key};
+    my $cache_key = $raw ? '_query_raw' : ($strict ? '_query_strict' : '_query');
+    return $self->{$cache_key} if $self->{$cache_key};
 
     my $qs = $self->query_string;
     my @pairs;
@@ -177,8 +177,8 @@ sub query_params {
         push @pairs, $key_final, $val_final;
     }
 
-    $self->{scope}{$cache_key} = Hash::MultiValue->new(@pairs);
-    return $self->{scope}{$cache_key};
+    $self->{$cache_key} = Hash::MultiValue->new(@pairs);
+    return $self->{$cache_key};
 }
 
 # Raw query params (no UTF-8 decoding)
@@ -199,14 +199,14 @@ sub raw_query_param {
     return $self->query_param($name, raw => 1);
 }
 
-# All cookies as hashref (cached in scope)
+# All cookies as hashref (cached on the object)
 sub cookies {
     my $self = shift;
-    return $self->{scope}{'pagi.request.cookies'} if exists $self->{scope}{'pagi.request.cookies'};
+    return $self->{_cookies} if exists $self->{_cookies};
 
     my $cookie_header = $self->header('cookie') // '';
-    $self->{scope}{'pagi.request.cookies'} = crush_cookie($cookie_header);
-    return $self->{scope}{'pagi.request.cookies'};
+    $self->{_cookies} = crush_cookie($cookie_header);
+    return $self->{_cookies};
 }
 
 # Single cookie value
@@ -279,13 +279,27 @@ sub preferred_type {
 # Extract Bearer token from Authorization header
 sub bearer_token {
     my ($self, @opts) = @_;
-    return $self->headers->authorization_bearer(@opts);
+    return $self->_client_header('authorization_bearer', 'Authorization', @opts);
 }
 
 # Extract Basic auth credentials
 sub basic_auth {
     my ($self, @opts) = @_;
-    return $self->headers->authorization_basic(@opts);
+    return $self->_client_header('authorization_basic', 'Authorization', @opts);
+}
+
+# Reads one of the client's header fields through PAGI::Headers' $method.
+# What raise_on_error refuses -- a duplicate or malformed field -- is the
+# client's error, so it is an HTTP 400, as a body the client got wrong is.
+# The options are checked first, so an option error stays a croak.
+sub _client_header {
+    my ($self, $method, $field, @opts) = @_;
+    my $raise = PAGI::Headers::_read_options($method, @opts);
+    return $self->headers->$method(@opts) unless $raise;
+    my @value;
+    return wantarray ? @value : $value[0]
+        if eval { @value = $self->headers->$method(@opts); 1 };
+    PAGI::Exception::HTTP->throw(400, "The $field header could not be parsed.");
 }
 
 # Path parameters - captured from URL path by router
@@ -351,8 +365,8 @@ sub body_stream {
     my ($self, %opts) = @_;
     my $scope_type = $self->_require_body_scope;
 
-    croak "Body already consumed; streaming not available" if $self->{scope}{'pagi.request.body.read'};
-    croak "Body streaming already started" if $self->{scope}{'pagi.request.body.stream.created'};
+    croak "Body already consumed; streaming not available" if $self->{_body_read};
+    croak "Body streaming already started" if $self->{_body_stream_created};
 
     my $max_bytes = $opts{max_bytes};
     my $limit_name = defined $max_bytes ? 'max_bytes' : undef;
@@ -376,7 +390,7 @@ sub body_stream {
         max_line_length => $opts{max_line_length},
         _scope_type => $scope_type,
     );
-    $self->{scope}{'pagi.request.body.stream.created'} = 1;
+    $self->{_body_stream_created} = 1;
     return $stream;
 }
 
@@ -385,8 +399,8 @@ sub multipart_stream {
     my ($self, %opts) = @_;
     my $scope_type = $self->_require_body_scope;
     croak "Body already consumed; multipart_stream() not available"
-        if $self->{scope}{'pagi.request.body.read'}
-        || $self->{scope}{'pagi.request.body.stream.created'};
+        if $self->{_body_read}
+        || $self->{_body_stream_created};
     croak "multipart_stream() requires a multipart/form-data request" unless $self->is_multipart;
 
     my $parameters = $self->headers->content_type_parameters;
@@ -395,7 +409,7 @@ sub multipart_stream {
         reason => 'invalid_multipart', message => 'No boundary found in Content-Type',
     ) unless defined $boundary && length $boundary;
 
-    $self->{scope}{'pagi.request.body.stream.created'} = 1;  # latch: lock out buffered readers
+    $self->{_body_stream_created} = 1;  # latch: lock out buffered readers
 
     require PAGI::Request::MultipartStream;
     return PAGI::Request::MultipartStream->new(
@@ -407,25 +421,25 @@ sub multipart_stream {
     );
 }
 
-# Read raw body bytes (async, cached in scope)
+# Read raw body bytes (async; kept on this object, never in the scope)
 async sub body {
     my $self = shift;
     my $scope_type = $self->_require_body_scope;
 
     croak "Body streaming already started; buffered helpers unavailable"
-        if $self->{scope}{'pagi.request.body.stream.created'};
+        if $self->{_body_stream_created};
 
     # Return cached body if already read. A multipart parse streams the body
     # to its parts and keeps no copy of it.
-    if ($self->{scope}{'pagi.request.body.read'}) {
+    if ($self->{_body_read}) {
         croak 'The raw body of a multipart request is not kept; read it with form_params and uploads'
-            unless exists $self->{scope}{'pagi.request.body'};
-        return $self->{scope}{'pagi.request.body'};
+            unless exists $self->{_body};
+        return $self->{_body};
     }
 
     # A prior call already hit a mid-body disconnect: fail identically instead
     # of re-awaiting a receive that will never resolve normally again.
-    if ($self->{scope}{'pagi.request.body.truncated'}) {
+    if ($self->{_body_truncated}) {
         my $connection = $self->connection;
         my $reason = $connection ? $connection->disconnect_reason : undef;
         $reason //= 'disconnect';
@@ -441,7 +455,7 @@ async sub body {
         my $kind = PAGI::Request::_BodyInput::event_kind($scope_type, $message);
         if ($kind eq 'disconnect') {
             last unless length $body;  # no bytes ever arrived -- an empty body, not a truncation
-            $self->{scope}{'pagi.request.body.truncated'} = 1;
+            $self->{_body_truncated} = 1;
             my $connection = $self->connection;
             my $reason = $connection ? $connection->disconnect_reason : undef;
             $reason //= 'disconnect';
@@ -452,8 +466,8 @@ async sub body {
         last unless $message->{more};
     }
 
-    $self->{scope}{'pagi.request.body'} = $body;
-    $self->{scope}{'pagi.request.body.read'} = 1;
+    $self->{_body} = $body;
+    $self->{_body_read} = 1;
     return $body;
 }
 
@@ -481,7 +495,7 @@ async sub json {
     return $data;
 }
 
-# Parse URL-encoded form body (async, returns Hash::MultiValue, cached in scope)
+# Parse URL-encoded form body (async, returns Hash::MultiValue, kept on this Request)
 # Options: strict => 1 (croak on invalid UTF-8), raw => 1 (skip UTF-8 decoding)
 async sub form_params {
     my ($self, %opts) = @_;
@@ -496,16 +510,16 @@ async sub form_params {
     }
     croak("Unknown options to form_params: " . join(', ', keys %opts)) if %opts;
 
-    my $cache_key = $raw ? 'pagi.request.form.raw' : ($strict ? 'pagi.request.form.strict' : 'pagi.request.form');
+    my $cache_key = $raw ? '_form_raw' : ($strict ? '_form_strict' : '_form');
 
     # Return cached if available
-    return $self->{scope}{$cache_key} if $self->{scope}{$cache_key};
+    return $self->{$cache_key} if $self->{$cache_key};
 
     # For multipart, delegate to uploads handling
     if ($self->is_multipart) {
         # Multipart always parses to default cache, then copy
         my $form = await $self->_parse_multipart_form(%multipart_opts);
-        $self->{scope}{$cache_key} = $form;
+        $self->{$cache_key} = $form;
         return $form;
     }
 
@@ -530,8 +544,8 @@ async sub form_params {
         push @pairs, $key_final, $val_final;
     }
 
-    $self->{scope}{$cache_key} = Hash::MultiValue->new(@pairs);
-    return $self->{scope}{$cache_key};
+    $self->{$cache_key} = Hash::MultiValue->new(@pairs);
+    return $self->{$cache_key};
 }
 
 # Singular accessor for form params
@@ -553,17 +567,17 @@ async sub raw_form_param {
     return await $self->form_param($name, raw => 1);
 }
 
-# Parse multipart form (internal, cached in scope)
+# Parse multipart form (internal, kept on this Request)
 async sub _parse_multipart_form {
     my ($self, %opts) = @_;
     my $scope_type = $self->_require_body_scope;
 
     croak "Body streaming already started; buffered helpers unavailable"
-        if $self->{scope}{'pagi.request.body.stream.created'};
+        if $self->{_body_stream_created};
 
     # Already parsed?
-    return $self->{scope}{'pagi.request.form'}
-        if $self->{scope}{'pagi.request.form'} && $self->{scope}{'pagi.request.uploads'};
+    return $self->{_form}
+        if $self->{_form} && $self->{_uploads};
 
     my $parameters = $self->headers->content_type_parameters;
     my $boundary = defined($parameters) ? $parameters->{boundary} : undef;
@@ -585,28 +599,28 @@ async sub _parse_multipart_form {
 
     my ($form, $uploads) = await $handler->parse;
 
-    $self->{scope}{'pagi.request.form'} = $form;
-    $self->{scope}{'pagi.request.uploads'} = $uploads;
-    $self->{scope}{'pagi.request.body.read'} = 1;  # Body has been consumed
+    $self->{_form} = $form;
+    $self->{_uploads} = $uploads;
+    $self->{_body_read} = 1;  # Body has been consumed
 
     return $form;
 }
 
-# Get all uploads as Hash::MultiValue (cached in scope)
+# Get all uploads as Hash::MultiValue (kept on this Request)
 async sub uploads {
     my ($self, %opts) = @_;
     $self->_require_body_scope;
 
-    return $self->{scope}{'pagi.request.uploads'} if $self->{scope}{'pagi.request.uploads'};
+    return $self->{_uploads} if $self->{_uploads};
 
     if ($self->is_multipart) {
         await $self->_parse_multipart_form(%opts);
-        return $self->{scope}{'pagi.request.uploads'};
+        return $self->{_uploads};
     }
 
     # Not multipart - return empty
-    $self->{scope}{'pagi.request.uploads'} = Hash::MultiValue->new();
-    return $self->{scope}{'pagi.request.uploads'};
+    $self->{_uploads} = Hash::MultiValue->new();
+    return $self->{_uploads};
 }
 
 # Get single upload by field name
@@ -675,7 +689,7 @@ PAGI::Request - Convenience wrapper for PAGI request scope
         my $token = $req->bearer_token;
         my ($user, $pass) = $req->basic_auth;
 
-        # Per-request shared state
+        # Per-request shared state (with middleware('Stash') above)
         use PAGI::Stash;
         my $stash = PAGI::Stash->new($req);
         $stash->set(user => $current_user);
@@ -779,7 +793,10 @@ validated inbound Host authority.
 
 The normalized media type from one valid Content-Type field, without
 parameters. Returns C<''> when the field is absent, duplicated, or malformed.
-Accepts C<raise_on_error =E<gt> 1> to report duplicate or malformed input.
+With C<raise_on_error =E<gt> 1> a duplicate or malformed field throws a
+L<PAGI::Exception::HTTP> 400, C<The Content-Type header could not be parsed.>:
+the client sent it, so it is the client's error, which a Compose application
+answers by itself (see L</AUTH HELPERS>).
 Use C<< $request->header('Content-Type') >> for the raw last-value lookup;
 parsing does not alter the stored field.
 
@@ -824,8 +841,8 @@ Get all values for a header.
 
 Returns the exact cached L<PAGI::Headers> object used by C<header>,
 C<header_all>, and header-derived accessors. Deliberate mutation through this
-object therefore affects later Request, WebSocket, or SSE header reads on the
-same scope. All three helpers share C<< $scope->{'pagi.request.headers'} >>.
+object therefore affects later header reads through this Request, and no
+other object: each Request parses the scope's headers itself.
 Call C<< $req->headers->clone >> when an isolated copy is required.
 
 =head1 QUERY PARAMETERS
@@ -1161,6 +1178,8 @@ L<PAGI::Exception::RequestBody> (400); see L</BAD REQUEST BODIES>.
     my $form = await $req->form_params(raw => 1);     # Skip UTF-8 decoding
 
 Parse URL-encoded or multipart form data, returning a L<Hash::MultiValue>.
+A field sent more than once keeps every value: C<get> returns the last,
+C<get_all> all of them, in the order sent.
 Multipart boundary parameters use the same quoted parameter parsing as
 C<multipart_stream>, subject to the parser's boundary character restriction
 described above. Part C<Content-Disposition> parameters handle quoted escapes,
@@ -1346,8 +1365,10 @@ integration truly requires the server's raw transport handle.
 Returns an RFC 6750 Bearer token only when exactly one Authorization field is
 present. Missing fields and another identifiable scheme return C<undef>.
 Malformed Bearer credentials, including the former permissive whitespace and
-partial-token forms, return C<undef> by default or raise with
-C<raise_on_error =E<gt> 1>. Unknown options are errors.
+partial-token forms, and duplicate fields, return C<undef> by default; with
+C<raise_on_error =E<gt> 1> they throw a L<PAGI::Exception::HTTP> 400, C<The
+Authorization header could not be parsed.> Unknown options are errors (a
+croak, not a 400).
 
 =head2 basic_auth
 
@@ -1357,8 +1378,16 @@ Returns Basic C<(username, password)> bytes in list context only when exactly
 one Authorization field contains a valid conventional padded Base64 credential.
 It splits at the first colon and does not decode character encodings or verify
 credentials. Missing, another scheme, duplicates, and malformed input return
-C<(undef, undef)> by default; C<raise_on_error =E<gt> 1> raises for duplicates
-or malformed Basic credentials. Unknown options are errors.
+C<(undef, undef)> by default; with C<raise_on_error =E<gt> 1> duplicates and
+malformed Basic credentials throw a L<PAGI::Exception::HTTP> 400, C<The
+Authorization header could not be parsed.> Unknown options are errors (a
+croak, not a 400).
+
+The 400 is the client's error, not the application's: a Compose application
+answers it by itself, at a route or in an authentication backend (see
+L<PAGI::Middleware::Authentication>), and does not log it. Its message never
+carries the credential. The L<PAGI::Headers> readers these call raise plain
+errors instead, since they parse any header list, not only a request's.
 
 =head2 scope
 
@@ -1391,7 +1420,8 @@ against the complete native triplet:
 =head2 Per-Request Shared State
 
 See L<PAGI::Stash> for per-request shared state between middleware
-and handlers. Construct from a Request object or scope:
+and handlers; L<PAGI::Middleware::Stash>, stacked above them, provides it.
+Construct from a Request object or scope:
 
     use PAGI::Stash;
     my $stash = PAGI::Stash->new($req);
@@ -1442,14 +1472,17 @@ C<extends>). The contract:
 
 =over 4
 
-=item * B<State.> The object is a blessed hash with two PAGI-Tools fields,
-C<scope> and C<receive>. A subclass adds fields under any other name.
+=item * B<State.> The object is a blessed hash. PAGI-Tools uses the fields
+C<scope> and C<receive> and fields whose names start with C<_>. A subclass
+adds fields under any other name.
 
-=item * B<Caching is in the scope.> What a Request parses is kept in the
-scope under C<pagi.request.*>: the headers, query, cookies, form and uploads,
-and the latches that record the body was read or streamed. Every Request
-object over the same scope shares them, so a second object is cheap and sees
-the body the first one read; a new scope starts fresh.
+=item * B<What is parsed is kept on the object.> A Request keeps the
+headers, query, cookies, body, form and uploads it parses, and the latches
+that record the body was read or streamed, on itself; it only reads the
+scope and writes nothing to it. Two Request objects over one scope each
+parse for themselves, and since the body arrives through C<$receive> once, a
+second object cannot read a body the first one read: pass the one Request on,
+as L<PAGI::Endpoint> passes its builder's Request to the handler.
 
 =item * B<Overridable methods.> Public methods may be overridden; the ones
 other methods call are:
@@ -1482,14 +1515,18 @@ the scope in place (C<< $scope->{path_params} = {...} >>, merged or replaced
 as its routing means), relies on the stock C<path_params>, which reads the
 scope live, and builds a new Request only when the scope is new. It does not
 cache path parameters on the object or write the fields above, and it does
-not make a shallow copy of the scope per match: copied scalars such as the
-body latch would split between the copies (L<PAGI::Building>, "The footgun:
-scalars do not propagate").
+not make a shallow copy of the scope per match: a value written into one
+copy is not in the others (L<PAGI::Building>, "The footgun: scalars do not
+propagate").
 
 When something hands a route a copy of the scope (a per-route middleware
-that rewrites it, say), the copy is a new scope and needs a new Request. A
-framework that keeps one Request in its context compares
-C<< $scope != $ctx->request->scope >> and rebuilds it when they differ.
+that rewrites it, say), the copy is a new scope and needs a new Request,
+since a Request reads headers and the query from the scope it was built
+over. A framework that keeps one Request in its context compares
+C<< $scope != $ctx->request->scope >> and rebuilds it when they differ. The
+rebuilt Request cannot read a body the old one already read -- the body
+arrived once, and the old Request holds it -- so read the body only where
+the scope is final: in the handler.
 
 This is how Starlette works: its C<Request.path_params> reads
 C<scope["path_params"]>, and each route match updates the scope in place.

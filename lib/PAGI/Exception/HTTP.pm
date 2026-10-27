@@ -68,9 +68,13 @@ This class carries a status and an optional client-safe message, and nothing
 about how the error looks. L<PAGI::Middleware::ErrorHandler>, which every
 L<PAGI::Compose> application has at its root, answers it with that status:
 its stock page shows the message for a 4xx and the reason phrase for a 5xx,
-since server errors carry no client text; an ErrorHandler C<handler> decides
-otherwise (see L<PAGI::ErrorContext>). A 4xx is a handled outcome; a 5xx is
-re-raised to the server after the response, as any server error is.
+since server errors carry no client text; an ErrorHandler C<catch> entry for
+this class or for the status answers it otherwise. A thrown HTTP error is
+handled -- by an entry, or by the built-in answer -- and below 500 it is not
+re-raised, as Starlette's C<ExceptionMiddleware> handles an C<HTTPException>.
+From 500 up it is answered the same way and then re-raised, so the server
+logs it (Starlette logs nothing for an C<HTTPException(500)>). An ErrorHandler C<handler> answers only unhandled errors
+and never sees one.
 
 There are no per-status subclasses: the status is an argument.
 

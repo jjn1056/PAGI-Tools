@@ -107,8 +107,8 @@ sub stats ($request) {
 compose(
     middleware => [middleware('RequestClass', class => 'NotesApp::Request')],
     routes => [
-        route('/notes' => \&list_notes, methods => 'GET'),
-        route('/notes' => \&add_note,   methods => 'POST'),
+        route('/notes' => \&list_notes, methods => ['GET']),
+        route('/notes' => \&add_note,   methods => ['POST']),
         route('/notes/{id}' => endpoint('NotesApp::Note'), name => 'note', constraints => { id => Int }),
         mount('/admin', routes => [
             route('/stats' => \&stats),

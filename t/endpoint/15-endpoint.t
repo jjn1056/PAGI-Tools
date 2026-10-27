@@ -2,6 +2,7 @@
 use strict;
 use warnings;
 use Test2::V0;
+use PAGI::Utils ();
 use File::Temp qw(tempdir);
 use Scalar::Util qw(refaddr);
 
@@ -284,7 +285,24 @@ package Local::AsyncBuilt {
     }
 }
 
-# Its builder reads the body, so the handler gets it from the cache.
+# Its builder keeps the Request it was given, for the handler to compare
+# with its own.
+package Local::SameRequest {
+    use parent 'PAGI::Endpoint::HTTP';
+    use Scalar::Util qw(refaddr);
+
+    sub BUILD_APP {
+        my ($class, %args) = @_;
+        return sub { my ($request) = @_; return $class->new(%args, built_with => $request) };
+    }
+
+    sub post {
+        my ($self, $request) = @_;
+        return PAGI::Response::Text->new(
+            refaddr($self->{built_with}) == refaddr($request) ? 'same Request' : 'a different Request');
+    }
+}
+
 package Local::BodyPeeker {
     use parent 'PAGI::Endpoint::HTTP';
     use Future::AsyncAwait;
@@ -576,8 +594,8 @@ subtest 'WebSocket and SSE classes without BUILD_APP get one object per connecti
 subtest 'the default path builds no Request of its own' => sub {
     my $made = 0;
     no warnings 'redefine';
-    my $original = \&PAGI::Request::_Factory::request_for_scope;
-    local *PAGI::Request::_Factory::request_for_scope = sub { $made++; goto &$original };
+    my $original = \&PAGI::Utils::request_for_scope;
+    local *PAGI::Utils::request_for_scope = sub { $made++; goto &$original };
     my $client = PAGI::Test::Client->new(app => compose(routes => [
         route('/plain' => endpoint('Local::Greeter')),
         route('/built' => endpoint('Local::Guarded', greeting => 'hi')),
@@ -586,7 +604,7 @@ subtest 'the default path builds no Request of its own' => sub {
     is($made, 1, 'no BUILD_APP: one Request, the endpoint\'s own');
     $made = 0;
     $client->get('/built', headers => { 'X-Token' => 'yes' });
-    is($made, 2, 'a builder: the builder\'s and the endpoint\'s, as before');
+    is($made, 1, 'a builder: one Request, the builder\'s, which the endpoint answers with');
 };
 
 subtest 'a class that cannot be loaded' => sub {
@@ -769,12 +787,47 @@ subtest 'a builder may be async' => sub {
     is([$res->status, $res->text], [401, 'not yet'], 'or a refusal');
 
     is($client->post('/peek', json => { text => 'milk' })->text, 'milk/milk',
-        'a builder that read the body leaves the handler json from the cache');
+        'a builder that read the body leaves the handler json: the same Request');
     my $streamed;
     like(warnings { $streamed = $client->put('/peek', json => { text => 'milk' }) },
         [qr/\Aexception after response completed: Body already consumed; streaming not available/],
         'but not body_stream');
     is($streamed->status, 500, '... a 500');
+};
+
+subtest "the handler gets the Request its builder was given" => sub {
+    my $client = PAGI::Test::Client->new(app => compose(routes => [
+        route('/same' => endpoint('Local::SameRequest')),
+    ]));
+    is($client->post('/same', body => '')->text, 'same Request', 'one Request per request');
+};
+
+# A subclass whose built object wraps its own to_app: the hand-off of the
+# builder's Request must not skip it.
+package Local::WrappedSameRequest {
+    use parent -norequire, 'Local::SameRequest';
+    use Future::AsyncAwait;
+    our $wrapped = 0;
+    sub to_app {
+        my ($self) = @_;
+        return $self->SUPER::to_app unless ref $self;
+        my $inner = $self->SUPER::to_app;
+        return async sub { $wrapped++; await $inner->(@_) };
+    }
+}
+
+subtest "the builder's Request reaches the handler through the endpoint's own to_app" => sub {
+    my $app = endpoint('Local::SameRequest')->to_app;
+    like(dies { $app->({ type => 'websocket', path => '/', headers => [] },
+            sub { die 'unexpected receive' }, sub { die 'unexpected send' })->get },
+        qr/PAGI::Endpoint::HTTP requires HTTP scope; received 'websocket'/,
+        'a websocket scope is refused, as without a builder');
+    local $Local::WrappedSameRequest::wrapped = 0;
+    my $client = PAGI::Test::Client->new(app => compose(routes => [
+        route('/wrapped' => endpoint('Local::WrappedSameRequest')),
+    ]));
+    is($client->post('/wrapped', body => '')->text, 'same Request', 'still the same Request');
+    is($Local::WrappedSameRequest::wrapped, 1, "and the built object's to_app ran");
 };
 
 subtest 'a builder that fails answers that request with a 500' => sub {

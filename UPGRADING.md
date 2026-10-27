@@ -19,22 +19,26 @@ in [UPGRADING-REFERENCE.md](UPGRADING-REFERENCE.md).
 | Handlers receive a Context (`$ctx`) | handlers receive the `PAGI::Request`, `PAGI::WebSocket` or `PAGI::SSE` ([details](UPGRADING-REFERENCE.md#breaking-replace-the-pagi-context-family-with-the-protocol-owner)) |
 | `$ctx->json`/`text`/`html`/`redirect`, `$request->response`, the mutable Response builder | return `response('JSON', ...)`, `response('Text', ...)`, ... ([details](UPGRADING-REFERENCE.md#breaking-choose-a-concrete-response-class)) |
 | `$ctx->stash`, `session`, `state`, `csrf_verify`, `on_drain` | `stash($request)`, `session($request)`, `app_state($request)`, `csrf($request)`, `transport($request)` ([details](UPGRADING-REFERENCE.md#import-optional-capabilities-from-their-owners)) |
+| `stash($request)` created the stash on first use | it dies without one: stack `middleware('Stash')` above every layer that uses the stash (PAGI::Middleware::Stash) |
 | App::Router handlers as native `($scope, $receive, $send)` apps | Route CODE gets one Request; wrap natives with `as_app_object` ([details](UPGRADING-REFERENCE.md#migrate-app-router-declarations)) |
 | `PAGI::App::NotFound`, `PAGI::App::Redirect` | `PAGI::Pages` `not_found`, `redirect` ([details](UPGRADING-REFERENCE.md#pages-replaces-the-stock-response-applications)) |
 | `Test::SSE`/`Test::WebSocket`: an app that died in an unfinished refusal had the detail "refusal started but never completed" | the error's first line, as for any failure, and as PAGI-Server records it ([details](UPGRADING-REFERENCE.md#running-against-pagi-server-0002007)) |
 | `Test::WebSocket`: a dying app's disconnect detail was the whole exception | its first line without " at FILE line N", as `Test::SSE` and PAGI-Server record it ([details](UPGRADING-REFERENCE.md#running-against-pagi-server-0002007)) |
 | `Test::SSE`/`Test::WebSocket` `is_closed` true only after the test's `close` (or, for WebSocket, the app's `websocket.close`) | also true when the app returns, dies or refuses; sent events stay readable ([details](UPGRADING-REFERENCE.md#running-against-pagi-server-0002007)) |
 | `Test::Client`: an HTTP handler waiting on its own event loop (an IO::Async timer) completed without setup | bind Future::IO to that loop in the test: `use Future::IO::Impl::IOAsync`; then WebSocket, SSE and lifespan waits run it too (PAGI::Test::Client, "Testing an application that commits to an event loop") |
-| ErrorHandler `content_type`; errors swallowed after start | a Request-handler `handler` reading `error_context($request)`; 5xx re-raised to the server ([details](UPGRADING-REFERENCE.md#breaking-errorhandler-re-raises-server-errors)) |
+| `Test::Client`: `form`/`query` values sent each character as one byte, so a test passed pre-encoded UTF-8 (`"h\xc3\xa9"`) to get the right bytes | pass characters (`"h\x{e9}"`); they are sent UTF-8 percent-encoded, as the path and `json` are (PAGI::Test::Client, "query", "form") |
+| `Test::Client`: a receive after the whole request body answered `http.disconnect` at once, so a second read of a consumed body read `''` | it waits until the response is complete, as a server does; a second read dies after 5 seconds naming it -- pass the one Request on (PAGI::Test::Client, "HTTP METHODS") |
+| ErrorHandler `content_type`; errors swallowed after start | `catch` entries for the errors the app expects, a `handler` reading `error_context($request)` for the rest; an unhandled error re-raised to the server; in Compose, RequestId, AccessLog and response-header middleware that must cover the 500 wrap the compiled app ([details](UPGRADING-REFERENCE.md#breaking-errorhandler-re-raises-server-errors)) |
 | an unknown middleware option | now dies; check spelling and renamed options (`invalid` → `refuse`) |
 | Session `secret`, `cookie_name`, `cookie_options`; `State::Bearer` | `state => session_state('Cookie', ...)`; no secret ([details](UPGRADING-REFERENCE.md#breaking-the-session-cookie-is-configured-on-statecookie-not-on-the-middleware)) |
-| CSRF `enforce => 'header'` / `enforce => 'app'` | the default / remove it: the middleware reads the form's `csrf_token` field; `enforce` now dies ([details](UPGRADING-REFERENCE.md#breaking-csrf-enforce-is-replaced-by-refuse)) |
+| CSRF `enforce => 'header'` / `enforce => 'app'` | the default / remove it: `form_field => 'csrf_token'`, and the middleware checks each form's field; `enforce` now dies ([details](UPGRADING-REFERENCE.md#breaking-csrf-enforce-is-replaced-by-refuse)) |
 | CSRF `secret`; its `HttpOnly` cookie | remove `secret` (tokens are random; passing it dies); `httponly => 1` keeps the flag; `session => 1` binds the token to the session ([details](UPGRADING-REFERENCE.md#breaking-csrf-secret-removed-cookie-readable-origin-checked)) |
 | cross-origin unsafe requests through CSRF | refused; list legitimate callers in `trusted_origins` ([details](UPGRADING-REFERENCE.md#breaking-csrf-secret-removed-cookie-readable-origin-checked)) |
 | RateLimit `backend` | removed (it was never used); passing it dies ([details](UPGRADING-REFERENCE.md#breaking-ratelimit-backend-is-removed-limiters-no-longer-share-buckets)) |
 | `PAGI::App::Throttle` | `middleware('RateLimit', ...)`; `key_generator => sub { 'global' }` for one bucket ([details](UPGRADING-REFERENCE.md#breaking-pagiappthrottle-is-removed)) |
 | `PAGI::App::Proxy` | removed: it blocked the event loop; proxy in front with nginx, HAProxy or Caddy ([details](UPGRADING-REFERENCE.md#breaking-pagiappproxy-is-removed)) |
 | `PAGI::App::WrapCGI` | rewritten: no longer blocks the loop; POST bodies, `timeout` and the CGI environment now work; `refuse` ([details](UPGRADING-REFERENCE.md#changed-pagiappwrapcgi-is-rewritten)) |
+| `PAGI::Request` caches what it parses in the scope (`pagi.request.*`), shared by every Request over that scope | each Request keeps its parse on itself and writes nothing to the scope; pass the one Request on rather than building a second to re-read the body |
 | scope keys `csrf_token`, `original_client`, `original_method`, `original_path`, `request_id` | the same names under `pagi.` ([details](UPGRADING-REFERENCE.md#breaking-middleware-scope-keys-move-under-pagi)) |
 | Maintenance `body`, `content_type` | `response => response('HTML', $page, status => 503)`; the default is now plain text; both options now die ([details](UPGRADING-REFERENCE.md#breaking-maintenance-body-and-content_type-are-replaced-by-response)) |
 | ContentNegotiation `strict`, `default_type` | refusing is the default; `refuse => 0` lets the application decide; both options now die ([details](UPGRADING-REFERENCE.md#breaking-contentnegotiation-refuses-by-default-strict-and-default_type-are-removed)) |
@@ -173,6 +177,11 @@ async sub create_note ($request) {
     return response('JSON', $notes->{$id}, status => 201);
 }
 
+# Every error in JSON: a catch entry is given the error, a handler reads it.
+sub json_error ($request, $error = error_context($request)) {
+    return response('JSON', { error => $error->message });
+}
+
 compose(
     lifespan => { startup => sub ($state, $scope) { $state->{notes} = {} } },
     routes => [
@@ -183,9 +192,10 @@ compose(
     ],
     middleware => [
         middleware('Session'),
-        middleware('ErrorHandler', handler => sub ($request) {
-            return response('JSON', { error => error_context($request)->message });
-        }),
+        middleware('ErrorHandler',
+            catch   => { 'PAGI::Exception::RequestBody' => \&json_error },
+            handler => \&json_error,
+        ),
     ],
 );
 ```
@@ -203,6 +213,9 @@ What changed, line by line:
   with `app_state($request)`.
 - `$ctx->session` became `session($request)`; Session no longer takes
   `secret`.
-- ErrorHandler's `content_type` became a `handler`: a Request handler that
-  reads the error with `error_context($request)` and returns a Response.
+- ErrorHandler's `content_type` became `catch` entries for the errors the
+  application expects (here a body that is not JSON) and a `handler` for
+  the rest; both answer in JSON. An entry is given the error; the handler
+  reads it with `error_context($request)`. In 0.002002 a body that was not
+  JSON was a 500; it is now a 400.
 - `:id` became `{id}`, and `post` became `methods => ['POST']`.

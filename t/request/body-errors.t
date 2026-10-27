@@ -9,7 +9,6 @@ use lib "$Bin/../../lib";
 use PAGI::Compose qw(compose);
 use PAGI::Request;
 use PAGI::Response qw(response);
-use PAGI::ErrorContext qw(error_context);
 use PAGI::Routing qw(middleware route);
 use PAGI::Test::Client;
 
@@ -135,19 +134,40 @@ subtest 'a Compose application answers 400 or 413, and logs nothing' => sub {
 
 subtest 'an application can render body errors its own way' => sub {
     my $app = compose(
-        middleware => [middleware('ErrorHandler', handler => sub {
-            my ($request) = @_;
-            my $error = error_context($request);
-            return $error->default if $error->is_server_error;
+        middleware => [middleware('ErrorHandler', catch => { 'PAGI::Exception::RequestBody' => sub {
+            my ($request, $error) = @_;
             return response('JSON', { error => $error->message });
-        })],
+        } })],
         routes => [route('/json' => async sub { my ($r) = @_; response('JSON', await $r->json) },
             methods => ['POST'])],
     );
     my $res = PAGI::Test::Client->new(app => $app)->post('/json', body => '{not json',
         headers => { 'Content-Type' => 'application/json' });
     is([$res->status, $res->json], [400, { error => 'The request body is not valid JSON.' }],
-        'an ErrorHandler handler sees the RequestBody exception and chooses the response');
+        'an ErrorHandler catch entry gets the RequestBody exception and chooses the response');
+};
+
+subtest 'a RequestBody error is an HTTP error: one PAGI::Exception::HTTP entry answers it' => sub {
+    require PAGI::Exception::RequestBody;
+    my $error = PAGI::Exception::RequestBody->new(reason => 'invalid_json', message => 'nope');
+    isa_ok $error, ['PAGI::Exception::HTTP'];
+    is $error->headers, [], 'with no headers of its own';
+    is "$error", 'nope', 'and its own text';
+
+    my $json_route = route('/notes' => async sub { my ($request) = @_; await $request->json; response('Text', 'ok') },
+        methods => ['POST']);
+    my %bad = (body => '{not json', headers => { 'Content-Type' => 'application/json' });
+    my $app = compose(routes => [$json_route], middleware => [middleware('ErrorHandler', catch => {
+        'PAGI::Exception::HTTP' => sub { my ($request, $e) = @_; response('JSON', { error => $e->message }) },
+    })]);
+    my $res = PAGI::Test::Client->new(app => $app)->post('/notes', %bad);
+    is [$res->status, $res->json], [400, { error => 'The request body is not valid JSON.' }], 'the HTTP entry answers a bad body';
+
+    $app = compose(routes => [$json_route], middleware => [middleware('ErrorHandler', catch => {
+        'PAGI::Exception::HTTP'        => sub { response('Text', 'http') },
+        'PAGI::Exception::RequestBody' => sub { response('Text', 'body') },
+    })]);
+    is(PAGI::Test::Client->new(app => $app)->post('/notes', %bad)->text, 'body', 'a RequestBody entry, more specific, still wins');
 };
 
 done_testing;

@@ -12,6 +12,7 @@ use PAGI::Routing::Middleware ();
 use PAGI::Routing::RequestResponse ();
 use PAGI::Routing::Resolver ();
 use PAGI::SSE;
+use PAGI::Exception::HTTP ();
 use PAGI::Utils ();
 use PAGI::Utils::Scope ();
 use PAGI::WebSocket;
@@ -123,7 +124,8 @@ sub _compile_router_body {
 
     my $http_default = defined $router->http_default
         ? $class->_compile_http_endpoint($router->http_default)
-        : PAGI::Response::Text->new('Not Found', status => 404)->to_app;
+        : $class->_raising_when_handled(
+            PAGI::Response::Text->new('Not Found', status => 404), 404);
 
     my $dispatcher = $class->_compile_dispatcher(
         $router->routes,
@@ -149,6 +151,28 @@ sub _compile_router_body {
     };
 }
 
+# When the innermost ErrorHandler in scope (pagi.error_handler) has catch
+# entries, the router raises its 404 and 405 to it, as Starlette's router
+# raises HTTPException inside an application; the exception boundary picks
+# an entry or the default answer, the router's own plain response.
+# Otherwise the router answers itself, as before.
+sub _handled_here {
+    my ($scope) = @_;
+    return 0 unless ($scope->{type} // '') eq 'http';
+    my $error_handler = $scope->{'pagi.error_handler'};
+    return $error_handler && $error_handler->_has_catch_entries;
+}
+
+sub _raising_when_handled {
+    my ($class, $plain, $status) = @_;
+    my $answer = $plain->to_app;
+    return async sub {
+        my ($scope, $receive, $send) = @_;
+        PAGI::Routing::_Miss->throw($status, $plain) if _handled_here($scope);
+        await $answer->($scope, $receive, $send);
+    };
+}
+
 sub _compile_dispatcher {
     my ($class, $nodes, $resolver, $location_prefix, $http_default) = @_;
 
@@ -160,12 +184,22 @@ sub _compile_dispatcher {
         croak 'Router authoritative Allow state is missing'
             unless $state;
         # A plain 405 with the path's method union in Allow. To answer it
-        # differently, put a middleware around the Router that rewrites 405s.
-        await PAGI::Utils::invoke_app(
-            PAGI::Response::Text->new('Method Not Allowed', status => 405,
-                headers => ['Allow' => join(', ', @{ $state->{allowed_methods} })]),
-            $scope, $receive, $send,
-        );
+        # differently, register an ErrorHandler catch entry for 405 (or put a
+        # middleware around the Router that rewrites 405s).
+        my @allow = ('Allow' => join(', ', @{ $state->{allowed_methods} }));
+        my $plain = PAGI::Response::Text->new('Method Not Allowed', status => 405, headers => [@allow]);
+        if (_handled_here($scope)) {
+            # The default answer is sent as the router sends it, through the
+            # authoritative Allow wrapper, so it matches byte for byte.
+            my %sent_state = (router_generated => 1, allowed_methods => $state->{allowed_methods});
+            my $as_the_router = PAGI::Utils::as_app_object(async sub {
+                my ($inner_scope, $inner_receive, $inner_send) = @_;
+                await PAGI::Utils::invoke_app($plain, $inner_scope, $inner_receive,
+                    $class->_authoritative_allow_send({ %sent_state }, $inner_send));
+            });
+            PAGI::Routing::_Miss->throw(405, $as_the_router, headers => [@allow]);
+        }
+        await PAGI::Utils::invoke_app($plain, $scope, $receive, $send);
         return;
     };
 
@@ -694,6 +728,24 @@ sub _join_path_boundary {
         && length($suffix) && substr($suffix, 0, 1) eq '/';
     return $prefix . $suffix;
 }
+
+
+# A routing miss raised to an ErrorHandler: an HTTP error (so catch{404} and a
+# 'PAGI::Exception::HTTP' entry see it) whose default answer is the router's
+# own plain response (internal).
+package PAGI::Routing::_Miss;
+our @ISA = ('PAGI::Exception::HTTP');
+
+sub new {
+    my ($class, $status, $plain, @options) = @_;
+    my $self = PAGI::Exception::HTTP::new($class, $status, undef, @options);
+    $self->{_default_answer} = $plain;
+    return $self;
+}
+
+sub _default_answer { $_[0]{_default_answer} }
+
+package PAGI::Routing::Compiler;
 
 1;
 

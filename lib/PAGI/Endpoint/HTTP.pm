@@ -7,7 +7,6 @@ use Future;
 use Future::AsyncAwait;
 use Carp qw(croak);
 use Scalar::Util qw(blessed);
-use PAGI::Request::_Factory ();
 use PAGI::Response::Empty ();
 use PAGI::Response::Text ();
 use PAGI::Utils qw(invoke_app);
@@ -100,14 +99,28 @@ sub to_app {
 
     return async sub {
         my ($scope, $receive, $send) = @_;
+        # The Request a BUILD_APP builder was given for this request, left
+        # here by PAGI::Endpoint::_PerRequest, so the builder and the handler
+        # share one Request. Taken before any await, so even a builder that
+        # returns one object for every request hands each its own.
+        my $given = delete $endpoint->{_pagi_builder_request};
         my $type = ref($scope) eq 'HASH' ? $scope->{type} : undef;
         croak 'PAGI::Endpoint::HTTP scope type is required'
             unless defined($type) && !ref($type) && length($type);
         croak "PAGI::Endpoint::HTTP requires HTTP scope; received '$type'"
             unless $type eq 'http';
-        my $request = PAGI::Request::_Factory::request_for_scope($scope, $receive);
-        my $application = await $endpoint->dispatch($request);
-        await invoke_app($application, $scope, $receive, $send);
+        my $request = $given // PAGI::Utils::request_for_scope($scope, $receive);
+        my $run = async sub {
+            my ($send) = @_;
+            my $application = await $endpoint->dispatch($request);
+            await invoke_app($application, $scope, $receive, $send);
+        };
+        # A handler method's error is answered at the route, with this
+        # Request, by the ErrorHandler the scope carries (if any).
+        my $error_handler = $scope->{'pagi.error_handler'};
+        return await $run->($send) unless $error_handler;
+        await $error_handler->_run_at_route($request, $scope, $receive, $send, $run);
+        return;
     };
 }
 

@@ -34,6 +34,35 @@ subtest 'status, reason and the error classes' => sub {
         'Server Error', 'an unregistered 5xx';
 };
 
+subtest 'headers: the error\'s own headers, a new list each call' => sub {
+    my $e = error_context(scope_with(exception => 'x', status => 401, development => 0,
+        headers => [['WWW-Authenticate', 'Bearer'], ['Retry-After', '5']]));
+    is $e->headers, [['WWW-Authenticate', 'Bearer'], ['Retry-After', '5']], 'the pairs';
+    push @{ $e->headers }, ['X', 'y'];
+    $e->headers->[0][1] = 'changed';
+    is $e->headers, [['WWW-Authenticate', 'Bearer'], ['Retry-After', '5']], 'a copy: changing one changes nothing';
+    is error_context(scope_with(exception => 'x', status => 500, development => 0))->headers, [],
+        'none: an empty list';
+};
+
+subtest 'headers through ErrorHandler: an entry passes them on' => sub {
+    require PAGI::Exception::HTTP;
+    require PAGI::Test::Client;
+    require PAGI::Tools;
+    my $entry = sub {
+        my ($request, $error) = @_;
+        return PAGI::Tools::response('JSON', { error => $error->message }, headers => $error->headers);
+    };
+    my $app = PAGI::Tools::compose(
+        routes => [PAGI::Tools::route('/' => sub {
+            PAGI::Exception::HTTP->throw(401, 'Sign in.', headers => ['WWW-Authenticate' => 'Bearer realm="x"']);
+        })],
+        middleware => [PAGI::Tools::middleware('ErrorHandler', catch => { 'PAGI::Exception::HTTP' => $entry })],
+    );
+    my $res = PAGI::Test::Client->new(app => $app->to_app)->get('/');
+    is [$res->status, $res->header('WWW-Authenticate'), $res->json], [401, 'Bearer realm="x"', { error => 'Sign in.' }];
+};
+
 subtest 'message: a 4xx client_message, never message; a 5xx reason' => sub {
     my $body = PAGI::Exception::RequestBody->new(message => 'The request body is not valid JSON.');
     is error_context(scope_with(exception => $body, status => 400, development => 0))->message,

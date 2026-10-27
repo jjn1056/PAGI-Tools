@@ -203,6 +203,7 @@ subtest 'optional capabilities come from their owning helpers' => sub {
     $scope->{state} = {};
     $scope->{'pagi.session'} = { _id => 'sid-1', user => 'alice' };
     $scope->{'pagi.csrf_token'} = 'issued-token';
+    $scope->{'pagi.stash'} = {};
     my $request = PAGI::Request->new($scope, \&receive_empty);
 
     stash($request)->set(result => 42);

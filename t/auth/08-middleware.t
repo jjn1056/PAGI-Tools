@@ -9,7 +9,6 @@ use PAGI::Auth qw(auth auth_result unauth_result);
 use PAGI::Auth::SimpleUser;
 use PAGI::Middleware::Authentication;
 use PAGI::Response;
-use PAGI::Utils::ReceiveBuffer::TempFile;
 
 {
     package Local::AuthBackend;
@@ -53,7 +52,7 @@ subtest 'construction is lazy and invocation installs a child-scope result' => s
         my ($scope, $recv, $snd) = @_;
         $seen = auth($scope);
         isnt refaddr($scope), refaddr($outer), 'downstream receives a child scope';
-        like dies { $recv->()->get }, qr/unexpected body read/, "receive reaches the client's receive";
+        is refaddr($recv), refaddr($receive), 'the application gets $receive itself';
         is refaddr($snd), refaddr($send), 'send is preserved';
         return Future->done;
     });
@@ -361,39 +360,37 @@ async sub read_body {
     return $body;
 }
 
-subtest 'a body the backend reads reaches the application' => sub {
-    my ($by_backend, $by_app);
+subtest 'a backend cannot read the body; the application receives it untouched' => sub {
     my $middleware = PAGI::Middleware::Authentication->new(backend => async sub {
         my ($request) = @_;
-        $by_backend = await $request->body;    # a signed request, say
+        await $request->body;    # a signed request, say: checked in the handler instead
         return unauth_result();
     });
-    $middleware->wrap(async sub { $by_app = await read_body($_[1]) })->(
-        { type => 'http', method => 'POST', headers => [] },
-        client_receive({ type => 'http.request', body => 'payload=', more => 1 },
-                       { type => 'http.request', body => '1', more => 0 }),
-        sub { Future->done },
-    )->get;
-    is $by_backend, 'payload=1', 'the backend read the body';
-    is $by_app, 'payload=1', 'and the application receives it again';
+    my $ran = 0;
+    like dies {
+        $middleware->wrap(async sub { $ran = 1 })->(
+            { type => 'http', method => 'POST', headers => [] },
+            client_receive({ type => 'http.request', body => 'payload=1', more => 0 }),
+            sub { Future->done },
+        )->get;
+    }, qr/\AAuthentication backends read headers and cookies, not the body; check a signed body in the handler at \Q${\__FILE__}\E line \d+/,
+        'the backend\'s body read dies at the backend, naming where the check goes';
+    is $ran, 0, 'and the application never runs';
+
+    my $by_app;
+    PAGI::Middleware::Authentication->new(backend => sub { unauth_result() })
+        ->wrap(async sub { $by_app = await read_body($_[1]) })->(
+            { type => 'http', method => 'POST', headers => [] },
+            client_receive({ type => 'http.request', body => 'payload=', more => 1 },
+                           { type => 'http.request', body => '1', more => 0 }),
+            sub { Future->done },
+        )->get;
+    is $by_app, 'payload=1', 'the application reads the whole body';
 };
 
-subtest 'body_buffer makes the buffer for each request' => sub {
-    my @scopes;
-    my $middleware = PAGI::Middleware::Authentication->new(
-        backend     => sub { unauth_result() },
-        body_buffer => sub { push @scopes, $_[0]; PAGI::Utils::ReceiveBuffer::TempFile->new(spool_threshold => 0) },
-    );
-    my $by_app;
-    $middleware->wrap(async sub { $by_app = await read_body($_[1]) })->(
-        { type => 'http', method => 'POST', headers => [] },
-        client_receive({ type => 'http.request', body => 'x', more => 0 }),
-        sub { Future->done },
-    )->get;
-    is $by_app, 'x', 'the application receives the body';
-    is [map { $_->{type} } @scopes], ['http'], 'through one buffer, made from the scope';
-    like dies { PAGI::Middleware::Authentication->new(backend => sub {}, body_buffer => 'big') },
-        qr/Authentication body_buffer must be a coderef that returns a buffer/, 'body_buffer must be a coderef';
+subtest 'body_buffer is gone' => sub {
+    like dies { PAGI::Middleware::Authentication->new(backend => sub {}, body_buffer => sub {}) },
+        qr/\AAuthentication 'body_buffer' was removed: a backend never reads the body/, 'it dies';
 };
 
 done_testing;

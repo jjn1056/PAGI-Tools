@@ -1,15 +1,21 @@
 #!/usr/bin/env perl
 #
-# Requests signed by a CI system, checked by a middleware before any route
-# sees them: a build event read with $request->json, and a build artifact
-# streamed to disk with body_stream. To check a signature the middleware
-# reads the whole body, so it reads through record_receive and hands the
-# routes a receive that delivers the body again. Bodies up to 1MB are held
-# in memory meanwhile, larger ones in a temporary file.
+# Requests signed by a CI system, checked by a middleware: a build event
+# read with $request->json, and a build artifact streamed to disk with
+# body_stream. The middleware never reads the body itself. It hands the
+# routes a receive that hashes each chunk as the route reads it and fails
+# the read of the last one when the signature does not cover the body, the
+# way Starlette's RequestBodyLimitMiddleware fails a read past its limit.
 #
 # The signature is an HMAC-SHA256, with the shared secret, of the body's
 # SHA-256 (as AWS signs a payload's hash), so the middleware hashes the body
-# as it arrives and never holds it in one string.
+# as it arrives and never holds it in one string. The same application in
+# Starlette is app.py.
+#
+# The check covers the body a route reads: a route under /signed that does
+# not read its body, or stops reading early, is not checked. That is the
+# price of checking without reading; to verify every request whether or not
+# its route reads, read the whole body in the middleware first.
 #
 # Run:  SIGNING_SECRET=s3cret pagi-server --app examples/signed-requests/app.pl --port 5000
 # Try:  sign() { openssl dgst -sha256 | sed 's/^.* //' | tr -d '\n' \
@@ -28,62 +34,84 @@ use Future::AsyncAwait;
 use Digest::SHA ();
 use File::Temp qw(tempdir);
 use PAGI::Tools qw(compose middleware mount response route);
-use PAGI::Utils::ReceiveBuffer::TempFile;
+
+# The middleware's own failure. Not a PAGI::Exception::HTTP: an HTTP error a
+# route raises is answered at the route, before the middleware could tell
+# its own failure from the route's (app.py's BadSignature is not an
+# HTTPException for the same reason).
+package SignedRequests::BadSignature {
+    sub throw ($class) { die bless {}, $class }
+}
 
 package SignedRequests::VerifySignature {
     use parent 'PAGI::Middleware';
-    use Future::AsyncAwait;
     use Digest::SHA qw(hmac_sha256_hex);
-    use PAGI::Tools qw(response record_receive);
+    use PAGI::Tools qw(response);    # imports are per package; async is lexical, so only this one
     use PAGI::Utils::SecureCompare qw(secure_compare);
 
-    # secret: the shared secret. buffer: a coderef making each request's
-    # buffer; without one, record_receive's default (64KB in memory).
     sub _init ($self, $config) {
         $self->{secret} = $config->{secret} // die "VerifySignature needs a secret\n";
-        $self->{buffer} = $config->{buffer};
         $self->{refuse} = response('JSON', { error => 'bad signature' }, status => 401)->to_app;
     }
 
     sub wrap ($self, $app) {
         return async sub ($scope, $receive, $send) {
             return await $app->($scope, $receive, $send) unless $scope->{type} eq 'http';
-
-            # Read the body through $reading, hashing each chunk; the routes
-            # get $replaying, which delivers the same chunks again.
-            my ($reading, $replaying) = record_receive($receive,
-                $self->{buffer} ? (buffer => $self->{buffer}->($scope)) : ());
-            my $sha = Digest::SHA->new(256);
-            while (1) {
-                my $event = await $reading->();
-                return if $event->{type} eq 'http.disconnect';    # nobody to answer
-                $sha->add($event->{body} // '');
-                last unless $event->{more};
-            }
-
             my ($given) = map { $_->[1] } grep { lc($_->[0]) eq 'x-signature' } @{$scope->{headers}};
-            my $want = 'sha256=' . hmac_sha256_hex($sha->hexdigest, $self->{secret});
-            my $target = defined($given) && secure_compare($given, $want) ? $app : $self->{refuse};
-            await $target->($scope, $replaying, $send);
+            return await $self->{refuse}->($scope, $receive, $send) unless defined $given;
+
+            # The routes' receive: each chunk is hashed as they read it, and
+            # the last is handed over only if the signature covers the body.
+            my $sha = Digest::SHA->new(256);
+            my $verifying = async sub {
+                my $event = await $receive->();
+                return $event unless $event->{type} eq 'http.request';
+                $sha->add($event->{body} // '');
+                SignedRequests::BadSignature->throw
+                    if !$event->{more}
+                    && !secure_compare($given, 'sha256=' . hmac_sha256_hex($sha->hexdigest, $self->{secret}));
+                return $event;
+            };
+
+            # Its own failed read is answered here when nothing was sent yet,
+            # and rethrown otherwise; any other error passes through, as
+            # Starlette's body limit catches only its own exception.
+            my $started = 0;
+            my $watching = async sub ($event) {
+                $started = 1 if $event->{type} eq 'http.response.start';
+                await $send->($event);
+            };
+            try { await $app->($scope, $verifying, $watching) }
+            catch ($e) {
+                die $e if $started || !($e isa SignedRequests::BadSignature);
+                await $self->{refuse}->($scope, $receive, $send);
+            }
         };
     }
 }
 
 my $SECRET = $ENV{SIGNING_SECRET} // 's3cret';
 
-# A build event: read by PAGI::Request from the replay, like any body.
+# A build event: read by PAGI::Request, through the verifying receive. The
+# event is a JSON object; a JSON array is a 500 here, as in app.py.
 async sub record_event ($request) {
-    my $event = await $request->json;    # a 400 if it is not JSON
+    my $event = await $request->json;    # a 401 if unsigned, a 400 if not JSON
     push $request->state->get('events')->@*, $event;
     return response('JSON', { ok => 1, build => $event->{build} }, status => 202);
 }
 
-# A build artifact: streamed from the replay to disk. Its SHA-256 is the
-# one the signature covered, byte for byte.
+# A build artifact: streamed to a .part file and given its name only once
+# the whole body was read, which is when the signature has been checked. A
+# failed read leaves no file behind.
 async sub store_artifact ($request) {
     my $path = $request->state->get('artifacts') . '/' . $request->path_param('name');
     my $body = $request->body_stream(max_bytes => 50 * 1024 * 1024);
-    await $body->stream_to_file($path);
+    try { await $body->stream_to_file("$path.part") }
+    catch ($e) {
+        unlink "$path.part";
+        die $e;
+    }
+    rename "$path.part", $path or die "rename $path.part: $!";
     my $sha = Digest::SHA->new(256)->addfile($path)->hexdigest;
     return response('JSON', { bytes => $body->bytes_read, sha256 => $sha }, status => 201);
 }
@@ -92,19 +120,10 @@ compose(
     routes => [
         mount('/signed',
             routes => [
-                route('/events' => \&record_event, methods => 'POST'),
-                route('/artifacts/{name:[\w-]+(?:\.[\w-]+)*}' => \&store_artifact, methods => 'POST'),
+                route('/events' => \&record_event, methods => ['POST']),
+                route('/artifacts/{name:[\w-]+(?:\.[\w-]+)*}' => \&store_artifact, methods => ['POST']),
             ],
-            middleware => [
-                middleware(SignedRequests::VerifySignature->new(
-                    secret => $SECRET,
-                    buffer => sub ($scope) {
-                        PAGI::Utils::ReceiveBuffer::TempFile->new(
-                            spool_threshold => 1024 * 1024,    # 1MB, then a temp file
-                        );
-                    },
-                )),
-            ],
+            middleware => [middleware(SignedRequests::VerifySignature->new(secret => $SECRET))],
         ),
         route('/events' => sub ($request) { response('JSON', $request->state->get('events')) }),
     ],

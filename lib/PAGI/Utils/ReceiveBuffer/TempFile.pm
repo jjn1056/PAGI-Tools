@@ -104,9 +104,10 @@ PAGI::Utils::ReceiveBuffer::TempFile - Keeps received events for replay, in a te
 
 =head1 DESCRIPTION
 
-The buffer L<PAGI::Utils::Middleware/record_receive> keeps the events a
-middleware reads, so they can be handed on again. Small bodies stay in
-memory; over a size they go to a temp file. Events are held in memory until
+A buffer for L<PAGI::Utils::Middleware/record_receive>, which otherwise
+keeps the events a middleware reads in memory: give it this one, with
+C<< buffer => PAGI::Utils::ReceiveBuffer::TempFile->new >>, when bodies may
+be large. Small bodies stay in memory; over a size they go to a temp file. Events are held in memory until
 their size passes C<spool_threshold> (64KB by default); from then on every
 event, the ones already held included, lives in a temporary file.
 

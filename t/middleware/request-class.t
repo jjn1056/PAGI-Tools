@@ -8,8 +8,8 @@ use lib 'lib', "$FindBin::Bin/../lib";
 use PAGI::Test::Client;
 use PAGI::Tools qw(compose middleware mount response route router sse websocket);
 use PAGI::Auth qw(unauth_result);
+use PAGI::Utils ();
 use PAGI::Utils::Middleware qw(clone_scope);
-use PAGI::Request::_Factory ();
 use PAGI::Middleware::RequestClass;
 
 # PAGI::Middleware::RequestClass: every handler below it receives the
@@ -122,7 +122,7 @@ subtest 'HTTP, WebSocket and SSE scopes get the key on a copy; others pass throu
         my $inner = pop @seen;
         ok($inner != $outer, "$type: a copy");
         ok(!exists $outer->{'pagi.request.factory'}, "$type: the outer scope is unchanged");
-        is(ref(PAGI::Request::_Factory::request_for_scope($inner, $receive)), 'Local::AppRequest',
+        is(ref(PAGI::Utils::request_for_scope($inner, $receive)), 'Local::AppRequest',
             "$type: the key builds the class");
     }
     my $lifespan = { type => 'lifespan' };
@@ -134,7 +134,7 @@ subtest 'HTTP, WebSocket and SSE scopes get the key on a copy; others pass throu
 subtest 'mounts, http_default and a route of its own' => sub {
     my $native = async sub {
         my ($scope, $receive, $send) = @_;
-        my $request = PAGI::Request::_Factory::request_for_scope($scope, $receive);
+        my $request = PAGI::Utils::request_for_scope($scope, $receive);
         await response('Text', ref $request)->to_app->($scope, $receive, $send);
     };
     my $client = PAGI::Test::Client->new(app => compose(
@@ -227,12 +227,12 @@ subtest 'refuse, deny and decline handlers get the class' => sub {
     is([$res->status, $res->text], [503, 'Local::AppRequest'], 'an SSE decline handler');
 };
 
-subtest 'an ErrorHandler handler gets the class only when listed after RequestClass' => sub {
+subtest "in Compose, handler is outside the application middleware: a plain Request; a route-level catch entry gets the class" => sub {
     my $seen;
     my $handler = sub { my ($request) = @_; $seen = ref $request; return response('Text', 'handled', status => 500) };
     for my $case (
-        ['after',  'Local::AppRequest', [middleware('RequestClass', class => 'Local::AppRequest'), middleware('ErrorHandler', handler => $handler)]],
-        ['before', 'PAGI::Request',     [middleware('ErrorHandler', handler => $handler), middleware('RequestClass', class => 'Local::AppRequest')]],
+        ['after',  'PAGI::Request', [middleware('RequestClass', class => 'Local::AppRequest'), middleware('ErrorHandler', handler => $handler)]],
+        ['before', 'PAGI::Request', [middleware('ErrorHandler', handler => $handler), middleware('RequestClass', class => 'Local::AppRequest')]],
     ) {
         my ($label, $expected, $middleware) = @$case;
         my $client = PAGI::Test::Client->new(app => compose(
@@ -244,6 +244,13 @@ subtest 'an ErrorHandler handler gets the class only when listed after RequestCl
             "$label: the re-raised error is reported");
         is([$res->status, $res->text, $seen], [500, 'handled', $expected], "$label: $expected");
     }
+    my $client = PAGI::Test::Client->new(app => compose(
+        middleware => [middleware('RequestClass', class => 'Local::AppRequest'),
+            middleware('ErrorHandler', catch => { 'Local::RouteFailure' => sub {
+                my ($request) = @_; $seen = ref $request; return response('Text', 'caught', status => 409) } })],
+        routes => [route('/' => sub { die bless {}, 'Local::RouteFailure' })],
+    ));
+    is([$client->get('/')->status, $seen], [409, 'Local::AppRequest'], "a catch entry at the route gets the route's class");
 };
 
 subtest 'an Authentication backend gets the class only when listed after RequestClass' => sub {

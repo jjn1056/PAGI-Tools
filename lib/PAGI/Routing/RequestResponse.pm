@@ -7,7 +7,6 @@ use Carp qw(croak);
 use Future;
 use Future::AsyncAwait;
 use Scalar::Util qw(blessed);
-use PAGI::Request::_Factory ();
 use PAGI::Utils qw(invoke_app);
 
 sub new {
@@ -61,18 +60,27 @@ sub to_app {
                 unless blessed($request) && $request->isa('PAGI::Request');
         }
         else {
-            $request = PAGI::Request::_Factory::request_for_scope($scope, $receive);
+            $request = PAGI::Utils::request_for_scope($scope, $receive);
         }
-        my $handler_result = $handler->($request);
-        my $returned = await Future->wrap($handler_result);
-        croak 'request handler returned nothing; a native ($scope, $receive, '
-            . '$send) application given as a handler needs as_app_object()'
-            unless defined $returned;
-        PAGI::Utils::_validate_app_value(
-            $returned,
-            'request handler must return a PAGI application:',
-        );
-        return await invoke_app($returned, $scope, $receive, $send);
+        my $run = async sub {
+            my ($send) = @_;
+            my $handler_result = $handler->($request);
+            my $returned = await Future->wrap($handler_result);
+            croak 'request handler returned nothing; a native ($scope, $receive, '
+                . '$send) application given as a handler needs as_app_object()'
+                unless defined $returned;
+            PAGI::Utils::_validate_app_value(
+                $returned,
+                'request handler must return a PAGI application:',
+            );
+            return await invoke_app($returned, $scope, $receive, $send);
+        };
+        # An error the handler throws is answered at the route, with this
+        # Request, by the ErrorHandler the scope carries (if any).
+        my $error_handler = ($scope->{type} // '') eq 'http' ? $scope->{'pagi.error_handler'} : undef;
+        return await $run->($send) unless $error_handler;
+        my (undef, $result) = await $error_handler->_run_at_route($request, $scope, $receive, $send, $run);
+        return $result;
     };
 }
 

@@ -57,8 +57,8 @@ for my $case (@examples) {
             unlike($source, qr/\$router->(?:get|post|websocket|sse|mount)\b/,
                 'full demo has no mutable route declarations');
             like($source,
-                qr/use PAGI::Routing qw\(route websocket sse middleware\);/,
-                'full demo imports immutable route declarations');
+                qr/use PAGI::Tools qw\([^)]*\broute\b[^)]*\bwebsocket\b[^)]*\);/,
+                'full demo imports immutable route declarations (PAGI::Routing\'s, through PAGI::Tools)');
             unlike($source, qr/\bas_app_object\s*\(/,
                 'full demo demonstrates direct high-level protocol handlers');
             like($source,
@@ -134,8 +134,8 @@ subtest 'endpoint demo names endpoint classes at routes' => sub {
         'WebSocket endpoint uses protocol-neutral middleware (AccessLog logs HTTP only)');
     like($source,
         qr/sse\('\/events'\s*=>\s*endpoint\('MessageEvents'\),\s*
-            middleware\s*=>\s*\[middleware\(\$timing\)\]/x,
-        'SSE endpoint is a direct route with its existing middleware');
+            middleware\s*=>\s*\[middleware\('Stash'\),\s*middleware\(\$timing\)\]/x,
+        'SSE endpoint is a direct route with the Stash its stream uses and its existing middleware');
     like($source,
         qr/route\('\/\*path'\s*=>\s*PAGI::App::File->from_app_path\('public'\)\)/,
         'static files are the final HTTP-only catch-all route');

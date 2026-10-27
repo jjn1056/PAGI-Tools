@@ -80,16 +80,15 @@ directly:
 ```perl
 sub jwt_backend ($request) {
     my $token;
-    my $parsed = eval {
-        $token = $request->bearer_token(raise_on_error => 1);
-        1;
-    };
-    return unauth_result(failure => {
-        code => 'malformed_authorization',
-        message => 'Expected one Authorization header containing a Bearer token.',
-    }) unless $parsed;
+    try { $token = $request->bearer_token(raise_on_error => 1) }
+    catch ($e) {
+        return unauth_result(failure => {
+            code => 'malformed_authorization',
+            message => 'Expected one Authorization header containing a Bearer token.',
+        });
+    }
     return unauth_result() unless defined $token;
-    # Verify $token outside the parsing eval, then return an Auth result.
+    # Verify $token outside the parsing try, then return an Auth result.
 }
 
 middleware('Authentication', backend => \&jwt_backend);

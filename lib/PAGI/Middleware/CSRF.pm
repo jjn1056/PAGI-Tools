@@ -7,7 +7,11 @@ use Future;
 use Future::AsyncAwait;
 use PAGI::Utils::Random qw(secure_random_bytes);
 use PAGI::Utils::SecureCompare qw(secure_compare);
+use Scalar::Util qw(blessed);
+use HTTP::MultiPartParser ();
+use PAGI::Exception::RequestBody ();
 use PAGI::Request ();
+use PAGI::Request::MultipartStream ();
 use PAGI::Response::Text ();
 use PAGI::Utils ();
 use PAGI::Utils::Middleware qw(record_receive);
@@ -39,8 +43,9 @@ Its other modes:
     # Keep the token in the session (Session middleware must wrap this one)
     middleware('CSRF', session => 1);
 
-    # Take the token from the header only: never read a form body
-    middleware('CSRF', form_field => undef);
+    # Accept plain HTML forms: a form post without the header has its
+    # csrf_token field read here, and the route reads the whole body as usual
+    middleware('CSRF', form_field => 'csrf_token');
 
 L<PAGI::CSRF/SYNOPSIS> shows both modes in full, as complete applications.
 
@@ -65,18 +70,24 @@ applications.
 
 An unsafe request carries its token in the C<token_header> header (a
 script, a JSON API) or in the C<form_field> field of its form (a plain HTML
-form, which cannot set a header). A header that is sent decides, and the
-body is then never read. Without one, the middleware reads the field from
-an C<application/x-www-form-urlencoded> or C<multipart/form-data> body; it
-never reads any other body, JSON included. An empty header or field counts
-as not sent. The form is read through L<PAGI::Request> and stays cached in
-the scope, so the application's C<form_params> and C<uploads> return
-it, as C<body> does for a urlencoded form, while C<body_stream> and
-C<multipart_stream> die "Body already consumed" (see L</Streamed uploads>).
-An application that reads C<$receive> itself still receives the whole body:
-the middleware hands on what it read with
-L<PAGI::Utils::Middleware/record_receive>, holding up to 64KB in memory and
-the rest in a temporary file (C<body_buffer> changes where).
+form, which cannot set a header). The header is checked first; an empty
+header counts as not sent, and a request whose header matches has its body
+left unread. Without C<form_field> a request without the header is refused.
+With it, an C<application/x-www-form-urlencoded> request without the header
+has its body read here -- at most C<max_form_size> bytes, through a recording
+receive -- and its first C<form_field> field compared with the token (a form
+carries one; were there two, the first decides, where Django's middleware
+takes the last, so that a multipart upload can stream past its token); whoever
+runs next, the application or C<refuse>, is handed a receive that delivers
+the whole body again, so the route reads its form as usual. A body over
+C<max_form_size> is answered here with a plain-text 413. A
+C<multipart/form-data> request without the header is read only as far as its
+token part, in byte order, so the answer does not depend on how the client's
+bytes arrived and an upload after the token still streams to the route: a
+file part before the token is refused (put the hidden token field first --
+browsers send fields in document order), no limit is applied here to a part
+after it, and a body that cannot be parsed is answered with a plain-text 400.
+Any other body without the header, JSON included, is refused.
 
 Every unsafe request first passes an origin check, modelled on Go's
 C<CrossOriginProtection>: a C<Sec-Fetch-Site> header must be C<same-origin>
@@ -152,39 +163,24 @@ with an optional port (C<http://localhost:3000>, C<http://[::1]:3000>),
 nothing else; a default port is dropped, as browsers drop it from
 C<Origin>. The token check still applies.
 
-=item * form_field (default: 'csrf_token')
+=item * form_field (default: undef)
 
-The form field holding the token when a request sends no header; the default is
-the name of the default cookie and of the session key. It is read only from a
-form body of an unsafe request that passed the origin check and has a token to
-match, and a missing or wrong value is refused like a header. The parse uses
-L<PAGI::Request>'s default limits (for multipart, 1MB a field, 10MB a file, 20
-files, 1000 fields; a urlencoded body has no cap of its own, so the server's
-C<max_body_size> bounds it), and limits that the application later passes to
-C<form_params> or C<uploads> do not apply, because the parse is cached. A body
-the parse rejects throws the same L<PAGI::Exception::RequestBody> (a 400 or 413) as
-when the application reads it, and it is answered by an ErrorHandler outside
-this middleware: list your own C<ErrorHandler> before CSRF to answer it
-yourself, or Compose's answers it in plain text. A bare C<wrap> without Compose
-propagates it. C<undef> reads only the header, so the middleware never reads a
-body; anything else but a non-empty string dies.
+The form field the token is read from, usually C<csrf_token> (the name of the
+default cookie and of the session key). Set, an unsafe form post that came
+without the header and passed the origin check has the field read from its
+body here (see L</"Form flow (plain HTML forms)">). C<undef>, the default,
+means no form flow: a request without the header is refused. Anything else
+but a non-empty string dies.
 
-=item * body_buffer (default: a L<PAGI::Utils::ReceiveBuffer::TempFile>)
+=item * max_form_size (default: 1048576, 1 MiB)
 
-Where a form body the middleware reads is kept until the application
-receives it. A coderef, called with the scope of each request whose body is
-read, returning a buffer for that request: a
-L<PAGI::Utils::ReceiveBuffer::TempFile> with other options, or any object
-with its C<append> and C<take> methods, such as one that keeps the body in
-Redis. The default holds 64KB in memory
-and the rest in a temporary file.
-
-    middleware('CSRF', body_buffer => sub {
-        my ($scope) = @_;
-        return PAGI::Utils::ReceiveBuffer::TempFile->new(
-            spool_threshold => 1024 * 1024,
-        );
-    });
+The most bytes of a form body read here, ahead of the application, to find
+its token -- the whole of a urlencoded body, or a multipart body up to its
+token part, however large the upload after it. A form whose token is not
+within that many bytes is answered with a plain-text 413 C<Request body too
+large> (under C<< refuse => 0 >> it is not read further, C<missing_token> is
+recorded, and the application gets the whole body). A positive integer;
+anything else dies.
 
 =item * refuse (default: a 403 text response)
 
@@ -194,7 +190,13 @@ C<403 text/plain> response, C<CSRF token validation failed>. An application
 L<PAGI::Request>, returning a Response or an application) or an object
 with C<to_app>, which
 includes every L<PAGI::Response> -- answers instead, and can read the reason
-with C<< csrf($request)->failure >>. Exactly C<0>: the middleware never refuses;
+with C<< csrf($request)->failure >>; when the middleware read a form's body,
+it is handed a receive that delivers the whole body, so it can read the form
+to re-render it. It answers failed checks only: a form body over
+C<max_form_size>, or one that cannot be parsed, is the client's error, not a
+CSRF failure, and is answered by the middleware's own plain-text 413 or 400.
+Exactly C<0>: the
+middleware never refuses;
 the request reaches the application with the outcome recorded for
 C<< csrf($request)->valid >> and C<< ->failure >>. Any other plain value dies.
 
@@ -224,24 +226,27 @@ sub _init {
     die 'CSRF httponly has no cookie to flag under session => 1: the token lives in the session'
         if $self->{httponly} && $self->{session};
     $self->{trusted_origins} = _trusted_origins($config->{trusted_origins} // []);
-    # Absent: csrf_token. Explicitly undef: the body is never read.
-    $self->{form_field} = exists $config->{form_field} ? $config->{form_field} : 'csrf_token';
-    die 'CSRF form_field must be a field name, like csrf_token, or undef to read only the header'
+    # The field a form's token is read from; absent or undef, no form flow.
+    $self->{form_field} = $config->{form_field};
+    die 'CSRF form_field must be a field name, like csrf_token, or undef for no form flow'
         if defined($self->{form_field}) && (ref($self->{form_field}) || !length($self->{form_field}));
-    $self->{body_buffer} = $config->{body_buffer};
-    die 'CSRF body_buffer must be a coderef that returns a buffer, like PAGI::Utils::ReceiveBuffer::TempFile->new'
-        if defined($self->{body_buffer}) && ref($self->{body_buffer}) ne 'CODE';
+    die "CSRF 'body_buffer' was removed: the form read is bounded by max_form_size"
+        if exists $config->{body_buffer};
+    # The most bytes of a form body read ahead of the application to find
+    # its token.
+    $self->{max_form_size} = $config->{max_form_size} // 1024 * 1024;
+    die 'CSRF max_form_size must be a positive integer'
+        unless !ref($self->{max_form_size}) && $self->{max_form_size} =~ /\A[1-9][0-9]*\z/;
 
     # Absent: the default refusal. Exactly 0: the application decides.
     my $refuse = PAGI::Utils::_refuse_option('CSRF', $config, 1);
-    $self->{refuse} = !defined($refuse) ? PAGI::Response::Text->new(
-            'CSRF token validation failed', status => 403,
-        )->to_app
+    my $default = PAGI::Response::Text->new('CSRF token validation failed', status => 403);
+    $self->{refuse} = !defined($refuse) ? $default->to_app
         : ref($refuse) ? $refuse
         : undef;
     PAGI::Utils::_reject_unknown_options('CSRF', $config,
-        qw(body_buffer cookie_name form_field httponly refuse safe_methods secure session
-            token_header trusted_origins));
+        qw(cookie_name form_field httponly max_form_size refuse safe_methods secure
+            session token_header trusted_origins));
 }
 
 # A 0-or-1 option; absent is 0.
@@ -292,10 +297,10 @@ sub wrap {
         # cookie's (undef when the client has none yet).
         my ($token, $stored) = $self->_token_for($scope);
         my %recorded = ('pagi.csrf_token' => $token);
+        my $failure;
         unless ($self->{safe_methods}{$scope->{method}}) {
-            my $failure = $self->_origin_failure($scope);
-            ($failure, $receive) = await $self->_token_failure($scope, $receive, $stored)
-                unless defined $failure;
+            $failure = $self->_origin_failure($scope)
+                // $self->_failure_for($stored, $self->_get_submitted_token($scope));
             $recorded{'pagi.csrf_failure'} = $failure if defined $failure;
         }
 
@@ -319,37 +324,162 @@ sub wrap {
             await $send->($event);
         };
 
-        my $target = exists($recorded{'pagi.csrf_failure'}) && $self->{refuse}
-            ? $self->{refuse} : $app;
-        await $target->($self->modify_scope($scope, \%recorded), $receive, $wrapped_send);
+        # A form post without the header: its token is read from the body,
+        # through a recording receive, and whoever runs next -- the
+        # application or the refusal -- is handed the replay of the whole
+        # body.
+        my $downstream = $receive;
+        my $content_type = PAGI::Request->new($scope, $receive)->content_type;
+        if (defined($failure) && $failure eq 'missing_token' && defined($self->{form_field})
+                && ($content_type eq 'application/x-www-form-urlencoded' || $content_type eq 'multipart/form-data')) {
+            my ($reading, $replaying) = record_receive($receive);
+            $downstream = $replaying;
+            my ($outcome, $value) = await $self->_form_token($scope, $reading);
+            if ($outcome eq 'token') {
+                $failure = $self->_failure_for($stored, $value);
+            }
+            elsif ($outcome ne 'missing' && $self->{refuse}) {
+                # The body itself is the problem: answered here, not thrown --
+                # in Compose an HTTP error thrown by application middleware is
+                # a 500.
+                my $error = $self->_body_error($outcome);
+                await PAGI::Utils::invoke_app(
+                    PAGI::Response::Text->new($error->client_message, status => $error->status_code),
+                    $scope, $replaying, $wrapped_send);
+                return;
+            }
+            if (defined $failure) { $recorded{'pagi.csrf_failure'} = $failure }
+            else                  { delete $recorded{'pagi.csrf_failure'} }
+        }
+        my $target = defined($failure) && $self->{refuse} ? $self->{refuse} : $app;
+        await $target->($self->modify_scope($scope, \%recorded), $downstream, $wrapped_send);
     };
 }
 
-# Why an unsafe request's token check fails, or undef when it passes, and
-# the receive to give the application. A header that is sent decides, and
-# the body is then never read. Only when it is missing or empty, and there
-# is a stored token to match, is the token taken from form_field instead.
-async sub _token_failure {
-    my ($self, $scope, $receive, $stored) = @_;
-    my $failure = $self->_failure_for($stored, $self->_get_submitted_token($scope));
-    return ($failure, $receive) unless defined($failure) && $failure eq 'missing_token';
-    my ($token, $downstream) = await $self->_form_token($scope, $receive);
-    return ($self->_failure_for($stored, $token), $downstream);
+# A form's token, read from $reading (the recording receive): ('token',
+# $value) for the first form_field field, ('missing') for none, ('too_large')
+# when the body runs past max_form_size first, ('malformed') for a body that
+# cannot be read as a form. Anything else that fails propagates.
+async sub _form_token {
+    my ($self, $scope, $reading) = @_;
+    my $request = PAGI::Request->new($scope, $reading);
+    return await $self->_multipart_token($request, $reading) if $request->content_type eq 'multipart/form-data';
+    my $body;
+    my $read = eval {
+        $body = await PAGI::Request->new($scope, _counting_receive($reading, $self->{max_form_size}))->body;
+        1;
+    };
+    unless ($read) {
+        my $error = $@;
+        return ('too_large') if blessed($error) && $error->isa('PAGI::Middleware::CSRF::_OverBudget');
+        die $error;
+    }
+    # The first occurrence decides, parsed as form_params parses it.
+    for my $pair (split /[&;]/, $body) {
+        my ($name, $value) = split /=/, $pair, 2;
+        next unless defined($name) && length($name)
+            && PAGI::Request::_url_decode($name) eq $self->{form_field};
+        return ('token', PAGI::Request::_url_decode($value // ''));
+    }
+    return ('missing');
 }
 
-# The token in form_field of a form body (urlencoded or multipart), and the
-# receive to give the application, which delivers the body read here again.
-# The form is read through PAGI::Request so its parse stays cached in the
-# scope for the application. The token is undef, and $receive is given back
-# unread, when form_field is undef or the body is not a form.
-async sub _form_token {
-    my ($self, $scope, $receive) = @_;
-    return (undef, $receive)
-        unless defined($self->{form_field}) && PAGI::Request->new($scope, $receive)->is_form;
-    my ($reading, $replaying) = record_receive($receive,
-        $self->{body_buffer} ? (buffer => $self->{body_buffer}->($scope)) : ());
-    my $form = await PAGI::Request->new($scope, $reading)->form_params;
-    return ($form->get($self->{form_field}), $replaying);
+# A multipart form's token, read in byte order: the events from $reading are
+# fed to the parser in slices no longer than the budget left, and the parts
+# decide as they come -- the form_field part's value, a file before it
+# (missing), the parser's error (malformed) -- and once decided nothing after
+# counts: no limit is applied to a later part here, the route's own parse
+# applies its limits to the whole body. So the answer is the same however the
+# client's bytes were split into events. Nothing is read after deciding.
+async sub _multipart_token {
+    my ($self, $request, $reading) = @_;
+    my $parameters = $request->headers->content_type_parameters;
+    my $boundary = defined($parameters) ? $parameters->{boundary} : undef;
+    return ('malformed') unless defined($boundary) && length($boundary);
+
+    my ($outcome, $value, $collecting, $collected, $fed) = (undef, undef, 0, '', 0);
+    # The parser takes fewer boundary characters than RFC 2046 allows (no
+    # space, no '@'); one it refuses is a body that cannot be parsed, as the
+    # route's own parse would find. Any other failure propagates.
+    my $parser = eval { HTTP::MultiPartParser->new(
+        boundary  => $boundary,
+        on_header => sub {
+            my ($lines) = @_;
+            return if defined $outcome;
+            my $part = PAGI::Request::MultipartStream::_disposition($lines);
+            if (defined $part->{filename}) { $outcome = 'missing'; return }
+            $collecting = defined($part->{name}) && $part->{name} eq $self->{form_field};
+        },
+        on_body => sub {
+            my ($chunk, $final) = @_;
+            return if defined($outcome) || !$collecting;
+            $collected .= $chunk;
+            ($outcome, $value) = ('token', $collected) if $final;
+        },
+        on_error => sub { $outcome //= 'malformed' },
+    ) };
+    unless ($parser) {
+        my $error = $@;
+        return ('malformed') if $error =~ /\bboundary\b/;
+        die $error;
+    }
+    my $left = $self->{max_form_size};
+    until (defined $outcome) {
+        my $event = await $reading->();
+        if (($event->{type} // '') ne 'http.request') {
+            # A disconnect after the closing boundary ends a complete body, as
+            # the route's own parse takes it: no token part. One before it is
+            # the client leaving mid-body, as the route's own read would see.
+            if ($fed) { $parser->finish }
+            if (!defined($outcome) || $outcome ne 'malformed') {
+                $outcome //= 'missing';
+                last;
+            }
+            my $connection = $request->connection;
+            my $reason = ($connection ? $connection->disconnect_reason : undef) // 'disconnect';
+            die "Request body incomplete: client disconnected mid-body ($reason)\n";
+        }
+        my $bytes = $event->{body} // '';
+        while (length($bytes) && !defined($outcome)) {
+            if ($left <= 0) { $outcome = 'too_large'; last }
+            my $slice = substr($bytes, 0, $left, '');
+            $left -= length $slice;
+            $fed = 1;
+            $parser->parse($slice);
+        }
+        next if defined $outcome;
+        unless ($event->{more}) {
+            $parser->finish;
+            $outcome //= 'missing';
+        }
+    }
+    return ($outcome, $value);
+}
+
+# The receive a form is read through: past $budget bytes of body it dies with
+# an _OverBudget, which _form_token reports as too_large. The event is already
+# recorded, so the replay still delivers it.
+sub _counting_receive {
+    my ($receive, $budget) = @_;
+    my $seen = 0;
+    return async sub {
+        my $event = await $receive->();
+        if (($event->{type} // '') eq 'http.request') {
+            $seen += length($event->{body} // '');
+            die bless({}, 'PAGI::Middleware::CSRF::_OverBudget') if $seen > $budget;
+        }
+        return $event;
+    };
+}
+
+# The client's error for a form body the middleware could not read, as the
+# route's own read would raise it.
+sub _body_error {
+    my ($self, $outcome) = @_;
+    return $outcome eq 'too_large'
+        ? PAGI::Exception::RequestBody->new(status_code => 413, reason => 'too_large', message => 'Request body too large')
+        : PAGI::Exception::RequestBody->new(status_code => 400, reason => 'invalid_multipart',
+            message => 'The multipart request body could not be parsed.');    # the route's own parser's words
 }
 
 # Why a submitted token fails to match, or undef when it passes. Compared
@@ -512,53 +642,38 @@ on their own: C<< cookie_name => 'XSRF-TOKEN', token_header => 'X-XSRF-TOKEN' >>
 =head2 Form flow (plain HTML forms)
 
 A plain C<< <form> >> POST cannot add a header, so it carries the token in
-a hidden C<csrf_token> field, which the middleware reads:
+a hidden C<csrf_token> field. Run the middleware with C<form_field>, and
+render the token into each form:
 
-    my $guard = csrf($request);
+    <input type="hidden" name="csrf_token" value="<%= csrf($request)->token %>">
 
-    <input type="hidden" name="csrf_token" value="<%= $guard->token %>">
+    route('/tasks' => \&create, methods => ['POST']),
+    ...
+    middleware => [middleware('CSRF', form_field => 'csrf_token')],
 
-Nothing else is needed. A post with a missing or wrong token is refused
-before any handler runs, and a handler reads its fields as usual, from the
-parse the middleware cached:
+The middleware reads the field from the body -- a urlencoded body whole, at
+most C<max_form_size> bytes, a multipart body only as far as its token part
+-- and refuses a missing or wrong one before any route runs. The route is
+handed a receive that delivers the whole body again, and reads its fields as
+usual:
 
     my $form = await $request->form_params;
 
+The form is therefore parsed twice, once here for one field and once by the
+route. One token serves every form on the page. Were a form to carry two
+token fields, the first decides (Django's middleware takes the last), so
+that a multipart upload can stream past its token.
+
 =head2 Streamed uploads
 
-A form the middleware reads stays parsed for L<PAGI::Request>, which then
-refuses to stream it, so a route that streams one with C<body_stream> or
-C<multipart_stream> is exempted the way other CSRF
-libraries exempt a view: it runs its own CSRF middleware, configured not to
-read the body.
-
-=over 4
-
-=item * A client that can set the header (a script uploading with fetch)
-sends it, and its body is never read. C<< form_field => undef >> on the
-route makes a request without the header a 403 instead of a read.
-
-=item * A plain HTML form cannot send the header. Run the route's
-middleware with C<< form_field => undef, refuse => 0 >>. When the request
-sent no header (C<< csrf($request)->failure >> is C<missing_token>), take
-the token from the stream's first part and check it with
-C<< csrf($request)->verify >>, which also fails a cross-origin request.
-Refuse any other failure, such as a header that did not match.
-
-=back
-
-Such a route must sit outside every CSRF that reads the body: not under
-the middleware given to Compose, and not inside a mount or Router whose
-middleware carries one. Route middleware runs inside both (the order is in
-L<PAGI::Routing/MIDDLEWARE AND HEAD>, and Compose's middleware wraps the
-whole router), so an outer CSRF reads the upload first and the route's
-C<multipart_stream> dies "Body already consumed". Put the form routes'
-CSRF on their own mounts or routes instead.
-L<PAGI::Tools::Cookbook/CSRF on a streamed upload> has a complete
-application. In a raw-scope application the same check is:
-
-    my $guard = csrf($scope);
-    my $valid = $guard->verify($token_from_the_stream);
+A route that streams a form upload with C<multipart_stream> needs nothing
+of its own. The form puts its hidden token field before the file -- browsers
+send fields in document order -- and the middleware reads only as far as
+it; the route then streams the upload, the token part first, as it arrives.
+A file part before the token is refused (C<missing_token>). A client that
+can set the header (a script uploading with fetch) sends it instead, and
+then nothing is read here. L<PAGI::Tools::Cookbook/CSRF on a streamed
+upload> has a complete application.
 
 =head1 SECURITY
 

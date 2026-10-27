@@ -118,12 +118,15 @@ sub _parse_request {
             [Authorization => 'Basic ' . MIME::Base64::encode_base64($credentials, '')];
     }
     my %options = (headers => \@headers);
+    # The fields are bytes, so they are encoded here, as the path is, rather
+    # than handed to the test client, which takes characters.
+    my $encoded = join '&', map { _escape($_->[0]) . '=' . _escape($_->[1]) } @fields;
     if (@fields && $HAS_BODY{$method}) {
-        $options{form} = \@fields;
+        push @headers, ['Content-Type' => 'application/x-www-form-urlencoded'];
+        $options{body} = $encoded;
     }
     elsif (@fields) {
-        $path .= ($path =~ /\?/ ? '&' : '?')
-            . join '&', map { _escape($_->[0]) . '=' . _escape($_->[1]) } @fields;
+        $path .= ($path =~ /\?/ ? '&' : '?') . $encoded;
     }
     $options{body} = $content if defined $content;
     return ($method, $path, %options);
@@ -206,7 +209,9 @@ Serve it, or try one request from the shell without a server:
     perl -Ilib lib/MyApp.pm GET /
 
 A Compose application subclasses L<PAGI::App::Compose> instead, and
-declares its routes, middleware and lifespan in methods.
+declares its routes, middleware and lifespan in methods. F<examples/raw-app>
+is a complete classic application: C<call> handling lifespan, http and
+websocket scopes, with a helper module of its own.
 
 =head1 DESCRIPTION
 

@@ -3,7 +3,8 @@
 # An internal tool: a task board for a small team. The everyday HTML
 # workflow every web framework is judged on: pages from templates, a form
 # that re-renders with its errors, redirect after POST, a flash message on
-# the next page, CSRF on every form, a stylesheet from a static directory.
+# the next page, CSRF on every form, errors answered in one place, a
+# stylesheet from a static directory.
 #
 # PAGI-Tools ships no template engine, flash or validation; this app shows
 # what each costs on top of it: Template Toolkit for the pages, a two-line
@@ -15,15 +16,15 @@
 
 use v5.40;
 use utf8;
-use File::Basename qw(dirname);
 use Future::AsyncAwait;
 use Template;
 use PAGI::App::File;
 use PAGI::CSRF qw(csrf);
 use PAGI::Session qw(session);
-use PAGI::Tools qw(app_state compose middleware mount path_for response route);
+use PAGI::Tools qw(compose middleware mount path_for response route);
+use PAGI::Utils qw(app_path);
 
-my $tt = Template->new(INCLUDE_PATH => dirname(__FILE__) . '/templates', ENCODING => 'utf8');
+my $tt = Template->new(INCLUDE_PATH => app_path('templates'), ENCODING => 'utf8');
 
 # Render a template to an HTML Response. Every page gets the CSRF token,
 # the flash message set by the previous request, and a link builder.
@@ -41,7 +42,13 @@ sub page ($request, $template, %vars) {
 
 sub flash ($request, $message) { session($request)->set(flash => $message) }
 
-sub tasks ($request) { app_state($request)->get('board') }
+sub board ($request) { $request->state->get('board') }
+
+# The board page, with the tasks; a re-render passes the form, its errors
+# and its status.
+sub board_page ($request, %vars) {
+    return page($request, 'index.tt', tasks => board($request)->{list}, form => {}, errors => {}, %vars);
+}
 
 sub validate ($form) {
     my %errors;
@@ -54,40 +61,74 @@ sub validate ($form) {
     return ({ title => $title, due => $due }, \%errors);
 }
 
+# The board. It raises its own errors; the routes do not check for them.
+package TaskBoard::TitleTaken {
+    sub new ($class, %fields) { return bless {%fields}, $class }
+    sub title ($self) { return $self->{title} }
+}
+package TaskBoard::NoSuchTask {
+    sub new ($class) { return bless {}, $class }
+}
+
+sub add_task ($board, $values) {
+    die TaskBoard::TitleTaken->new(title => $values->{title})
+        if grep { lc($_->{title}) eq lc($values->{title}) } @{ $board->{list} };
+    push @{ $board->{list} }, { id => $board->{next}++, %$values, done => 0 };
+}
+
+sub find_task ($board, $id) {
+    my ($task) = grep { $_->{id} == $id } @{ $board->{list} };
+    die TaskBoard::NoSuchTask->new unless $task;
+    return $task;
+}
+
 async sub index ($request) {
-    return page($request, 'index.tt', tasks => tasks($request)->{list}, form => {}, errors => {});
+    return board_page($request);
 }
 
 async sub create ($request) {
     my $form = await $request->form_params;
     my ($values, $errors) = validate($form);
-    return page($request, 'index.tt', tasks => tasks($request)->{list},
-        form => $values, errors => $errors, status => 422)
-        if %$errors;
+    return board_page($request, form => $values, errors => $errors, status => 422) if %$errors;
 
-    my $board = tasks($request);
-    push @{ $board->{list} }, { id => $board->{next}++, %$values, done => 0 };
+    add_task(board($request), $values);
     flash($request, "Added \"$values->{title}\".");
     return response('Redirect', path_for($request, 'index'), status => 303);
 }
 
 async sub toggle ($request) {
-    my $id = $request->path_param('id');
-    my ($task) = grep { $_->{id} == $id } @{ tasks($request)->{list} };
-    return response('Text', 'No such task', status => 404) unless $task;
-    $task->{done} = !$task->{done} || 0;
+    my $task = find_task(board($request), $request->path_param('id'));
+    $task->{done} = $task->{done} ? 0 : 1;
     flash($request, $task->{done} ? "Done: $task->{title}." : "Reopened: $task->{title}.");
     return response('Redirect', path_for($request, 'index'), status => 303);
 }
 
 async sub remove ($request) {
-    my $id    = $request->path_param('id');
-    my $board = tasks($request);
-    my $before = @{ $board->{list} };
-    @{ $board->{list} } = grep { $_->{id} != $id } @{ $board->{list} };
-    return response('Text', 'No such task', status => 404) if @{ $board->{list} } == $before;
+    my $board = board($request);
+    my $task  = find_task($board, $request->path_param('id'));
+    @{ $board->{list} } = grep { $_->{id} != $task->{id} } @{ $board->{list} };
     flash($request, 'Deleted.');
     return response('Redirect', path_for($request, 'index'), status => 303);
+}
+
+# The board's errors, answered in one place (the catch entries below). An
+# entry is given the route's Request and $error, the error being answered (a
+# PAGI::ErrorContext): $error->exception is what was thrown.
+
+# A duplicate title: the board again, with the form as it was typed.
+async sub title_taken ($request, $error) {
+    my ($values) = validate(await $request->form_params);
+    return board_page($request, form => $values, status => 409,
+        errors => { title => 'There is already a task called "' . $error->exception->title . '".' });
+}
+
+sub no_such_task ($request, $error) {
+    return response('Text', 'No such task: ' . $request->path_param('id') . '.', status => 404);
+}
+
+# A page that does not exist: the router's 404.
+sub no_such_page ($request, $error) {
+    return response('Text', 'No such page: ' . $request->path . '.', status => 404);
 }
 
 compose(
@@ -100,9 +141,19 @@ compose(
     ],
     middleware => [
         middleware('Session'),
-        # Every POST is a form carrying csrf_token, which the middleware reads:
-        # a missing or wrong token is refused with a 403.
-        middleware('CSRF', session => 1),
+        # The token lives in the session. Every unsafe request is checked
+        # here: a cross-site one is refused, and a form's csrf_token field is
+        # read from its body -- which the route then reads as usual -- and a
+        # missing or wrong one is refused with a 403.
+        middleware('CSRF', session => 1, form_field => 'csrf_token'),
+        # The board's errors, answered in one place. A route's error is
+        # answered at that route, with its own Request: the form create
+        # read, and the id in the path.
+        middleware('ErrorHandler', catch => {
+            'TaskBoard::TitleTaken' => \&title_taken,
+            'TaskBoard::NoSuchTask' => \&no_such_task,
+            404                     => \&no_such_page,
+        }),
     ],
     lifespan => {
         startup => sub ($state, $scope) { $state->{board} = { next => 1, list => [] } },

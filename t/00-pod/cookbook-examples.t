@@ -367,8 +367,6 @@ subtest 'Streaming Response Formats recipe executes as published' => sub {
 subtest 'Thrown pages recipe executes as published' => sub {
     my $recipe = code_block_containing($cookbook,
         '=head3 Thrown pages and house-styled errors', "middleware('ErrorHandler'");
-    my $miss = code_block_containing($cookbook,
-        '=head3 Thrown pages and house-styled errors', 'http_default');
     perl_script_runs(
         'thrown pages recipe',
         "use PAGI::Compose qw(compose);\nuse PAGI::Routing qw(middleware route);\n"
@@ -380,7 +378,7 @@ subtest 'Thrown pages recipe executes as published' => sub {
             . "    route('/plack' => sub { die Local::PlackStyle->new }),\n"
             . "    route('/page' => sub { die response('Text', 'down', status => 503) }),\n"
             . "    route('/fact' => sub { die PAGI::Exception::HTTP->new(404, 'nope') }),\n"
-            . "],\n" . $miss . ");\n"
+            . "]);\n"
             . "local \$SIG{__WARN__} = sub {};\n"
             . "my \$client = PAGI::Test::Client->new(app => \$app);\n"
             . "my \$res = \$client->get('/plack');\n"
@@ -390,9 +388,56 @@ subtest 'Thrown pages recipe executes as published' => sub {
             . "die 'a 503 page answers as thrown' unless \$res->status == 503 && \$res->text eq 'down';\n"
             . "\$res = \$client->get('/fact');\n"
             . "die 'a fact gets the house style' unless \$res->status == 404 && \$res->json->{error} eq 'nope';\n"
+            . "\$res = \$client->post('/fact');\n"
+            . "die 'a wrong method gets the house style and keeps Allow' unless \$res->status == 405\n"
+            . "    && \$res->json->{error} eq 'Method Not Allowed' && (\$res->header('Allow') // '') eq 'GET, HEAD';\n"
             . "\$res = \$client->get('/nope');\n"
-            . "die 'a routing miss gets it from http_default' unless \$res->status == 404 && \$res->json->{error} eq 'Not Found';\n",
+            . "die 'a routing miss reaches the entry' unless \$res->status == 404 && \$res->json->{error} eq 'Not Found';\n",
     );
+};
+
+subtest 'Re-render a form from an error handler recipe executes as published' => sub {
+    my $recipe = first_code_block($cookbook, '=head3 Re-render a form from an error handler');
+    perl_script_runs(
+        're-render a form recipe',
+        $recipe
+            . "use PAGI::Test::Client;\n"
+            . "my \$client = PAGI::Test::Client->new(app => \$app);\n"
+            . "my \$res = \$client->post('/tasks', form => { title => 'Rotate <the> key' });\n"
+            . "die 'a new title redirects' unless \$res->status == 303;\n"
+            . "\$res = \$client->post('/tasks', form => { title => 'rotate <THE> key' });\n"
+            . "die 'a taken title is a 409' unless \$res->status == 409;\n"
+            . "die 'with the error, escaped' unless index(\$res->text, 'There is already a task called &#34;rotate &#60;THE&#62; key&#34;.') >= 0;\n"
+            . "die 'and the form with what was typed' unless index(\$res->text, 'value=\"rotate &#60;THE&#62; key\"') >= 0;\n",
+    );
+};
+
+subtest 'Watching or changing the request body recipe executes as published' => sub {
+    my $recipe = first_code_block($cookbook, '=head2 Watching or changing the request body');
+    my $checks = <<'PERL';
+use IO::Compress::Gzip qw(gzip);
+use PAGI::Test::Client;
+my @logged;
+local $SIG{__WARN__} = sub { push @logged, @_ };
+my $client = PAGI::Test::Client->new(app => $app);
+my $text = "hello, " x 1000;
+gzip(\$text => \my $packed) or die 'gzip failed';
+my $res = $client->post('/echo', body => $packed, headers => { 'Content-Encoding' => 'gzip' });
+die 'gzip: got ' . $res->status . ' ' . substr($res->text, 0, 60) . "\n"
+    unless $res->status == 200 && $res->text eq "identity: $text";
+die "logged: @logged" unless "@logged" eq 'request body: ' . length($text) . " bytes\n";
+@logged = ();
+$res = $client->post('/echo', body => 'plain');
+die 'plain: got ' . $res->text . "\n" unless $res->text eq 'identity: plain';
+$res = $client->post('/echo', body => 'not gzip', headers => { 'Content-Encoding' => 'gzip' });
+die 'bad gzip: got ' . $res->status . "\n" unless $res->status == 400;
+my $bomb_text = 'x' x (11 * 1024 * 1024);
+gzip(\$bomb_text => \my $bomb) or die 'gzip failed';
+die 'the bomb is not small: ' . length($bomb) . "\n" unless length($bomb) < 64 * 1024;
+$res = $client->post('/echo', body => $bomb, headers => { 'Content-Encoding' => 'gzip' });
+die 'bomb: got ' . $res->status . "\n" unless $res->status == 413;
+PERL
+    perl_script_runs('Watching or changing the request body recipe', $recipe . $checks);
 };
 
 subtest 'CSRF on a streamed upload recipe executes as published' => sub {
@@ -400,7 +445,7 @@ subtest 'CSRF on a streamed upload recipe executes as published' => sub {
     my $checks = <<'PERL';
 use PAGI::Test::Client;
 my $client = PAGI::Test::Client->new(app => $app);
-my ($token) = $client->get('/notes/')->text =~ /name="csrf_token" value="([^"]+)"/;
+my ($token) = $client->get('/notes')->text =~ /name="csrf_token" value="([^"]+)"/;
 die 'no token on the page' unless $token;
 my $boundary = 'XyZ';
 my %multipart = ('Content-Type' => "multipart/form-data; boundary=$boundary");

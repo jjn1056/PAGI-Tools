@@ -46,7 +46,7 @@ subtest 'SSE uses the shared PAGI header container' => sub {
         'scope caches the public header container');
 };
 
-subtest 'Request and WebSocket share headers when Request reads first' => sub {
+subtest 'Request and WebSocket each parse headers, Request first' => sub {
     my $scope = ws_scope(
         scheme  => 'ws',
         path    => '/socket',
@@ -60,11 +60,12 @@ subtest 'Request and WebSocket share headers when Request reads first' => sub {
     );
 
     is(refaddr($request->scope), refaddr($scope), 'Request keeps original scope');
-    is(refaddr($websocket->headers), refaddr($cached), 'WebSocket reuses Request cache');
-    is($request->header('X-TRACE'), 'two', 'Request lookup uses shared snapshot');
+    isnt(refaddr($websocket->headers), refaddr($cached), 'WebSocket parses its own');
+    is($websocket->header('X-TRACE'), 'two', 'to the same value');
+    is($request->header('X-TRACE'), 'two', 'Request lookup uses its own snapshot');
 };
 
-subtest 'Request and WebSocket share headers when WebSocket reads first' => sub {
+subtest 'Request and WebSocket each parse headers, WebSocket first' => sub {
     my $scope = ws_scope(
         scheme  => 'wss',
         path    => '/socket',
@@ -78,13 +79,13 @@ subtest 'Request and WebSocket share headers when WebSocket reads first' => sub 
     my $request = PAGI::Request->new($scope, $receive);
 
     is(refaddr($request->scope), refaddr($scope), 'Request keeps original scope');
-    is(refaddr($request->headers), refaddr($cached), 'Request reuses WebSocket cache');
+    isnt(refaddr($request->headers), refaddr($cached), 'Request parses its own');
     is($request->header('X-TRACE'), 'two', 'helper-first lookup remains last-value');
     is($request->method, undef, 'Request does not fabricate a WebSocket method');
     is($request->scheme, 'wss', 'Request preserves the native WebSocket scheme');
 };
 
-subtest 'Request and SSE share headers in both access orders' => sub {
+subtest 'Request and SSE each parse headers in both access orders' => sub {
     for my $request_first (0, 1) {
         my $scope = sse_scope(
             scheme  => 'https',
@@ -99,9 +100,10 @@ subtest 'Request and SSE share headers in both access orders' => sub {
         my $first = $request_first ? $request->headers : $sse->headers;
         my $second = $request_first ? $sse->headers : $request->headers;
 
-        is(refaddr($second), refaddr($first),
-            ($request_first ? 'Request-first' : 'SSE-first') . ' access shares one cache');
-        is($request->header('X-TRACE'), 'two', 'Request reads the shared SSE snapshot');
+        isnt(refaddr($second), refaddr($first),
+            ($request_first ? 'Request-first' : 'SSE-first') . ': each parses its own');
+        is($request->header('X-TRACE'), 'two', 'Request reads its own snapshot');
+        is($sse->header('X-TRACE'), 'two', 'SSE reads the same value');
     }
 };
 

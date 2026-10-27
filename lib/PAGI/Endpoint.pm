@@ -233,13 +233,15 @@ and path parameters, and state. It should not read the body, nor C<receive>
 on a WebSocket or SSE scope, because the endpoint it builds owns that input;
 this is not enforced. A builder that awaits the body
 (C<< await $request->json >>) consumes it: the handler still gets C<json>,
-C<form> and C<body> from the scope's cache, but C<body_stream> then dies
-"Body already consumed".
+C<form> and C<body>, because it gets the same Request, but C<body_stream>
+then dies "Body already consumed".
 
-The handler's C<$request> is not the builder's object. An HTTP endpoint makes
-its own Request for its method, and both read the same cached headers,
-cookies and body; a Request class's C<new> therefore runs twice for that
-request.
+For HTTP the handler's C<$request> is the builder's object: one Request per
+request, so what the builder read is the handler's too, and a Request class's
+C<new> runs once. That holds only for the Request the builder was given: one
+it makes itself over the same scope finds a body the other read already
+consumed. The first parse is the one kept, so C<form_params> options the
+handler passes after the builder parsed the form do not apply.
 
 =head1 METHODS AND 405
 

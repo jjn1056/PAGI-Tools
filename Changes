@@ -7,10 +7,17 @@
   UPGRADING-REFERENCE.md has the details. Needs PAGI::Server 0.003000.
 
   [New]
+  - PAGI::Middleware::Stash (middleware('Stash')) gives every layer below
+    it one shared stash, so a middleware sees what a handler stored, after
+    the handler returns, through any scope copies between them.
   - PAGI::Tools::Extending: a guide for building frameworks and add-ons on
     PAGI-Tools -- what a framework may rely on, the two ways to build one,
     and a link to the rule for each; examples/framework-wrap-style and
     examples/framework-on-tools are the complete frameworks.
+  - A PAGI::Response stringifies to its class and status ("PAGI::Response::
+    Text (status 503)"), never its body, so a thrown page re-raised to the
+    server is logged as what it is rather than a hash address; it stays
+    true, and == compares identity.
   - PAGI::Response exports status_forbids_body($status): true for the
     statuses that carry no content (1xx, 204, 205, 304), the rule every
     response class applies.
@@ -19,7 +26,8 @@
     run_if_script, the module's last line in place of 1;, makes
     lib/MyApp.pm both an application a server loads
     (pagi-server -Ilib --app lib/MyApp.pm) and a program you can run.
-    Loading it builds nothing until a server calls to_app.
+    Loading it builds nothing until a server calls to_app. For a classic
+    application, one that writes call itself: examples/raw-app.
   - PAGI::App::Compose: the regular way to write a Compose application in
     lib/MyApp.pm. A subclass writes routes, and optionally app_middleware,
     http_default, on_startup and on_shutdown; to_app builds them once into
@@ -54,12 +62,15 @@
     (Encode's stateful decoder), strict or with U+FFFD; body_stream's decode
     is built on it.
   - PAGI::Utils::Middleware record_receive (also from PAGI::Tools): for
-    middleware that reads the request body, a receive to read through and
-    one that delivers what was read again, then the rest, to the
-    application. The events are kept in a
-    PAGI::Utils::ReceiveBuffer::TempFile -- 64KB in memory, the rest in a
-    temporary file -- or in any buffer with its append and take methods. PAGI::Middleware's WRITING MIDDLEWARE
-    says when to use it.
+    middleware that reads the request body before the application runs, a
+    receive to read through and one that delivers what was read again,
+    then the client's receive (so the disconnect still arrives). The
+    events are kept in memory, or in a buffer given with buffer: a
+    PAGI::Utils::ReceiveBuffer::TempFile (64KB in memory, the rest in a
+    temporary file) or any object with append and take. Its POD cites the
+    Starlette write-ups of this read-ahead pattern and the mistakes their
+    hand-written receives make; PAGI::Middleware's "Reading the request
+    body" says when to use it and when to wrap the receive instead.
   - PAGI::ContentNegotiation's handler side: respond_to, negotiated_type
     and content_negotiation (also from PAGI::Tools) read the
     ContentNegotiation middleware's choice; respond_to calls the branch for
@@ -78,17 +89,35 @@
     write_item is write.
   - PAGI::Pages: negotiated welcome, error and redirect responses.
   - PAGI::ErrorContext (error_context): the error an ErrorHandler handler
-    answers. PAGI::Exception::RequestBody gains client_message.
+    answers. Its headers are the error's own (a 401's WWW-Authenticate),
+    for an entry to pass on as headers => $error->headers. PAGI::Exception::RequestBody gains client_message, and is a
+    PAGI::Exception::HTTP (with no headers), so one catch entry for
+    PAGI::Exception::HTTP answers a bad body too.
   - PAGI::Auth (auth, auth_result, unauth_result, www_authenticate)
-    and PAGI::Middleware::Authentication. A body its backend
-    reads is handed on to the application with record_receive;
-    body_buffer chooses where it is kept meanwhile.
+    and PAGI::Middleware::Authentication. Its backend reads the request's
+    headers and cookies, never the body (as Starlette's backend gets an
+    HTTPConnection); a request signed over its body is checked in the
+    handler. What the backend throws is handled as the same value thrown
+    from a route is (as Starlette answers a backend's AuthenticationError):
+    an HTTP error, a class with a catch entry, or a page is answered, by the
+    ErrorHandler the route is inside or with the built-in answer, and a
+    WebSocket or SSE is refused with it; anything else is a server error.
+    Its catch option (an ErrorHandler-shaped table; Starlette's on_error)
+    shapes those answers wherever it is placed, so one table can serve
+    ErrorHandler and Authentication: ErrorHandler's catch answers what the
+    application raises, a middleware answers what it raises itself.
+  - PAGI::Request's bearer_token, basic_auth and content_type with
+    raise_on_error throw a PAGI::Exception::HTTP 400 ("The Authorization
+    header could not be parsed.") for a duplicate or malformed field: the
+    client sent it. Option errors still croak; PAGI::Headers' own readers
+    still raise plain errors, since they parse any header list.
   - PAGI::Middleware::Requires: the scopes a route, mount or application
     requires, as middleware (Starlette's @requires). Otherwise a plain 403,
     a refuse application, or a redirect 303: to a location as written, or
     to path_for arguments with ?next= added. WebSocket and SSE are refused
     before they start, and route_table shows it in each entry's middleware.
-  - PAGI::Routing::OpenAPI: openapi($app, title => ..., version => ...)
+  - PAGI::Routing::OpenAPI (early beta: its interface may still change
+    incompatibly): openapi($app, title => ..., version => ...)
     returns the application, a Compose, with its OpenAPI 3.1 document as a
     route at /openapi.json, inside the application's own middleware. The
     document is built from route_table: paths and methods, typed path parameters,
@@ -129,12 +158,13 @@
     and replaces it when the session is regenerated (at login);
     an origin check (Sec-Fetch-Site, then Origin vs Host) on unsafe
     requests and on WebSocket handshakes (cross-site WebSocket hijacking),
-    with trusted_origins; httponly. It reads the token from the form's
-    csrf_token field (form_field) when no header is sent, from urlencoded
-    and multipart bodies; a sent header decides and the body is then
-    never read; form_field => undef reads only the header. A body it reads
-    is handed on with record_receive, so an application reading $receive
-    still receives it; body_buffer chooses where it is kept meanwhile.
+    with trusted_origins; httponly. With form_field set, the middleware
+    checks a plain HTML form's token itself, as Django's does: it reads a
+    urlencoded body whole (at most max_form_size, 1 MiB) and a multipart
+    body only as far as its token part, deciding in byte order so an
+    upload after the token still streams, and hands the route a receive
+    that delivers the whole body again. Every form route is protected; one
+    token serves every form on a page.
   - PAGI::FutureOwner: own the Futures you start until they settle; await
     settled for all of them (in lifespan.shutdown, say). Replaces ->retain
     for background work.
@@ -152,6 +182,24 @@
     PAGI::Tools qw(compose response route path_for) -- or by the :routes,
     :urls and :all tags. Each is its source module's own function, so
     importing from the modules themselves still works the same.
+  - Reading the request body in middleware, documented as one rule --
+    a body arrives once, so whoever reads it hands the application a
+    receive that delivers a body -- in PAGI::Middleware's "Reading the
+    request body", with its three shapes: wrap the receive to watch or
+    change the body as it streams (Starlette's documented pattern; the
+    Cookbook's new "Watching or changing the request body", a size logger
+    and a gzip decoder); read ahead with record_receive to pass on the
+    same body (buffer_request_body is the read half); or write the receive
+    yourself to pass on a different one (examples/modify-form-post, a
+    middleware that rewrites a form POST, beside the same application in
+    Starlette). examples/signed-requests checks a signature over the body
+    as the routes read it, as Starlette's body-size limit does.
+  - PAGI::Utils exports request_for_scope($scope, $receive): a new Request
+    of the application's class (RequestClass's, else PAGI::Request), for
+    middleware, error handlers and a framework's own dispatch to read what
+    the scope holds. A limited-use Request: not the route handler's, and
+    it does not own the body; code that must not read the body passes a
+    receive that dies, as Authentication and ErrorHandler do.
   - Cookbook: "Linking inside a mounted app"; PAGI::Routing::URL's
     path_for shows absolute, sibling and parent references in a Mount.
   - examples/gut-check: everyday applications next to their Starlette
@@ -159,8 +207,8 @@
     t/example-gut-check.t.
   - PAGI::Middleware::RequestClass: middleware('RequestClass', class =>
     'MyApp::Request') gives every handler below it (routes, Endpoint::HTTP
-    methods, refuse, deny and decline handlers, an ErrorHandler handler
-    listed after it, Authentication backends) that Request class instead
+    methods, refuse, deny and decline handlers, an ErrorHandler catch
+    entry, Authentication backends listed after it) that Request class instead
     of PAGI::Request, through the scope key pagi.request.factory;
     request_response's request_factory still wins for its one handler.
   - examples/request-class: an application's Request class set once by
@@ -170,8 +218,10 @@
     fresh object with new for each request (each connection for WebSocket
     and SSE), so $self belongs to that request. A BUILD_APP that returns an
     object shares it across every request; one that returns a coderef is a
-    builder, called per request (it may be async). Moose endpoint classes
-    need MooseX::NonMoose, and endpoint() says so.
+    builder, called per request (it may be async); for HTTP the handler
+    gets the Request the builder was given, so a Request class's new runs
+    once per request. Moose endpoint classes need MooseX::NonMoose, and
+    endpoint() says so.
   - Endpoint::HTTP answers QUERY with a query method. A query helper method
     on an existing subclass now answers QUERY too.
   - PAGI::Test::Client has a query method for the QUERY verb.
@@ -194,14 +244,45 @@
     ['WWW-Authenticate' => ...])), and ErrorHandler's built-in answer sends
     an HTTP error's headers, from any thrown object with a headers method:
     a 401, 405, 407 or 426 that carries its required field no longer needs
-    a handler. Headers that cannot be sent make the built-in answer a 500
-    with a diagnostic; a handler or catch entry answers with the claimed
-    status whatever the headers are.
+    a catch entry. Headers that cannot be sent make the built-in answer a
+    500 with a diagnostic; a catch entry answers in full, with the claimed
+    status whatever the headers are, and sends them only if it passes them
+    on -- except a 405's Allow, which an entry's 405 that sends none gets
+    from the error, wherever the ErrorHandler is placed.
   - ErrorHandler catch => { 404 => sub ($request, $error) {...},
-    'MyApp::Conflict' => sub {...} }: answers by status and exception
-    class before handler, in Starlette's order (an HTTP error's status,
-    then the class and its ancestors, then the status a plain die was
-    given).
+    'MyApp::Conflict' => sub {...} }: the errors the application expects,
+    answered by status and exception class in Starlette's order (an HTTP
+    error's status, then the class and its ancestors, then the status a
+    plain die was given).
+  - ErrorHandler is two boundaries, as Starlette's ExceptionMiddleware and
+    ServerErrorMiddleware are. The exception boundary handles an expected
+    error -- an HTTP error, a thrown page, or one with a catch entry -- and
+    a handled error is not re-raised, except a thrown HTTP error or page
+    of 500 or more, answered and then re-raised so the server logs it
+    (Starlette logs nothing for an HTTPException(500)); the
+    server-error boundary answers the rest with handler (or a catch entry
+    for the configured status, or the built-in 500) and always re-raises.
+    An error a route's handler throws -- a coderef route, an Endpoint::HTTP
+    method, a builder that takes a Request -- is answered at that route,
+    so a catch entry gets the route's own Request: the form it read, its
+    path_params, the session and CSRF keys (as Starlette's request_response
+    hands an exception handler the endpoint's Request). In Compose's
+    middleware the stock ErrorHandler is split, wherever it is listed:
+    catch around the router, inside every application middleware; handler,
+    on_error and the 500 outside them all, so an application middleware's
+    error gets handler, never catch, and request identity, access logging
+    and response headers that must cover the 500 wrap the compiled
+    application. One per Compose; a subclass is not split. The innermost
+    ErrorHandler answers, as Starlette's innermost ExceptionMiddleware
+    does: an outer catch table never reaches past an inner ErrorHandler or
+    into a mounted Compose. When that innermost one has catch entries, the
+    router raises its 404 and 405 (with Allow) to it, as Starlette's does;
+    with no entry for them they get the router's own plain answers. on_error
+    is not told of a routing miss. ErrorHandler's answers to HEAD send no body. A failing
+    handler or entry fails as itself, outward, with one warning naming the
+    error it displaced. Cookbook: "Re-render a form from an error handler";
+    examples/internal-tool raises its board's errors and answers them in
+    one place, beside the same board in Flask.
   - A Stream's content may be a source, any object with next_chunk:
     response('Stream', $source) pulls it one value at a time, as
     Starlette's StreamingResponse iterates its content (NDJSON takes a
@@ -209,6 +290,11 @@
     option is its cleanup, for a source or a producer.
 
   [Changed]
+  - PAGI::Stash (stash()) dies on a scope with no stash, naming
+    middleware('Stash'); it used to create one on first use. A stash first
+    created below a middleware's scope copy was held only by that copy, so a
+    layer above it silently never saw what was stored. Stack
+    middleware('Stash') above every layer that uses the stash.
   - Tests: the two that would meet Future::XS's "lost a sequence Future"
     warning skip under a Future::XS older than 0.16, which fixes it
     (RT #181389); PAGI-Server's --future-xs requires 0.16.
@@ -288,8 +374,9 @@
   - raw_path is the full requested path at every mount level; AccessLog
     logs, and HTTPSRedirect redirects to, the encoded request URI.
   - Stock error responses from first-party components are plain text, each
-    replaceable by one option (refuse, response, http_default, default or
-    ErrorHandler's handler); a PAGI::Pages page is the application's choice.
+    replaceable by one option (refuse, response, http_default, default, or
+    ErrorHandler's catch and handler); a PAGI::Pages page is the
+    application's choice.
   - One coderef convention: a slot that answers a request (every refuse,
     Maintenance response, ErrorHandler handler, routes, http_default,
     deny/decline) reads a bare coderef as a Request handler; a slot that
@@ -298,10 +385,9 @@
   - ErrorHandler answers in plain text (reason phrase, or a client error's
     client_message) with Cache-Control: no-store; its handler is a Request
     handler that reads the error through PAGI::ErrorContext
-    (error_context($request)), may return any application, and declines by
-    returning $error->default. The error is re-raised when the status sent
-    is 5xx; a failing handler gets a last-resort 500 and the original error
-    is re-raised. Status claims outside 400-599 answer 500.
+    (error_context($request)), answers only unhandled errors, may return any
+    application, and declines by returning $error->default. Status claims
+    outside 400-599 answer 500.
   - References in events are shared, not copied (PAGI 0.002013): Runtime,
     SecurityHeaders and CORS no longer write into a response's own header
     list, nor Debug into its header pairs, which leaked one request's headers -- an origin, a timing
@@ -373,9 +459,10 @@
   - ErrorHandler answers a thrown page -- a value with to_app and no
     status_code, such as a Response -- with the page itself. Below 400 it
     is sent as it is, with no on_error, handler or re-raise, so
-    die response('Redirect', '/login') redirects; from 400 to 599 it goes
-    through on_error and the handler, and $error->default is the page. A
-    thrown Response used to be a 500.
+    die response('Redirect', '/login') redirects; from 400 to 599 it is a
+    handled error: on_error runs and the page is the answer, re-raised only
+    from 500 up.
+    A thrown Response used to be a 500.
   - $request->state, $ws->state and $sse->state always return a
     PAGI::State. Without application state it is empty, and its get and
     data die naming the likely cause (lifespan startup did not run;
@@ -403,8 +490,38 @@
     Tutorial link to one statement of each rule instead of restating it.
 
   [Breaking -- see UPGRADING.md]
+  - PAGI::Test::Client's form and query values are characters, sent UTF-8
+    percent-encoded, as its path and json already were: each character
+    was sent as one byte, so "caf\x{e9}" reached the application as
+    "caf\x{FFFD}" and a character beyond U+00FF ("\x{263A}") became
+    "%263A", read as "&3A". A value pre-encoded to bytes is now encoded
+    twice. The encoder is the one path_for uses (PAGI::Utils::Scope).
+    PAGI::App's run encodes its command-line fields itself, as bytes.
+  - PAGI::Middleware::ErrorHandler: a handler's or catch entry's Request has
+    no body to read; body, form_params, json and the rest die at once,
+    naming the handler's line (as Starlette's ServerErrorMiddleware hands
+    its handler a Request with no receive). The application may have read
+    the body before it failed, and reading it again waited forever on a
+    real server.
+  - PAGI::Request writes nothing to the scope: the headers, query,
+    cookies, body, form and uploads it parses, and its body latches, are
+    kept on the object, as Starlette's Request keeps them (0.002002 kept
+    them in the scope under pagi.request.*). A middleware that rewrites
+    headers, the query string or cookies on a copy of the scope no longer
+    leaves a stale parse for the Request below it. Two Requests over one
+    scope each parse for themselves, and the second cannot read a body the
+    first one read: pass the one Request on. MethodOverride and
+    Authentication never read the body, and CSRF reads a form's ahead
+    only to find its token and hands the route the whole body (see their
+    entries), so a route below them may stream it.
   - Requires Perl 5.24 (was 5.18), as PAGI 0.003001 and PAGI-Server do.
     See "Perl version support" in PAGI.
+  - PAGI::Test::Client: a receive after the whole HTTP request body waits,
+    as on PAGI::Server, until the response is complete and then reports
+    http.disconnect (it answered http.disconnect at once). A second read
+    of a consumed body, which hangs on a server, now fails the test after
+    the 5-second drive timeout with a message naming it, instead of
+    reading an empty body.
   - PAGI::Test::Client no longer runs an application's own event loop
     for an HTTP request: 0.002002's ->get on the app's Future ran an
     IO::Async loop the app waited on, for requests only. An application
@@ -441,9 +558,12 @@
   - Session takes no secret, cookie_name or cookie_options: the cookie is
     configured on State::Cookie, which sets no Max-Age by default and
     merges its cookie_options into the defaults.
-  - ErrorHandler re-raises server errors to the server after the error
-    response (when the status sent is 5xx), and rethrows an exception raised after the response
-    started instead of swallowing it.
+  - ErrorHandler re-raises an unhandled error to the server after the error
+    response (an HTTP error or a thrown page is handled, whatever its
+    status), and rethrows an exception raised after the response started
+    instead of swallowing it. In Compose its 500 is rendered outside the
+    application middleware: RequestId, AccessLog, CORS and SecurityHeaders
+    that must cover it wrap the compiled application.
   - PAGI::WebSocket and PAGI::SSE require pagi.connection (PAGI::Server
     0.003000); their state is a PAGI::State object; deny takes a response.
   - A request body cut short by a disconnect croaks instead of returning
@@ -462,10 +582,12 @@
     dies, and its cleanup is skipped (the error is logged).
   - PAGI::Middleware::CSRF's enforce is removed: refuse => 0 replaces
     enforce => 'app', and passing enforce dies.
-  - PAGI::Middleware::CSRF reads the body of a header-less unsafe form
-    request, so body_stream and multipart_stream on such a request die; a
-    route that streams a form upload configures its own CSRF and sits
-    outside every CSRF that reads the body (see the Cookbook).
+  - PAGI::Middleware::CSRF accepts a plain HTML form only with
+    form_field => 'csrf_token' (0.002002's enforce => 'app' with the
+    handler's verify), and then checks the form's field itself, before
+    any route runs; without form_field, an unsafe request without the
+    X-CSRF-Token header is refused. A multipart form puts its token field
+    before any file.
   - PAGI::Middleware::CSRF's secret is removed (tokens are random; passing
     it dies); its cookie is no longer HttpOnly unless httponly => 1;
     cross-origin unsafe requests are refused. PAGI::CSRF's verify fails a
@@ -540,14 +662,11 @@
     (response('Text', $s, headers => ['Content-Type' => 'text/csv']) sent
     text/csv with no charset), Empty refuses one, and header() replaces
     the type rather than adding a second.
-  - PAGI::Middleware::MethodOverride reads the _method field of a
-    urlencoded or multipart POST body, as its documentation always said
-    (and as Rails and Laravel do); it read only the header and the query
-    string, so an HTML form's hidden _method did nothing. Order: header,
-    form field, query. The body is handed on with record_receive and its
-    parse shared with the application, so a form below it cannot be
-    streamed; check_form => 0 never reads the body. New body_buffer
-    option, as CSRF has.
+  - PAGI::Middleware::MethodOverride's documentation said it read a
+    _method field in a POST body; it reads only the header and the query
+    string, as Plack::Middleware::MethodOverride does, and never the body,
+    and the documentation now says so: an HTML form puts the method in its
+    action URL (action="/tasks/1?_method=DELETE").
   - PAGI::Middleware::Builder's enable no longer ignores a middleware
     that fails to load: a file that did not compile, or died while
     loading, was used half-defined, and a missing one failed later at

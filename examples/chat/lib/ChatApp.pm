@@ -1,4 +1,4 @@
-#!/usr/bin/env perl
+package ChatApp;
 
 # Multi-user chat: HTTP, WebSocket and SSE in one application.
 #
@@ -8,18 +8,16 @@
 # - Lifespan: startup and shutdown hooks
 #
 # Run with:
-#   pagi-server -I lib --app examples/chat/app.pl --port 5000
+#   pagi-server -I examples/chat/lib --app examples/chat/lib/ChatApp.pm --port 5000
 # Then open http://localhost:5000
 
 use strict;
 use warnings;
+use parent 'PAGI::App::Compose';
 
 use Future::AsyncAwait;
-use File::Basename qw(dirname);
-use lib dirname(__FILE__) . '/lib';
 
 use PAGI::App::File;
-use PAGI::Compose qw(compose);
 use PAGI::Routing qw(middleware mount route sse websocket);
 
 use ChatApp::State qw(get_stats);
@@ -64,32 +62,35 @@ sub with_logging {
     };
 }
 
-compose(
-    routes => [
+sub routes {
+    return [
         websocket('/ws/chat' => \&ChatApp::WebSocket::chat),
         sse('/events' => \&ChatApp::SSE::events),
         mount('/api', app => ChatApp::HTTP::routing()),
         # A Route is HTTP-only, so WebSocket and SSE misses still get the
         # Router's refusals rather than reaching the file application.
         route('/*path' => PAGI::App::File->from_app_path('public')),
-    ],
-    middleware => [middleware(\&with_logging)],
-    lifespan => {
-        startup => async sub {
-            say STDERR "[lifespan] Application starting up...";
+    ];
+}
 
-            # Default rooms are created on module load
-            my $stats = get_stats();
-            say STDERR "[lifespan] Initialized with $stats->{rooms_count} default rooms";
-        },
-        shutdown => async sub {
-            say STDERR "[lifespan] Application shutting down...";
+sub app_middleware { return [middleware(\&with_logging)] }
 
-            my $stats = get_stats();
-            say STDERR "[lifespan] Final stats: $stats->{users_online} users, $stats->{messages_total} messages";
-        },
-    },
-);
+async sub on_startup {
+    say STDERR "[lifespan] Application starting up...";
+
+    # Default rooms are created on module load
+    my $stats = get_stats();
+    say STDERR "[lifespan] Initialized with $stats->{rooms_count} default rooms";
+}
+
+async sub on_shutdown {
+    say STDERR "[lifespan] Application shutting down...";
+
+    my $stats = get_stats();
+    say STDERR "[lifespan] Final stats: $stats->{users_online} users, $stats->{messages_total} messages";
+}
+
+__PACKAGE__->run_if_script;
 
 __END__
 
@@ -99,7 +100,7 @@ Multi-User Chat - HTTP, WebSocket and SSE in one PAGI-Tools application
 
 =head1 SYNOPSIS
 
-    pagi-server -I lib --app examples/chat/app.pl --port 5000
+    pagi-server -I examples/chat/lib --app examples/chat/lib/ChatApp.pm --port 5000
 
 Then open http://localhost:5000 in a browser (two tabs to chat with yourself).
 

@@ -111,22 +111,27 @@ subtest 'an entry gets the request and the error context' => sub {
     is($status, 299, 'a Response with its own status keeps it');
 };
 
-subtest 'a failing entry' => sub {
-    for my $case ([ 'dies' => sub { die "entry broke\n" } ], [ 'returns junk' => sub { [] } ]) {
-        my ($label, $entry) = @$case;
-        my $error = PAGI::Exception::HTTP->new(500);
-        my ($status, undef, $failure, $reported, $warnings) = run(error => $error, options => { catch => { 500 => $entry } });
-        is($status, 500, "$label: the last-resort 500");
-        is(refaddr($reported->[0]), refaddr($error), "$label: on_error saw the original");
-        is(refaddr($failure), refaddr($error), "$label: the original is re-raised");
-        like($warnings, [ qr/ErrorHandler catch entry failed/ ], "$label: diagnosed as the catch entry");
+subtest "a failing entry: its own failure goes on to the server-error boundary" => sub {
+    for my $case ([ 'dies' => sub { die "entry broke\n" }, qr/\Aentry broke$/ ],
+                  [ 'returns junk' => sub { [] }, qr/ErrorHandler catch entry must return a PAGI application/ ]) {
+        my ($label, $entry, $why) = @$case;
+        my $error = PAGI::Exception::HTTP->new(409);
+        my ($status, undef, $failure, $reported, $warnings) = run(error => $error, options => { catch => { 409 => $entry } });
+        is($status, 500, "$label: the server-error boundary's 500");
+        is(refaddr($reported->[0]), refaddr($error), "$label: on_error saw the original first");
+        like("$reported->[1]", $why, "$label: then the failure");
+        like("$failure", $why, "$label: the failure itself is re-raised");
+        like($warnings, [qr/\APAGI ErrorHandler catch entry failed while answering "409 Conflict": /],
+            "$label: one line names the displaced original");
     }
 };
 
-subtest 'a failing handler is still diagnosed as the handler' => sub {
-    my (undef, undef, undef, undef, $warnings) = run(error => "db down\n",
+subtest "a failing handler propagates its own failure" => sub {
+    my (undef, undef, $failure, undef, $warnings) = run(error => "db down\n",
         options => { catch => { 'MyApp::Error' => bare('no') }, handler => sub { die "handler broke\n" } });
-    like($warnings, [ qr/ErrorHandler handler failed: handler broke/ ], 'the handler');
+    is($failure, "handler broke\n", 'the failure, not the original');
+    is($warnings, [qq{PAGI ErrorHandler handler failed while answering "db down": handler broke\n}],
+        'one line names the displaced original');
 };
 
 subtest 'a field-required status answered by an entry' => sub {

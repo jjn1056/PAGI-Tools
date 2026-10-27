@@ -17,35 +17,34 @@ my $page = app_path('public', 'index.html');
 # Pass this callback directly, or supply an object with authenticate instead.
 sub jwt_backend ($request) {
     my $token;
-    my $parsed = eval {
-        $token = $request->bearer_token(raise_on_error => 1);
-        1;
-    };
-    return unauth_result(failure => {
-        code => 'malformed_authorization',
-        message => 'Expected one Authorization header containing a Bearer token.',
-    }) unless $parsed;
+    try { $token = $request->bearer_token(raise_on_error => 1) }
+    catch ($e) {
+        return unauth_result(failure => {
+            code => 'malformed_authorization',
+            message => 'Expected one Authorization header containing a Bearer token.',
+        });
+    }
     return unauth_result() unless defined $token;
 
+    # A guest is an explicit result. Middleware establishes it and continues.
+    # These failures mean token rejection; the malformed-header case is above.
+    # Application response code can distinguish rejection from absent credentials.
     my $claims;
-    my $verified = eval {
+    try {
         $claims = decode_jwt(
             token        => $token,
             key          => $secret,
             accepted_alg => 'HS256',
             verify_exp   => 1,
         );
-        1;
-    };
-
-    # A guest is an explicit result. Middleware establishes it and continues.
-    # These failures mean token rejection; the malformed-header case is above.
-    # Application response code can distinguish rejection from absent credentials.
-    return unauth_result(
-        failure => {
-            message => 'The token is invalid or expired.',
-        },
-    ) unless $verified;
+    }
+    catch ($e) {
+        return unauth_result(
+            failure => {
+                message => 'The token is invalid or expired.',
+            },
+        );
+    }
 
     return unauth_result(
         failure => {

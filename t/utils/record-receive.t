@@ -96,9 +96,16 @@ subtest 'a buffer may be given' => sub {
     ok($replayed->[0] != $read->[0], 'through the given buffer, which spooled it');
 };
 
-subtest 'the default buffer spools a large body' => sub {
-    my ($receive) = client_sending({ type => 'http.request', body => 'x' x (65 * 1024), more => 0 });
+subtest 'by default the body is kept in memory, however large' => sub {
+    my ($receive) = client_sending({ type => 'http.request', body => 'x' x (1024 * 1024), more => 0 });
     my ($reading, $replaying) = record_receive($receive);
+    my $read = $reading->()->get;
+    ref_is($replaying->()->get, $read, 'the same event comes back: nothing was spooled');
+};
+
+subtest 'a TempFile buffer spools a large body, if given' => sub {
+    my ($receive) = client_sending({ type => 'http.request', body => 'x' x (65 * 1024), more => 0 });
+    my ($reading, $replaying) = record_receive($receive, buffer => PAGI::Utils::ReceiveBuffer::TempFile->new);
     my $read = $reading->()->get;
     my $replayed = $replaying->()->get;
     is($replayed, $read, 'the body comes back');

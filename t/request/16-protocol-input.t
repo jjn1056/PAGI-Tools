@@ -4,7 +4,6 @@ use warnings;
 
 use Test2::V0;
 use Future;
-use Hash::MultiValue;
 use File::Temp qw(tempdir);
 use Scalar::Util qw(refaddr);
 
@@ -249,7 +248,7 @@ subtest 'HTTP and SSE buffered multipart reject wrong event families' => sub {
     }
 };
 
-subtest 'WebSocket body APIs reject before receive, caches, or flags' => sub {
+subtest 'WebSocket body APIs reject before receive or any state' => sub {
     my @methods = (
         ['body',             sub { $_[0]->body->get }],
         ['text',             sub { $_[0]->text->get }],
@@ -268,33 +267,16 @@ subtest 'WebSocket body APIs reject before receive, caches, or flags' => sub {
     for my $method (@methods) {
         my ($name, $invoke) = @$method;
         my $calls = 0;
-        my $form = Hash::MultiValue->new(name => 'cached');
-        my $uploads = Hash::MultiValue->new(file => 'cached');
-        my $scope = {
-            type => 'websocket',
-            'pagi.request.body'    => 'cached body',
-            'pagi.request.body.read' => 1,
-            'pagi.request.body.truncated' => 1,
-            'pagi.request.body.stream.created' => 1,
-            'pagi.request.form'    => $form,
-            'pagi.request.uploads' => $uploads,
-        };
+        my $scope = { type => 'websocket' };
         my $request = PAGI::Request->new($scope, sub {
             ++$calls;
             return Future->done({ type => 'websocket.receive', bytes => 'bad' });
         });
-        my %before = map { $_ => $scope->{$_} }
-            qw(pagi.request.body.read pagi.request.body.truncated pagi.request.body.stream.created);
 
         like dies { $invoke->($request) }, qr/body input requires HTTP or SSE scope/,
             "$name rejects WebSocket body input";
         is($calls, 0, "$name does not receive");
-        is($scope->{'pagi.request.body'}, 'cached body', "$name leaves body cache unchanged");
-        is(refaddr($scope->{'pagi.request.form'}), refaddr($form), "$name leaves form cache unchanged");
-        is(refaddr($scope->{'pagi.request.uploads'}), refaddr($uploads), "$name leaves upload cache unchanged");
-        for my $flag (keys %before) {
-            is($scope->{$flag}, $before{$flag}, "$name leaves $flag unchanged");
-        }
+        is([ sort keys %$scope ], ['type'], "$name writes nothing to the scope");
     }
 };
 

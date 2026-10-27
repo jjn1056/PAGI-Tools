@@ -42,6 +42,10 @@ subtest '01: errors as responses' => sub {
     is($res->status, 404, 'a path no route matches is a 404');
     is($res->json, { error => 'Not Found' }, 'in the same JSON shape');
 
+    $res = $client->post('/notes/1');
+    is([$res->status, $res->json, $res->header('Allow')], [405, { error => 'Method Not Allowed' }, 'GET, HEAD'],
+        "a wrong method: the router's 405, in the JSON shape, keeping its Allow");
+
     like(
         warning { $res = $client->get('/boom') },
         qr/exception after response completed: an ordinary bug/,

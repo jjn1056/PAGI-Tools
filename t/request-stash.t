@@ -20,6 +20,7 @@ subtest 'class and factory accept PAGI::Request sources' => sub {
         path         => '/test',
         query_string => '',
         headers      => [],
+        'pagi.stash' => {},   # what middleware('Stash') provides
     };
 
     my $req = PAGI::Request->new($scope, $receive);
@@ -39,6 +40,7 @@ subtest 'stash lives in scope' => sub {
         path         => '/test',
         query_string => '',
         headers      => [],
+        'pagi.stash' => {},   # what middleware('Stash') provides
     };
 
     my $req = PAGI::Request->new($scope, $receive);
@@ -59,6 +61,7 @@ subtest 'stash shared via scope enables middleware data sharing' => sub {
         path         => '/test',
         query_string => '',
         headers      => [],
+        'pagi.stash' => {},   # what middleware('Stash') provides
     };
 
     # Simulate middleware setting a value

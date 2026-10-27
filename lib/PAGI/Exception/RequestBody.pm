@@ -2,6 +2,9 @@ package PAGI::Exception::RequestBody;
 
 use strict;
 use warnings;
+use PAGI::Exception::HTTP ();
+# An HTTP error: one catch entry for PAGI::Exception::HTTP answers it too.
+our @ISA = ('PAGI::Exception::HTTP');
 use overload
     '""'     => sub { $_[0]{message} },
     bool     => sub { 1 },
@@ -14,6 +17,7 @@ sub new {
         reason      => $args{reason},
         message     => $args{message},
         cause       => $args{cause},
+        headers     => [],
     }, $class;
 }
 
@@ -53,11 +57,16 @@ C<form_params> (with C<strict>), and the multipart parsing behind
 C<form_params> and C<uploads> -- throw this object when the body itself is
 wrong: it is the client's error, not the application's.
 
-It has a C<status_code> method, so L<PAGI::Middleware::ErrorHandler> -- which
+It is a L<PAGI::Exception::HTTP>, with no C<headers> of its own, so a
+C<catch> entry for C<PAGI::Exception::HTTP> answers it too, and one for this
+class answers it first. It has a C<status_code> method, so
+L<PAGI::Middleware::ErrorHandler> -- which
 every L<PAGI::Compose> application has at its root -- answers with that status
 and its C<client_message> as plain text, and treats it as a handled outcome,
-not a server error. An application can catch it in a handler, or give
-ErrorHandler a C<handler>; see L<PAGI::Tools::Cookbook/"Bad request bodies">.
+not a server error: it is not re-raised, and an ErrorHandler C<handler> never
+sees it. An application can catch it in a handler, or give ErrorHandler a
+C<catch> entry for this class; see L<PAGI::Tools::Cookbook/"Bad request
+bodies">.
 
 It stringifies to its C<message>, so code that matches the text of these
 errors keeps working.

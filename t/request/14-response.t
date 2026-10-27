@@ -33,6 +33,7 @@ my $scope = {
     'pagi.session'   => { _id => 'session-1', user_id => 42 },
     'pagi.transport' => T::TransportHandle->new,
     'pagi.csrf_token' => 'csrf-token',
+    'pagi.stash' => {},
     'pagi.routing'   => {
         version => 1,
         frames  => [{

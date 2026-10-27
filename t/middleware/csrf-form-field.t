@@ -10,13 +10,16 @@ use PAGI::Middleware::CSRF;
 use PAGI::Test::Client;
 use PAGI::Tools qw(compose middleware response route);
 
+# A plain HTML form carries its token in a hidden field. With form_field set,
+# the middleware reads that field from the body of an unsafe form post that
+# came without the header, refuses a missing or wrong one before any route,
+# and hands the route the whole body to read as usual.
+
 # The handler reports the recorded failure and, for each comma-separated
-# name in ?read=, what that body reader gives -- or how it dies -- after the
-# middleware has run.
+# name in ?read=, what that body reader gives -- or how it dies.
 my $called = 0;
 my %reader = (
     form    => async sub { (await $_[0]->form_params)->get('title') // '' },
-    strict  => async sub { (await $_[0]->form_params(strict => 1))->get('title') // '' },
     body    => async sub { await $_[0]->body },
     json    => async sub { (await $_[0]->json)->{title} },
     uploads => async sub { scalar((await $_[0]->uploads)->values) },
@@ -37,8 +40,9 @@ async sub report {
 
 sub client_with {
     my (%csrf) = @_;
+    my @methods = (methods => [qw(GET POST PUT PATCH DELETE)]);
     return PAGI::Test::Client->new(app => compose(
-        routes     => [route('/' => \&report, methods => [qw(GET POST PUT PATCH DELETE)])],
+        routes     => [route('/' => \&report, @methods)],
         middleware => [middleware('CSRF', %csrf)],
     ));
 }
@@ -62,214 +66,48 @@ sub multipart_body {
         "--$boundary--", '';
 }
 
-subtest 'a urlencoded form with the right field passes, and its parse stays cached' => sub {
-    my ($client, $token) = primed();
-    my $res = $client->post('/?read=form,strict,body,stream,mstream',
-        form => { csrf_token => $token, title => "h\xc3\xa9" });    # UTF-8, as a browser sends it
-    is $res->status, 200, 'no header: the field is read';
-    is $res->text, join(' | ', 'failure=none', "form=h\x{e9}", "strict=h\x{e9}",
-        "body=csrf_token=$token&title=h%C3%A9",
-        'stream=dies: Body already consumed; streaming not available',
-        'mstream=dies: Body already consumed; multipart_stream() not available'),
-        'form_params and body come from the cache; the streams die';
-};
+# --- the middleware ---
 
-subtest 'a missing, empty or wrong field is refused' => sub {
+subtest 'by default there is no form flow: a form post without the header is refused' => sub {
     my ($client, $token) = primed();
     $called = 0;
-    my $res = $client->post('/', form => { title => 'hi' });
-    is [$res->status, $res->text], [403, 'CSRF token validation failed'], 'no field: the default refusal';
-    is $client->post('/', form => { csrf_token => '', title => 'hi' })->status, 403, 'an empty field';
-    is $client->post('/', form => { csrf_token => 'forged' })->status, 403, 'a wrong field';
+    is $client->post('/', form => { csrf_token => $token, title => 'hi' })->status, 403,
+        'the field is not read';
     is $called, 0, 'the application is never called';
-
-    my ($open) = primed(refuse => 0);
-    is $open->post('/', form => { title => 'hi' })->text, 'failure=missing_token', 'refuse => 0: missing_token';
-    is $open->post('/', form => { csrf_token => '' })->text, 'failure=missing_token', 'an empty field is missing';
-    is $open->post('/', form => { csrf_token => 'forged' })->text, 'failure=mismatch', 'a wrong field is a mismatch';
+    is $client->post('/?read=stream', form => { title => 'hi' }, headers => { 'X-CSRF-Token' => $token })->text,
+        'failure=none | stream=streams', 'the header passes, and the body is unread';
 };
 
-subtest 'a non-empty header decides, and the body is never read' => sub {
-    my ($client, $token) = primed();
-    my $res = $client->post('/?read=stream', form => { title => 'hi' }, headers => { 'X-CSRF-Token' => $token });
-    is [$res->status, $res->text], [200, 'failure=none | stream=streams'], 'right header, no field: unread';
-
-    $res = $client->post('/', form => { csrf_token => $token }, headers => { 'X-CSRF-Token' => 'forged' });
-    is $res->status, 403, 'wrong header with the right field: refused';
-    my ($open, $token0) = primed(refuse => 0);
-    is $open->post('/?read=stream', form => { csrf_token => $token0 }, headers => { 'X-CSRF-Token' => 'forged' })->text,
-        'failure=mismatch | stream=streams', 'the header decided and the body is unread';
-
-    $res = $client->post('/?read=form', form => { csrf_token => $token, title => 'hi' }, headers => { 'X-CSRF-Token' => '' });
-    is [$res->status, $res->text], [200, 'failure=none | form=hi'], 'an empty header is absent: the field decides';
+subtest 'with form_field, a form post without its token is refused here' => sub {
+    my ($client, $token) = primed(form_field => 'csrf_token');
+    is $client->post('/?read=stream', form => { title => 'hi' })->status, 403,
+        'urlencoded without its token: refused by the middleware (t/middleware/csrf-form-check.t)';
+    is $client->post('/?read=mstream', body => multipart_body(title => 'hi'), headers => \%multipart)->status, 403,
+        'multipart: the same (t/middleware/csrf-multipart.t)';
 };
 
-subtest 'a multipart form is read the same way' => sub {
-    my ($client, $token) = primed();
-    my $res = $client->post('/?read=form,uploads,body,mstream',
-        body => multipart_body(csrf_token => $token, title => 'hi'), headers => \%multipart);
-    is $res->status, 200, 'the right field passes';
-    is $res->text, join(' | ', 'failure=none', 'form=hi', 'uploads=1',
-        'body=dies: The raw body of a multipart request is not kept; read it with form_params and uploads',
-        'mstream=dies: Body already consumed; multipart_stream() not available'),
-        'form_params and uploads come from the cache';
-    is $client->post('/', body => multipart_body(title => 'hi'), headers => \%multipart)->status, 403,
-        'no field: refused';
-
-    $res = $client->post('/', body => multipart_body(csrf_token => $token, big => 'x' x (1024 * 1024 + 10)),
-        headers => \%multipart);
-    is [$res->status, $res->text], [413, 'Form field too large (max 1048576 bytes)'],
-        "PAGI::Request's default limits apply: Compose answers the body error";
+subtest 'with form_field, every other failure is still refused' => sub {
+    my ($client, $token) = primed(form_field => 'csrf_token');
+    $called = 0;
+    is $client->post('/', form => { csrf_token => $token }, headers => { 'X-CSRF-Token' => 'forged' })->status, 403,
+        'a wrong header';
+    is $client->post('/', form => { csrf_token => $token }, headers => { 'Sec-Fetch-Site' => 'cross-site' })->status, 403,
+        'a cross-site form';
+    is $client->post('/', json => { csrf_token => $token })->status, 403, 'a JSON body without the header';
+    is client_with(form_field => 'csrf_token')->post('/', form => { csrf_token => 'guess' })->status, 403,
+        'no stored token to match';
+    is $called, 0, 'the application is never called';
 };
 
-subtest 'form_field names the field; undef reads only the header' => sub {
-    my ($named, $token) = primed(form_field => 'authenticity_token');
-    is $named->post('/', form => { authenticity_token => $token })->status, 200, 'another name is read';
-    is $named->post('/', form => { csrf_token => $token })->status, 403, 'and the default name is not';
-
-    my ($header_only, $token1) = primed(form_field => undef);
-    is $header_only->post('/', form => { csrf_token => $token1 })->status, 403, 'undef: the field is not read';
-    my ($open, $token0) = primed(form_field => undef, refuse => 0);
-    is $open->post('/?read=stream', form => { csrf_token => $token0 })->text,
-        'failure=missing_token | stream=streams', 'and the body is left unread';
-    is $header_only->post('/?read=stream', form => { title => 'hi' }, headers => { 'X-CSRF-Token' => $token1 })->text,
-        'failure=none | stream=streams', 'the header still passes';
-};
-
-subtest 'a JSON body is never read: it needs the header' => sub {
-    my ($client, $token) = primed();
-    my $res = $client->post('/?read=json', json => { title => 'hi' }, headers => { 'X-CSRF-Token' => $token });
-    is [$res->status, $res->text], [200, 'failure=none | json=hi'], 'with the header: the handler reads the JSON';
-    is $client->post('/', json => { csrf_token => $token })->status, 403, 'without it: refused, a token in the JSON or not';
-    my ($open, $token0) = primed(refuse => 0);
-    is $open->post('/?read=stream', json => { csrf_token => $token0 })->text,
-        'failure=missing_token | stream=streams', 'and its body is unread';
-};
-
-subtest 'nothing is read for a safe method, a cross-site request, or with no token to match' => sub {
-    my ($open, $token) = primed(refuse => 0);
-    is $open->get('/?read=stream', form => { csrf_token => $token })->text,
-        'failure=none | stream=streams', 'GET';
-    is $open->post('/?read=stream', form => { csrf_token => $token }, headers => { 'Sec-Fetch-Site' => 'cross-site' })->text,
-        'failure=cross_origin | stream=streams', 'cross-site';
-    my $fresh = client_with(refuse => 0);
-    is $fresh->post('/?read=stream', form => { csrf_token => 'guess' })->text,
-        'failure=missing_cookie | stream=streams', 'no stored token';
-};
-
-subtest 'a refused form goes to refuse, and refuse => 0 reports it' => sub {
-    my ($client, $token) = primed(refuse => response('JSON', { detail => 'nope' }, status => 403));
-    my $res = $client->post('/', form => { csrf_token => 'forged' });
-    is [$res->status, $res->text], [403, '{"detail":"nope"}'], 'the refuse application answers';
-
-    my $app = compose(
-        routes     => [route('/' => sub { response('Text', csrf($_[0])->valid) }, methods => ['GET', 'POST'])],
-        middleware => [middleware('CSRF', refuse => 0)],
-    );
-    my $open = PAGI::Test::Client->new(app => $app);
-    $open->get('/');
-    is $open->post('/', form => { csrf_token => $open->cookie('csrf_token') })->text, 1, 'valid with the right field';
-    is $open->post('/', form => {})->text, 0, 'not valid without it';
-};
-
-subtest 'under session => 1 the field matches the session token' => sub {
-    my $app = compose(
-        routes     => [route('/' => sub { response('Text', $_[0]->method eq 'GET' ? csrf($_[0])->token : 'saved') },
-            methods => ['GET', 'POST'])],
-        middleware => [middleware('Session'), middleware('CSRF', session => 1)],
-    );
-    like warning { $app->to_app }, qr/\APAGI::Middleware::Session: no store given/,
-        'the default session store says so';
-    my $client = PAGI::Test::Client->new(app => $app);
-    my $token = $client->get('/')->text;
-    is $client->post('/', form => { csrf_token => $token })->text, 'saved', 'the session token in the field passes';
-    is $client->post('/', form => {})->status, 403, 'a missing one is refused';
-};
-
-subtest 'form_field must be a field name or undef' => sub {
+subtest 'form_field must be a field name or undef; body_buffer is gone' => sub {
     for my $bad ('', []) {
         like dies { PAGI::Middleware::CSRF->new(form_field => $bad) },
-            qr/\ACSRF form_field must be a field name, like csrf_token, or undef to read only the header/,
+            qr/\ACSRF form_field must be a field name, like csrf_token, or undef for no form flow/,
             'form_field => ' . (ref $bad ? 'a reference' : "''") . ' dies';
     }
     ok lives { PAGI::Middleware::CSRF->new(form_field => undef) }, 'undef lives';
-};
-
-subtest 'every unsafe method reads the form' => sub {
-    my ($client, $token) = primed();
-    my ($open, $token0) = primed(refuse => 0);
-    for my $method (qw(put patch delete)) {
-        is $client->$method('/', form => { csrf_token => $token })->status, 200, uc($method) . ': the field is read';
-        is $open->$method('/', form => { csrf_token => $token0 })->text, 'failure=none',
-            uc($method) . ': no failure recorded';
-    }
-};
-
-subtest "a malformed multipart body is the client's 400, answered by Compose" => sub {
-    my ($client) = primed();
-    my $res = $client->post('/', body => '', headers => { 'Content-Type' => 'multipart/form-data' });
-    is [$res->status, $res->text], [400, 'No boundary found in Content-Type'], 'no boundary';
-    $res = $client->post('/', body => '', headers => \%multipart);
-    is [$res->status, $res->text], [400, 'The multipart request body could not be parsed.'], 'an empty body';
-};
-
-subtest 'nothing to read is missing_token' => sub {
-    my ($client) = primed();
-    is $client->post('/', body => '', headers => \%urlencoded)->status, 403, 'an empty form body is refused';
-    my ($open, $token0) = primed(refuse => 0);
-    is $open->post('/', body => '', headers => \%urlencoded)->text, 'failure=missing_token',
-        'an empty form body records missing_token';
-    is $open->post("/?csrf_token=$token0", body => '', headers => \%urlencoded)->text, 'failure=missing_token',
-        'a token in the query string is never read';
-};
-
-subtest 'under session => 1 a planted csrf_token cookie does not stand in for the session token' => sub {
-    my $app = compose(
-        routes     => [route('/' => \&report, methods => ['GET', 'POST'])],
-        middleware => [middleware('Session'), middleware('CSRF', session => 1)],
-    );
-    # The default session store warns once per process, so only an earlier
-    # subtest may have heard it.
-    my $warnings = warnings { $app->to_app };
-    ok !(grep { !/\APAGI::Middleware::Session: no store given/ } @$warnings),
-        'nothing warns but the default session store';
-    my $client = PAGI::Test::Client->new(app => $app);
-    $client->get('/');
-    my $planted = 'a' x 64;
-    $client->set_cookie(csrf_token => $planted);
-    is $client->post('/', form => { csrf_token => $planted })->status, 403,
-        'a field matching the planted cookie is refused';
-};
-
-subtest 'a repeated csrf_token field: the last value decides' => sub {
-    my ($client, $token) = primed();
-    is $client->post('/', form => [[csrf_token => 'forged'], [csrf_token => $token]])->status, 200,
-        'the right token last passes';
-    my ($open, $token0) = primed(refuse => 0);
-    is $open->post('/', form => [[csrf_token => $token0], [csrf_token => 'forged']])->text, 'failure=mismatch',
-        'a forged token last is a mismatch';
-};
-
-subtest 'the form media type is matched in any case and with parameters' => sub {
-    my ($client, $token) = primed();
-    my $res = $client->post('/?read=form', body => "csrf_token=$token&title=hi",
-        headers => { 'Content-Type' => 'Application/X-WWW-Form-Urlencoded; charset=UTF-8' });
-    is [$res->status, $res->text], [200, 'failure=none | form=hi'], 'read, and cached for the handler';
-};
-
-subtest 'a csrf_token file part is an upload, not the field' => sub {
-    my ($open, $token) = primed(refuse => 0);
-    my $body = join "\r\n", "--$boundary",
-        qq{Content-Disposition: form-data; name="csrf_token"; filename="token.txt"},
-        'Content-Type: text/plain', '', $token, "--$boundary--", '';
-    is $open->post('/?read=uploads', body => $body, headers => \%multipart)->text,
-        'failure=missing_token | uploads=1', 'missing_token, and the part is still in uploads';
-};
-
-subtest 'bytes that are not UTF-8 in the field are a mismatch, not an error' => sub {
-    my ($open) = primed(refuse => 0);
-    my $res = $open->post('/', body => 'csrf_token=' . ('%FF' x 64), headers => \%urlencoded);
-    is [$res->status, $res->text], [200, 'failure=mismatch'], 'decoded loosely and compared';
+    like dies { PAGI::Middleware::CSRF->new(body_buffer => sub {}) },
+        qr/\ACSRF 'body_buffer' was removed: the form read is bounded by max_form_size/, 'body_buffer dies';
 };
 
 # An application that reads the body from $receive itself, as one written to
@@ -289,93 +127,128 @@ async sub echo_body {
     await $send->({ type => 'http.response.body', body => "read: $body", more => 0 });
 }
 
-sub primed_native {
-    my (%csrf) = @_;
-    my $client = PAGI::Test::Client->new(app => PAGI::Middleware::CSRF->new(%csrf)->wrap(\&echo_body));
+subtest 'an application reading $receive gets the body untouched' => sub {
+    my $client = PAGI::Test::Client->new(app => PAGI::Middleware::CSRF->new(form_field => 'csrf_token')->wrap(\&echo_body));
     $client->get('/');
-    return ($client, $client->cookie('csrf_token'));
-}
-
-subtest 'an application reading $receive gets the whole body the middleware read' => sub {
-    my ($client, $token) = primed_native();
+    my $token = $client->cookie('csrf_token');
     my $form = "csrf_token=$token&title=hi";
-    is [map { $_->status, $_->text } $client->post('/', body => $form, headers => \%urlencoded)],
-        [200, "read: $form"], 'a urlencoded form';
-
+    is $client->post('/', body => $form, headers => \%urlencoded)->text, "read: $form", 'a urlencoded form';
     my $multipart = multipart_body(csrf_token => $token, title => 'hi');
-    is [map { $_->status, $_->text } $client->post('/', body => $multipart, headers => \%multipart)],
-        [200, "read: $multipart"], 'a multipart form';
-
-    my ($open) = primed_native(refuse => 0);
-    is $open->post('/', body => 'title=hi', headers => \%urlencoded)->text, 'read: title=hi',
-        'under refuse => 0, a form without the field';
+    is $client->post('/', body => $multipart, headers => \%multipart)->text, "read: $multipart", 'a multipart form';
 };
 
-subtest "a refused form's body reaches refuse" => sub {
-    require PAGI::Utils;
-    my ($client) = primed_native(refuse => PAGI::Utils::as_app_object(\&echo_body));
-    is $client->post('/', body => 'csrf_token=forged', headers => \%urlencoded)->text,
-        'read: csrf_token=forged', 'the refuse application reads it';
+# --- the form check, through the middleware alone ---
+
+subtest 'the form check: the right field passes, and the handler reads the whole form' => sub {
+    my ($client, $token) = primed(form_field => 'csrf_token');
+    my $res = $client->post('/?read=form,body,stream',
+        form => { csrf_token => $token, title => "h\x{e9}" });    # sent UTF-8, as a browser sends it
+    is $res->status, 200, 'passes';
+    is $res->text, join(' | ', 'failure=none', "form=h\x{e9}", "body=csrf_token=$token&title=h%C3%A9",
+        'stream=dies: Body already consumed; streaming not available'),
+        'the middleware checked the field; the handler parses the replayed body itself';
 };
 
-subtest 'body_buffer makes the buffer for each request whose body is read' => sub {
-    require PAGI::Utils::ReceiveBuffer::TempFile;
-    my @scopes;
-    my ($client, $token) = primed_native(body_buffer => sub {
-        push @scopes, $_[0];
-        return PAGI::Utils::ReceiveBuffer::TempFile->new(spool_threshold => 0);
+subtest 'the form check: a missing, empty or wrong field is refused before the handler' => sub {
+    my ($client, $token) = primed(form_field => 'csrf_token');
+    $called = 0;
+    my $res = $client->post('/', form => { title => 'hi' });
+    is [$res->status, $res->text], [403, 'CSRF token validation failed'], 'no field: the default refusal';
+    is $client->post('/', form => { csrf_token => '' })->status, 403, 'an empty field';
+    is $client->post('/', form => { csrf_token => 'forged' })->status, 403, 'a wrong field';
+    is $client->post('/', json => { csrf_token => $token })->status, 403, 'a JSON body never gets this far';
+    is $called, 0, 'the handler is never called';
+};
+
+subtest 'the form check: a request that passed the middleware is not read again' => sub {
+    my ($client, $token) = primed(form_field => 'csrf_token');
+    is $client->post('/?read=stream', form => { title => 'hi' }, headers => { 'X-CSRF-Token' => $token })->text,
+        'failure=none | stream=streams', 'the header passed: the body is not read';
+    is $client->get('/?read=stream')->text, 'failure=none | stream=streams', 'a safe method';
+};
+
+subtest 'the form check: a multipart form' => sub {
+    my ($client, $token) = primed(form_field => 'csrf_token');
+    my $res = $client->post('/?read=form,uploads',
+        body => multipart_body(csrf_token => $token, title => 'hi'), headers => \%multipart);
+    is [$res->status, $res->text], [200, 'failure=none | form=hi | uploads=1'], 'the right field passes, checked by the middleware';
+    is $client->post('/', body => multipart_body(title => 'hi'), headers => \%multipart)->status, 403,
+        'no field: refused';
+    $res = $client->post('/', body => multipart_body(csrf_token => $token, big => 'x' x (1024 * 1024 + 10)),
+        headers => \%multipart);
+    is [$res->status, $res->text], [413, 'Request body too large'],
+        'a field over max_form_size before the token (fields sort: big, then csrf_token): the middleware answers';
+};
+
+subtest 'the form check: form_field names the field' => sub {
+    my ($client, $token) = primed(form_field => 'authenticity_token');
+    is $client->post('/', form => { authenticity_token => $token })->status, 200, 'another name is read';
+    is $client->post('/', form => { csrf_token => $token })->status, 403, 'and the default name is not';
+};
+
+subtest 'the form check: refuse answers, given the whole body' => sub {
+    my ($client) = primed(form_field => 'csrf_token', refuse => response('JSON', { detail => 'nope' }, status => 403));
+    is [map { $_->status, $_->text } $client->post('/', form => { csrf_token => 'forged' })],
+        [403, '{"detail":"nope"}'], 'a Response';
+    my ($reads) = primed(form_field => 'csrf_token', refuse => async sub {
+        my ($request) = @_;
+        my $form = await $request->form_params;
+        return response('Text', 'refused ' . $form->get('title') . ': ' . csrf($request)->failure, status => 403);
     });
-    is $client->post('/', body => 'title=hi', headers => { %urlencoded, 'X-CSRF-Token' => $token })->text,
-        'read: title=hi', 'a request with the header';
-    is scalar @scopes, 0, 'is not read, so no buffer is made';
-
-    is $client->post('/', body => "csrf_token=$token", headers => \%urlencoded)->text,
-        "read: csrf_token=$token", 'a request with the field';
-    is [map { $_->{type} } @scopes], ['http'], 'gets one buffer, made from its scope';
-
-    like dies { PAGI::Middleware::CSRF->new(body_buffer => 'big') },
-        qr/CSRF body_buffer must be a coderef that returns a buffer/, 'body_buffer must be a coderef';
+    is [map { $_->status, $_->text } $reads->post('/', form => { csrf_token => 'forged', title => 'hi' })],
+        [403, 'refused hi: mismatch'], 'a Request handler reads the replayed form';
 };
 
-subtest 'interleaved requests through one middleware keep their own bodies' => sub {
-    my $middleware = PAGI::Middleware::CSRF->new;
-    my %seen;
-    my $app = $middleware->wrap(async sub {
-        my ($scope, $receive, $send) = @_;
-        my $body = '';
-        while (1) {
-            my $event = await $receive->();
-            last unless $event->{type} eq 'http.request';
-            $body .= $event->{body};
-            last unless $event->{more};
-        }
-        $seen{$scope->{path}} = ($scope->{'pagi.csrf_failure'} // 'valid') . " $body";
-        await $send->({ type => 'http.response.start', status => 200, headers => [] });
-        await $send->({ type => 'http.response.body', body => '', more => 0 });
-    });
-    # A request whose body chunks arrive only when the test releases them.
-    my $request = sub {
-        my ($path, $token, @chunks) = @_;
-        my @pending = map { Future->new } @chunks;
-        my $next = 0;
-        my $receive = sub { $next < @pending ? $pending[$next++] : Future->done({ type => 'http.disconnect' }) };
-        my $run = $app->({ type => 'http', method => 'POST', path => $path, query_string => '',
-            headers => [['content-type', 'application/x-www-form-urlencoded'], ['cookie', "csrf_token=$token"]],
-        }, $receive, sub { Future->done });
-        return ($run, sub {
-            my ($n) = @_;
-            $pending[$n]->done({ type => 'http.request', body => $chunks[$n], more => $n < $#chunks ? 1 : 0 });
-        });
-    };
-    my ($a_token, $b_token) = ('a' x 64, 'b' x 64);
-    my ($run_a, $release_a) = $request->('/a', $a_token, "csrf_token=$a_token&", 'who=alice');
-    my ($run_b, $release_b) = $request->('/b', $b_token, "csrf_token=$b_token&", 'who=bob');
-    $release_a->(0);
-    $release_b->($_) for 0, 1;    # the second request finishes first
-    $release_a->(1);
-    $_->get for $run_a, $run_b;
-    is \%seen, { '/a' => "valid csrf_token=$a_token&who=alice", '/b' => "valid csrf_token=$b_token&who=bob" },
-        'each request is checked against its own token and gets its own whole body';
+subtest 'the form check: under session => 1 the field matches the session token' => sub {
+    my $app = compose(
+        routes     => [route('/' => sub { response('Text', $_[0]->method eq 'GET' ? csrf($_[0])->token : 'saved') },
+            methods => ['GET', 'POST'])],
+        middleware => [middleware('Session'), middleware('CSRF', session => 1, form_field => 'csrf_token')],
+    );
+    my $warnings = warnings { $app->to_app };
+    ok !(grep { !/\APAGI::Middleware::Session: no store given/ } @$warnings),
+        'nothing warns but the default session store';
+    my $client = PAGI::Test::Client->new(app => $app);
+    my $token = $client->get('/')->text;
+    is $client->post('/', form => { csrf_token => $token })->text, 'saved', 'the session token in the field passes';
+    is $client->post('/', form => {})->status, 403, 'a missing one is refused';
+    $client->set_cookie(csrf_token => 'a' x 64);
+    is $client->post('/', form => { csrf_token => 'a' x 64 })->status, 403,
+        'a field matching a planted csrf_token cookie is refused';
+};
+
+subtest 'the form check: every unsafe method reads the form' => sub {
+    my ($client, $token) = primed(form_field => 'csrf_token');
+    for my $method (qw(put patch delete)) {
+        is $client->$method('/', form => { csrf_token => $token })->status, 200, uc($method) . ': passes';
+        is $client->$method('/', form => { csrf_token => 'forged' })->status, 403, uc($method) . ': refused';
+    }
+};
+
+subtest "the form check: a malformed multipart body is the client's 400" => sub {
+    my ($client) = primed(form_field => 'csrf_token');
+    my $res = $client->post('/', body => '', headers => \%multipart);
+    is [$res->status, $res->text], [400, 'The multipart request body could not be parsed.'], 'an empty body: the middleware answers, in the parser\'s words';
+};
+
+subtest 'the form check: the field, read as a form field' => sub {
+    my ($client, $token) = primed(form_field => 'csrf_token');
+    is $client->post('/', form => [[csrf_token => $token], [csrf_token => 'forged']])->status, 200,
+        'a repeated field: the first value decides';
+    is $client->post('/', form => [[csrf_token => 'forged'], [csrf_token => $token]])->status, 403,
+        'whatever follows it';
+    is $client->post('/', body => "csrf_token=$token",
+        headers => { 'Content-Type' => 'Application/X-WWW-Form-Urlencoded; charset=UTF-8' })->status, 200,
+        'the form media type in any case and with parameters';
+    my $file = join "\r\n", "--$boundary",
+        qq{Content-Disposition: form-data; name="csrf_token"; filename="token.txt"},
+        'Content-Type: text/plain', '', $token, "--$boundary--", '';
+    is $client->post('/', body => $file, headers => \%multipart)->status, 403,
+        'a csrf_token file part is an upload, not the field';
+    is $client->post('/', body => 'csrf_token=' . ('%FF' x 64), headers => \%urlencoded)->status, 403,
+        'bytes that are not UTF-8 are a mismatch, not an error';
+    is $client->post("/?csrf_token=$token", body => 'title=hi', headers => \%urlencoded)->status, 403,
+        'a token in the query string is never read';
 };
 
 done_testing;

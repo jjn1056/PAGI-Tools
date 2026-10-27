@@ -77,7 +77,8 @@ subtest 'HTTP enters the exact root safety and declared wrapper order' => sub {
     my @trace;
     my %wraps;
     my $head_prepare = \&PAGI::Routing::HeadBoundary::prepare;
-    my $error_wrap = \&PAGI::Middleware::ErrorHandler::wrap;
+    my $server_wrap = \&PAGI::Middleware::ErrorHandler::_wrap_server_errors;
+    my $exceptions_wrap = \&PAGI::Middleware::ErrorHandler::_wrap_exceptions;
     my $guard_wrap = \&PAGI::Compose::ResponseGuard::wrap;
 
     no warnings qw(redefine once);
@@ -85,10 +86,17 @@ subtest 'HTTP enters the exact root safety and declared wrapper order' => sub {
         push @trace, 'HEAD';
         return $head_prepare->(@_);
     };
-    local *PAGI::Middleware::ErrorHandler::wrap = sub {
-        ++$wraps{ErrorHandler};
-        my $wrapped = $error_wrap->(@_);
-        return entry_wrapper('ErrorHandler', \@trace, $wrapped);
+    # Compose's emergency ErrorHandler: server-only at the root, and (with no
+    # configured ErrorHandler) its exception half around the router.
+    local *PAGI::Middleware::ErrorHandler::_wrap_server_errors = sub {
+        ++$wraps{'ErrorHandler server errors'};
+        my $wrapped = $server_wrap->(@_);
+        return entry_wrapper('ErrorHandler server errors', \@trace, $wrapped);
+    };
+    local *PAGI::Middleware::ErrorHandler::_wrap_exceptions = sub {
+        ++$wraps{'ErrorHandler exceptions'};
+        my $wrapped = $exceptions_wrap->(@_);
+        return entry_wrapper('ErrorHandler exceptions', \@trace, $wrapped);
     };
     local *PAGI::Compose::ResponseGuard::wrap = sub {
         ++$wraps{ResponseGuard};
@@ -121,7 +129,8 @@ subtest 'HTTP enters the exact root safety and declared wrapper order' => sub {
         ],
     )->to_app;
     is(\%wraps, {
-        ErrorHandler => 1,
+        'ErrorHandler server errors' => 1,
+        'ErrorHandler exceptions' => 1,
         ResponseGuard => 1,
         'author outer' => 1,
         'author inner' => 1,
@@ -129,15 +138,17 @@ subtest 'HTTP enters the exact root safety and declared wrapper order' => sub {
     run_scope($app, scope(method => 'HEAD'));
     is(\@trace, [
         'HEAD',
-        'ErrorHandler',
+        'ErrorHandler server errors',
         'ResponseGuard',
         'author outer',
         'author inner',
+        'ErrorHandler exceptions',
         'HEAD',
         'target',
-    ], 'root and Router HEAD boundaries preserve the exact wrapper order');
+    ], "root and Router HEAD boundaries preserve the exact wrapper order: Starlette's stack");
     is(\%wraps, {
-        ErrorHandler => 1,
+        'ErrorHandler server errors' => 1,
+        'ErrorHandler exceptions' => 1,
         ResponseGuard => 1,
         'author outer' => 1,
         'author inner' => 1,
@@ -317,7 +328,7 @@ subtest 'Router-owned 404 and 405 cross the complete author stack' => sub {
     }
 };
 
-subtest 'author ErrorHandler response crosses only earlier middleware' => sub {
+subtest "author ErrorHandler's 500 crosses no application middleware: Compose places it outside them" => sub {
     local $ENV{PAGI_ENV} = 'production';
     my @trace;
     my $app = compose(
@@ -348,10 +359,8 @@ subtest 'author ErrorHandler response crosses only earlier middleware' => sub {
     is([grep { /ErrorHandler/ } @trace], [
         'author ErrorHandler report', 'author ErrorHandler render',
     ], 'author ErrorHandler reports before rendering');
-    is([grep { / send / } @trace], [
-        'author outer send http.response.start',
-        'author outer send http.response.body',
-    ], 'author error response crosses only the earlier outer wrapper');
+    is([grep { / send / } @trace], [],
+        "the configured server-error boundary is outside every application middleware, as Starlette's ServerErrorMiddleware is");
     is($events->[0]{status}, 500, 'author ErrorHandler retains status 500');
     is($events->[1]{body}, 'author 500', 'author renderer owns the body');
 };

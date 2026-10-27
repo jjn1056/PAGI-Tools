@@ -15,7 +15,6 @@ use Future;
 use Future::AsyncAwait;
 use Carp qw(croak);
 use Scalar::Util qw(blessed);
-use PAGI::Request::_Factory ();
 use PAGI::Utils qw(invoke_app);
 
 sub new {
@@ -32,13 +31,31 @@ sub to_app {
     return async sub {
         my ($scope, $receive, $send) = @_;
         my $request = $wants_request
-            ? PAGI::Request::_Factory::request_for_scope($scope, $receive)
+            ? PAGI::Utils::request_for_scope($scope, $receive)
             : undef;
         # A builder returns an app object, or a Future of one (an async builder).
-        my $app = await Future->wrap($build->($request));
+        # A builder given the Request shares it with the handler, so its error
+        # is answered at the route with that Request (spec D2, Q-R2).
+        my $app;
+        my $error_handler = $request && ($scope->{type} // '') eq 'http'
+            ? $scope->{'pagi.error_handler'} : undef;
+        if ($error_handler) {
+            my ($completed, $built) = await $error_handler->_run_at_route($request, $scope, $receive, $send,
+                async sub { await Future->wrap($build->($request)) });
+            return unless $completed;
+            $app = $built;
+        }
+        else {
+            $app = await Future->wrap($build->($request));
+        }
         croak "$made_by must return an app object (one with to_app);"
             . ' a native PAGI application goes through as_app_object()'
             unless blessed($app) && $app->can('to_app');
+        # An HTTP endpoint answers with the Request its builder was given, so
+        # the body the builder read is the handler's too; its own to_app
+        # (scope checks, a subclass's wrapping) still runs and takes it.
+        $app->{_pagi_builder_request} = $request
+            if $request && $app->isa('PAGI::Endpoint::HTTP');
         await invoke_app($app, $scope, $receive, $send);
     };
 }

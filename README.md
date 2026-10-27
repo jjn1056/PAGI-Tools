@@ -42,6 +42,7 @@ a larger framework:
 - [PAGI::Request](https://metacpan.org/pod/PAGI%3A%3ARequest), [PAGI::Response](https://metacpan.org/pod/PAGI%3A%3AResponse), [PAGI::WebSocket](https://metacpan.org/pod/PAGI%3A%3AWebSocket), and [PAGI::SSE](https://metacpan.org/pod/PAGI%3A%3ASSE)
 - [PAGI::Routing](https://metacpan.org/pod/PAGI%3A%3ARouting) and [PAGI::Routing::URL](https://metacpan.org/pod/PAGI%3A%3ARouting%3A%3AURL)
 - [PAGI::Routing::OpenAPI](https://metacpan.org/pod/PAGI%3A%3ARouting%3A%3AOpenAPI) for an OpenAPI document from an application's routes
+(early beta: its interface may still change)
 - [PAGI::Compose](https://metacpan.org/pod/PAGI%3A%3ACompose) and [PAGI::Lifespan](https://metacpan.org/pod/PAGI%3A%3ALifespan)
 - [PAGI::Middleware](https://metacpan.org/pod/PAGI%3A%3AMiddleware) and the `PAGI::Middleware::*` suite
 - [PAGI::App::File](https://metacpan.org/pod/PAGI%3A%3AApp%3A%3AFile), proxies, health checks, and other ready-made applications
