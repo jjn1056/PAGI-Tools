@@ -24,7 +24,7 @@ my %rejected = (
 my @classes = qw(AccessLog Authentication ConditionalGet ContentLength ContentNegotiation
     Cookie CORS CSRF Debug ErrorHandler ETag GZip Head Healthcheck HTTPSRedirect Lint
     Maintenance MethodOverride RateLimit RequestId ReverseProxy Rewrite Runtime
-    SecurityHeaders Session SSE::Retry Static TrustedHosts XSendfile RequestClass);
+    SecurityHeaders Session SSE::Retry Stash Static TrustedHosts XSendfile RequestClass);
 
 # Session's default store announces itself once per process; take that here
 # so the loop's output stays clean.

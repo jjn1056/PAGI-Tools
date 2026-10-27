@@ -7,6 +7,11 @@
   UPGRADING-REFERENCE.md has the details. Needs PAGI::Server 0.003000.
 
   [New]
+  - PAGI::Middleware::Stash (middleware('Stash')) gives every layer below
+    it one shared stash. PAGI::Stash creates its stash on first use, on the
+    scope it is given, so a value a handler stored below a middleware's
+    scope copy never reached a layer above that copy; with this middleware
+    above it, it does.
   - PAGI::Tools::Extending: a guide for building frameworks and add-ons on
     PAGI-Tools -- what a framework may rely on, the two ways to build one,
     and a link to the rule for each; examples/framework-wrap-style and

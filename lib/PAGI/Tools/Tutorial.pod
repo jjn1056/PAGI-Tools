@@ -1125,6 +1125,13 @@ Parse request cookies:
 
 Access via C<$scope-E<gt>{'pagi.cookies'}>.
 
+=item * L<PAGI::Middleware::Stash>
+
+One shared L<PAGI::Stash> for every layer below it, so a middleware sees
+what a handler stored, after the handler returns:
+
+  middleware('Stash'),
+
 =item * L<PAGI::Middleware::Session>
 
 Sessions: a random session ID in a cookie, the data in a store (by default

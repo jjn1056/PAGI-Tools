@@ -118,7 +118,8 @@ lifespan C<state> namespace, the stash -- are shared, so the inner app still see
 the same connection state and shared objects. A deep copy would sever those. One
 corollary worth knowing: a plain B<scalar> set as a top-level scope key does not
 propagate back to outer layers, so to share mutable state across layers you mutate
-B<through a reference> (see L<PAGI::Stash>). The full model -- and why it works
+B<through a reference> (see L<PAGI::Stash>, and L<PAGI::Middleware::Stash>, which
+puts one stash on the scope for every layer below it). The full model -- and why it works
 this way -- is in L<PAGI::Building/MIDDLEWARE>.
 
 The copy also carries a L<PAGI::WebSocket> or L<PAGI::SSE> object already

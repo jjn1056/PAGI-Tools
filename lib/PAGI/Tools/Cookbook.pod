@@ -1797,7 +1797,8 @@ you a L<PAGI::Headers> copy and sends a new event with your changes:
 
 Use C<add> for a header that repeats (C<Set-Cookie>) and C<set_default> to keep
 a value the response already has. To hear back from layers further in, seed a
-shared reference before calling inward -- L<PAGI::Stash>, or the spec
+shared reference before calling inward -- L<PAGI::Middleware::Stash> above
+you and L<PAGI::Stash> to read it, or the spec
 Cookbook's "Reporting back to an outer layer" recipe.
 
 =head2 Vary on a request header you branch on

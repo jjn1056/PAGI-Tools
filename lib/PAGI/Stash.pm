@@ -46,6 +46,11 @@ for keys that may or may not be present.
 
 The stash lives in the PAGI scope hashref and is shared across all
 middleware, handlers, and protocol objects processing the same request.
+It is created on first use, on whatever scope it is given; below a
+middleware's copy of the scope, that is a stash only the copy holds. A layer
+that reads the stash after its application returns therefore needs
+L<PAGI::Middleware::Stash> above it, which gives everything below it one
+stash.
 
 The stash holds what code I<writes> for the layers below it. A value the
 application declares once and wants built on first use, per request, is a
