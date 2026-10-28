@@ -199,6 +199,10 @@ value at a time (so a slow client slows the source), and stops pulling once
 the client has disconnected
 (L<PAGI::Response::Stream/Streaming from a source>,
 L<PAGI::Response::Stream/DISCONNECTS AND FAILURES>).
+WebSocket and SSE sends go to the server at once: a server implementing
+L<PAGI::Spec::Www> 0.7 keeps a connection's sends in the order they were
+called, so a framework with several producers on one connection needs no
+queue; on an older server it must serialize them itself.
 
 =head1 MIDDLEWARE AND WHOLE-APPLICATION FEATURES
 

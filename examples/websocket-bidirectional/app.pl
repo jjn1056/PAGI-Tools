@@ -12,8 +12,8 @@
 #
 # Future->wait_any joins them: a disconnect ends `incoming`, and wait_any then
 # cancels the idle `outgoing` loop. Both branches send on the same socket at
-# will: PAGI::WebSocket puts its sends out one at a time, as the PAGI spec
-# requires, so no queue is needed.
+# will: a PAGI server keeps a connection's sends in the order they were
+# called (PAGI::Spec::Www 0.7), so no queue is needed.
 #
 # Run:  pagi-server --app examples/websocket-bidirectional/app.pl --port 5000
 # Test: websocat ws://localhost:5000/

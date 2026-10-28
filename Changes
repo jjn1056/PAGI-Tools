@@ -290,6 +290,13 @@
     option is its cleanup, for a source or a producer.
 
   [Changed]
+  - PAGI::WebSocket and PAGI::SSE hand each send to the server at once and
+    rely on it to keep a connection's sends in call order, as
+    PAGI::Spec::Www 0.7 requires. A handler with several producers needs no
+    queue; on a server reporting an earlier spec_version, sends must not
+    overlap. Cancelling a send's Future still leaves the server's send
+    alone. PAGI::Test::Client's HTTP, WebSocket and SSE scopes advertise
+    Www 0.7, which it keeps.
   - PAGI::Stash (stash()) dies on a scope with no stash, naming
     middleware('Stash'); it used to create one on first use. A stash first
     created below a middleware's scope copy was held only by that copy, so a
@@ -434,7 +441,6 @@
   - XSendfile mappings match path components, most specific first.
   - The Session middleware re-sends the cookie on a read once half of
     expire has passed.
-  - PAGI::WebSocket and PAGI::SSE send one message at a time.
   - A routed or Endpoint WebSocket/SSE call now ends with its scope --
     after the closing handshake -- and its on_close cleanup, so a
     shutting-down PAGI::Server waits for that cleanup. Every

@@ -460,7 +460,7 @@ async sub accept {
         $event->{headers} = $headers;
     }
 
-    await PAGI::Common::send_in_order($self, $event);
+    await PAGI::Common::send_event($self, $event);
     $self->_set_state('connected') unless $self->is_closed;
 
     return $self;
@@ -500,7 +500,7 @@ sub close {
     my $settled = $self->{_close_send} = Future->new;
     my $send;
     my $ok = eval {
-        $send = Future->wrap(PAGI::Common::send_in_order($self, {type => 'websocket.close', code => $code // 1000, reason => $reason // ''}));
+        $send = Future->wrap(PAGI::Common::send_event($self, {type => 'websocket.close', code => $code // 1000, reason => $reason // ''}));
         1;
     };
     if (!$ok) { $settled->fail($@) }
@@ -553,7 +553,7 @@ async sub send_text {
     defined($text = PAGI::Utils::_string_value($text))
         or croak 'send_text requires a string or an object that overloads stringification';
 
-    await PAGI::Common::send_in_order($self, {
+    await PAGI::Common::send_event($self, {
         type => 'websocket.send',
         text => $text,
     });
@@ -571,7 +571,7 @@ async sub send_bytes {
     defined($bytes = PAGI::Utils::_byte_string($bytes))
         or croak 'send_bytes must be encoded bytes: it contains a character above 0xFF; encode text first, or use send_text';
 
-    await PAGI::Common::send_in_order($self, {
+    await PAGI::Common::send_event($self, {
         type  => 'websocket.send',
         bytes => $bytes,
     });
@@ -587,7 +587,7 @@ async sub send_json {
 
     my $json = JSON::MaybeXS::encode_json($data);
 
-    await PAGI::Common::send_in_order($self, {
+    await PAGI::Common::send_event($self, {
         type => 'websocket.send',
         text => $json,
     });
@@ -610,7 +610,7 @@ async sub _try_send_text {
     eval {
         defined($text = PAGI::Utils::_string_value($text))
             or croak 'send_text requires a string or an object that overloads stringification';
-        await PAGI::Common::send_in_order($self, {
+        await PAGI::Common::send_event($self, {
             type => 'websocket.send',
             text => $text,
         });
@@ -641,7 +641,7 @@ async sub _try_send_bytes {
             or croak 'send_bytes requires a string or an object that overloads stringification';
         defined($bytes = PAGI::Utils::_byte_string($bytes))
             or croak 'send_bytes must be encoded bytes: it contains a character above 0xFF; encode text first, or use send_text';
-        await PAGI::Common::send_in_order($self, {
+        await PAGI::Common::send_event($self, {
             type => 'websocket.send',
             bytes => $bytes,
         });
@@ -669,7 +669,7 @@ async sub _try_send_json {
 
     my $json = JSON::MaybeXS::encode_json($data);
     eval {
-        await PAGI::Common::send_in_order($self, {
+        await PAGI::Common::send_event($self, {
             type => 'websocket.send',
             text => $json,
         });
@@ -865,7 +865,7 @@ async sub keepalive {
     };
     $event->{timeout} = $timeout if defined $timeout;
 
-    await PAGI::Common::send_in_order($self, $event);
+    await PAGI::Common::send_event($self, $event);
 
     return $self;
 }
@@ -1379,14 +1379,14 @@ data as JSON and does not stringify.
 Send a message. Dies if the connection is closing or closed; see
 L</HANDLERS AND DISCONNECTS>.
 
-B<Sends go out one at a time.> PAGI::Spec::Www requires that an application
-not issue a send before the previous one has resolved. This object does that
-for you: a send made while another is still in flight waits for it, whatever
-its outcome, so several producers -- a reply racing a broadcast from another
-connection, a server tick racing an echo -- can each call C<send_*> or
-C<try_send_*> directly, with no queue of their own. A send whose caller
-cancels it before it goes out is skipped; one already handed to the server is
-never cancelled. Code that calls the raw C<$send> itself still owns the rule.
+B<Several producers, no queue.> Each send goes to the server at once, and a
+server implementing PAGI::Spec::Www 0.7 keeps a connection's sends in the
+order they were called ("Sends Are Sequential"), so several producers -- a
+reply racing a broadcast from another connection, a server tick racing an
+echo -- can each call C<send_*> or C<try_send_*> directly, with no queue of
+their own. Cancelling a send's Future never cancels the send the server
+holds. On a server reporting an earlier C<spec_version>, sends must not
+overlap: serialize the producers yourself.
 
 =head2 try_send_text, try_send_bytes, try_send_json
 
