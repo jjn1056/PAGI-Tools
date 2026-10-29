@@ -13,7 +13,7 @@ use PAGI::Routing::RequestResponse;
 # on one connection need no queue. A send that dies is a failed Future, as
 # from any send. Cancelling the returned Future leaves the server's send
 # alone: PAGI::Spec advises against cancelling a send.
-sub send_event {
+sub forward_send {
     my ($owner, $event) = @_;
     my $sent = eval { Future->wrap($owner->{send}->($event)) } // Future->fail($@);
     return $sent->without_cancel;

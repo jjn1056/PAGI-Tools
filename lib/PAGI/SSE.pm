@@ -317,7 +317,7 @@ async sub _start {
         $event->{headers} = $headers;
     }
 
-    await PAGI::Common::send_event($self, $event);
+    await PAGI::Common::forward_send($self, $event);
     $self->_set_state('started') unless $self->is_closed;
     return $self if $self->is_closed;
 
@@ -325,7 +325,7 @@ async sub _start {
     # keepalive()'s deferred-arm note below) -- illegal before sse.start,
     # now legal immediately after it.
     if (my $pending = delete $self->{_pending_keepalive}) {
-        await PAGI::Common::send_event($self, {
+        await PAGI::Common::forward_send($self, {
             type     => 'sse.keepalive',
             interval => $pending->{interval},
             comment  => $pending->{comment},
@@ -369,7 +369,7 @@ async sub keepalive {
         return $self;
     }
 
-    await PAGI::Common::send_event($self, {
+    await PAGI::Common::forward_send($self, {
         type     => 'sse.keepalive',
         interval => $interval,
         comment  => $comment,
@@ -430,7 +430,7 @@ async sub send {
     # Auto-start if not started
     await $self->start unless $self->is_started;
 
-    await PAGI::Common::send_event($self, {
+    await PAGI::Common::forward_send($self, {
         type => 'sse.send',
         data => $data,
     });
@@ -449,7 +449,7 @@ async sub send_json {
 
     my $json = JSON::MaybeXS::encode_json($data);
 
-    await PAGI::Common::send_event($self, {
+    await PAGI::Common::forward_send($self, {
         type => 'sse.send',
         data => $json,
     });
@@ -468,7 +468,7 @@ async sub send_event {
     my $event = _send_event_for(%opts);
     await $self->start unless $self->is_started;
 
-    await PAGI::Common::send_event($self, $event);
+    await PAGI::Common::forward_send($self, $event);
 
     return $self;
 }
@@ -488,7 +488,7 @@ async sub _try_send {
         defined($data = PAGI::Utils::_string_value($data))
             or croak 'send requires a string or an object that overloads stringification';
         await $self->start unless $self->is_started;
-        await PAGI::Common::send_event($self, {
+        await PAGI::Common::forward_send($self, {
             type => 'sse.send',
             data => $data,
         });
@@ -509,7 +509,7 @@ async sub _try_send_json {
     eval {
         await $self->start unless $self->is_started;
         my $json = JSON::MaybeXS::encode_json($data);
-        await PAGI::Common::send_event($self, {
+        await PAGI::Common::forward_send($self, {
             type => 'sse.send',
             data => $json,
         });
@@ -532,7 +532,7 @@ async sub send_comment {
 
     await $self->start unless $self->is_started;
 
-    await PAGI::Common::send_event($self, {
+    await PAGI::Common::forward_send($self, {
         type    => 'sse.comment',
         comment => $comment,
     });
@@ -550,7 +550,7 @@ async sub _try_send_comment {
         defined($comment = PAGI::Utils::_string_value($comment))
             or croak 'send_comment requires a string or an object that overloads stringification';
         await $self->start unless $self->is_started;
-        await PAGI::Common::send_event($self, {
+        await PAGI::Common::forward_send($self, {
             type    => 'sse.comment',
             comment => $comment,
         });
@@ -572,7 +572,7 @@ async sub _try_send_event {
         my $event = _send_event_for(%opts);
         await $self->start unless $self->is_started;
 
-        await PAGI::Common::send_event($self, $event);
+        await PAGI::Common::forward_send($self, $event);
     };
     if (my $err = $@) {
         await $self->_trigger_error($err);
@@ -767,7 +767,7 @@ sub close {
     my $send;
     my $ok = eval {
         my %opts = @args;
-        $send = Future->wrap(PAGI::Common::send_event($self, {type => 'sse.close', (defined $opts{reason} ? (reason => $opts{reason}) : ())}));
+        $send = Future->wrap(PAGI::Common::forward_send($self, {type => 'sse.close', (defined $opts{reason} ? (reason => $opts{reason}) : ())}));
         1;
     };
     if (!$ok) { $settled->fail($@) }
