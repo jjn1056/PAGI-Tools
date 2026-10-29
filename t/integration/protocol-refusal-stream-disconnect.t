@@ -312,7 +312,7 @@ for my $version ('1.1', '2') {
             is $status, 403, 'ordinary HTTP refusal status';
             like $body, qr/refusal-chunk/, 'refusal body delivered';
             is $seen{scope}{http_version}, $version, 'actual transport version';
-            is $seen{scope}{pagi}{spec_version}, '0.6', 'current normative scope';
+            is $seen{scope}{pagi}{spec_version}, '0.7', 'current normative scope';
             ok $seen{producer} && $seen{writer}, 'weak references see live parked resources';
             ok !$seen{settled}, 'refusal remains pending before drop';
             $t->{drop}->();

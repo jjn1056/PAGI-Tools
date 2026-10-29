@@ -372,11 +372,13 @@ wrapper. Construct the serving application separately with the returned path.
 
 =head1 REQUIREMENTS
 
-PAGI-Tools targets L<PAGI::Spec::Www> B<0.6>. It depends on the specification,
-not on any one server: it needs a server that implements Www 0.6, which puts a
-C<pagi.connection> object in every C<http>, C<websocket> and C<sse> scope and
-advertises C<< $scope->{pagi}{spec_version} >> as C<0.6>. L<PAGI::Server>, the
-reference implementation, does so from 0.003000.
+PAGI-Tools targets L<PAGI::Spec::Www> B<0.7>. It depends on the specification,
+not on any one server: it needs a server that implements Www 0.7, which puts a
+C<pagi.connection> object in every C<http>, C<websocket> and C<sse> scope,
+keeps a scope's sends in the order they were called (Tools' helpers send
+without waiting for an earlier send to resolve), and advertises
+C<< $scope->{pagi}{spec_version} >> as C<0.7>. L<PAGI::Server>, the reference
+implementation, does so from 0.003000.
 
 Tools checks the connection's capabilities where it uses them, not the version
 number. L<PAGI::WebSocket> and L<PAGI::SSE> die at construction when the scope
