@@ -1,4 +1,4 @@
-package PAGI::Common;
+package PAGI::Utils::_ProtocolHelpers;
 use strict;
 use warnings;
 use Carp qw(croak);
@@ -50,3 +50,47 @@ sub prepare_refusal {
         : $target;
 }
 1;
+
+__END__
+
+=head1 NAME
+
+PAGI::Utils::_ProtocolHelpers - Private plumbing shared by PAGI::WebSocket and PAGI::SSE
+
+=head1 DESCRIPTION
+
+The functions L<PAGI::WebSocket> and L<PAGI::SSE> share: forwarding their
+sends to the server, checking the connection supports what they need, and
+preparing a refusal.
+
+This package is a private implementation detail. Application code must not
+depend on its name or interface; it may change without a compatibility
+layer.
+
+=head1 FUNCTIONS
+
+=head2 forward_send
+
+    await PAGI::Utils::_ProtocolHelpers::forward_send($helper, $event);
+
+Sends C<$event> through C<< $helper->{send} >> at once (the server keeps a
+scope's sends in call order) and returns a Future for it. A send that dies
+is a failed Future; cancelling the returned Future never cancels the send
+the server holds.
+
+=head2 require_connection
+
+    my $connection = PAGI::Utils::_ProtocolHelpers::require_connection($scope, $operation);
+
+Returns C<< $scope->{'pagi.connection'} >>, or croaks naming C<$operation>
+and the capabilities it lacks.
+
+=head2 prepare_refusal
+
+    my $app = PAGI::Utils::_ProtocolHelpers::prepare_refusal($scope, $label, $target);
+
+Checks that a refusal can still be sent (a live connection, no response
+started) and returns C<$target> as an application: a code reference becomes
+a Request handler.
+
+=cut

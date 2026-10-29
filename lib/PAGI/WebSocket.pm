@@ -10,7 +10,7 @@ use Future::AsyncAwait;
 use Future;
 use JSON::MaybeXS ();
 use PAGI::Headers ();
-use PAGI::Common ();
+use PAGI::Utils::_ProtocolHelpers ();
 use PAGI::FutureOwner;
 use Scalar::Util qw(blessed);
 
@@ -27,7 +27,7 @@ sub new {
     croak "PAGI::WebSocket requires scope type 'websocket', got '$scope->{type}'"
         unless ($scope->{type} // '') eq 'websocket';
     # PAGI::Spec::Www 0.6: servers provide pagi.connection on every scope.
-    PAGI::Common::require_connection($scope, 'PAGI::WebSocket');
+    PAGI::Utils::_ProtocolHelpers::require_connection($scope, 'PAGI::WebSocket');
 
     # Return existing WebSocket object if one was already created for this scope
     # This ensures consistent state (is_connected, is_closed, callbacks) if
@@ -460,7 +460,7 @@ async sub accept {
         $event->{headers} = $headers;
     }
 
-    await PAGI::Common::forward_send($self, $event);
+    await PAGI::Utils::_ProtocolHelpers::forward_send($self, $event);
     $self->_set_state('connected') unless $self->is_closed;
 
     return $self;
@@ -500,7 +500,7 @@ sub close {
     my $settled = $self->{_close_send} = Future->new;
     my $send;
     my $ok = eval {
-        $send = Future->wrap(PAGI::Common::forward_send($self, {type => 'websocket.close', code => $code // 1000, reason => $reason // ''}));
+        $send = Future->wrap(PAGI::Utils::_ProtocolHelpers::forward_send($self, {type => 'websocket.close', code => $code // 1000, reason => $reason // ''}));
         1;
     };
     if (!$ok) { $settled->fail($@) }
@@ -519,7 +519,7 @@ sub close {
 # before accept.
 async sub deny {
     my ($self, @targets) = @_;
-    my $app = PAGI::Common::prepare_refusal(
+    my $app = PAGI::Utils::_ProtocolHelpers::prepare_refusal(
         $self->{scope}, 'WebSocket deny', @targets,
     );
     await PAGI::Utils::invoke_app(
@@ -553,7 +553,7 @@ async sub send_text {
     defined($text = PAGI::Utils::_string_value($text))
         or croak 'send_text requires a string or an object that overloads stringification';
 
-    await PAGI::Common::forward_send($self, {
+    await PAGI::Utils::_ProtocolHelpers::forward_send($self, {
         type => 'websocket.send',
         text => $text,
     });
@@ -571,7 +571,7 @@ async sub send_bytes {
     defined($bytes = PAGI::Utils::_byte_string($bytes))
         or croak 'send_bytes must be encoded bytes: it contains a character above 0xFF; encode text first, or use send_text';
 
-    await PAGI::Common::forward_send($self, {
+    await PAGI::Utils::_ProtocolHelpers::forward_send($self, {
         type  => 'websocket.send',
         bytes => $bytes,
     });
@@ -587,7 +587,7 @@ async sub send_json {
 
     my $json = JSON::MaybeXS::encode_json($data);
 
-    await PAGI::Common::forward_send($self, {
+    await PAGI::Utils::_ProtocolHelpers::forward_send($self, {
         type => 'websocket.send',
         text => $json,
     });
@@ -610,7 +610,7 @@ async sub _try_send_text {
     eval {
         defined($text = PAGI::Utils::_string_value($text))
             or croak 'send_text requires a string or an object that overloads stringification';
-        await PAGI::Common::forward_send($self, {
+        await PAGI::Utils::_ProtocolHelpers::forward_send($self, {
             type => 'websocket.send',
             text => $text,
         });
@@ -641,7 +641,7 @@ async sub _try_send_bytes {
             or croak 'send_bytes requires a string or an object that overloads stringification';
         defined($bytes = PAGI::Utils::_byte_string($bytes))
             or croak 'send_bytes must be encoded bytes: it contains a character above 0xFF; encode text first, or use send_text';
-        await PAGI::Common::forward_send($self, {
+        await PAGI::Utils::_ProtocolHelpers::forward_send($self, {
             type => 'websocket.send',
             bytes => $bytes,
         });
@@ -669,7 +669,7 @@ async sub _try_send_json {
 
     my $json = JSON::MaybeXS::encode_json($data);
     eval {
-        await PAGI::Common::forward_send($self, {
+        await PAGI::Utils::_ProtocolHelpers::forward_send($self, {
             type => 'websocket.send',
             text => $json,
         });
@@ -865,7 +865,7 @@ async sub keepalive {
     };
     $event->{timeout} = $timeout if defined $timeout;
 
-    await PAGI::Common::forward_send($self, $event);
+    await PAGI::Utils::_ProtocolHelpers::forward_send($self, $event);
 
     return $self;
 }
