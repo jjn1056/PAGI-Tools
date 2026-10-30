@@ -340,8 +340,12 @@ request bodies for HTTP and SSE.
 
 Normal Router handlers receive this object directly. Raw PAGI applications
 construct it only when they choose the Request API; construction requires an
-HTTP, WebSocket, or SSE scope and a receive coderef. WebSocket body methods
-fail before reading protocol events.
+HTTP, WebSocket, or SSE scope. The receive coderef is what it reads the body
+through: a Request built without one (C<< PAGI::Request->new($scope) >>)
+reads the scope -- headers, query, cookies, path -- and its body methods die.
+To read only the scope, as middleware does, build a L<PAGI::HTTPConnection>,
+which Request extends. WebSocket body methods fail before reading protocol
+events.
 
 =head3 Basic Properties
 
@@ -1242,6 +1246,7 @@ Create reusable middleware by extending L<PAGI::Middleware>:
   package MyApp::Middleware::Auth;
   use parent 'PAGI::Middleware';
   use Future::AsyncAwait;
+  use PAGI::HTTPConnection;
 
   sub new {
       my ($class, %args) = @_;
@@ -1254,8 +1259,13 @@ Create reusable middleware by extending L<PAGI::Middleware>:
       return async sub {
           my ($scope, $receive, $send) = @_;
 
-          # Check auth header
-          my $auth = $self->get_header($scope, 'Authorization');
+          # Lifespan has no request to read.
+          return await $app->($scope, $receive, $send)
+              if $scope->{type} eq 'lifespan';
+
+          # Check auth header. PAGI::HTTPConnection reads the scope without
+          # touching the body, which stays the application's to read.
+          my $auth = PAGI::HTTPConnection->new($scope)->header('Authorization');
 
           if ($auth && $auth =~ /^Bearer (.+)/) {
               my $token = $1;
@@ -1266,15 +1276,6 @@ Create reusable middleware by extending L<PAGI::Middleware>:
           # Call next middleware/app
           await $app->($scope, $receive, $send);
       };
-  }
-
-  sub get_header {
-      my ($self, $scope, $name) = @_;
-      $name = lc $name;
-      for my $header (@{$scope->{headers} || []}) {
-          return $header->[1] if lc($header->[0]) eq $name;
-      }
-      return undef;
   }
 
   sub verify_token {

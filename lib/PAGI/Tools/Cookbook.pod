@@ -2872,6 +2872,7 @@ both sizes -- a small gzip body can decompress to gigabytes:
   use Future::AsyncAwait;
   use IO::Uncompress::Gunzip ();
   use PAGI::Exception::HTTP;
+  use PAGI::HTTPConnection;
   use PAGI::Tools qw(compose middleware response route);
 
   my $MAX_BODY = 10 * 1024 * 1024;    # compressed or not
@@ -2897,10 +2898,10 @@ both sizes -- a small gzip body can decompress to gigabytes:
   # plain body, in one event, with the encoding and length headers gone.
   sub gunzip_body ($app) {
       return async sub ($scope, $receive, $send) {
-          my ($encoding) = map { $_->[1] }
-              grep { lc($_->[0]) eq 'content-encoding' } @{ $scope->{headers} // [] };
+          return await $app->($scope, $receive, $send) unless $scope->{type} eq 'http';
+          my $encoding = PAGI::HTTPConnection->new($scope)->header('content-encoding');
           return await $app->($scope, $receive, $send)
-              unless $scope->{type} eq 'http' && defined($encoding) && lc($encoding) eq 'gzip';
+              unless defined($encoding) && lc($encoding) eq 'gzip';
           my $plain_scope = { %$scope, headers => [
               grep { lc($_->[0]) ne 'content-encoding' && lc($_->[0]) ne 'content-length' }
                   @{ $scope->{headers} } ] };

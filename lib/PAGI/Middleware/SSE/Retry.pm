@@ -144,8 +144,9 @@ The configured retry interval in milliseconds.
 =head1 LAST-EVENT-ID
 
 This middleware does not handle the Last-Event-ID header for resumption.
-Applications should check C<$scope-E<gt>{headers}> for the Last-Event-ID
-header and resume from the appropriate point in the event stream.
+Applications read it -- C<< $sse->header('Last-Event-ID') >> in a handler,
+C<< PAGI::HTTPConnection->new($scope)->header('Last-Event-ID') >> in
+middleware -- and resume from the appropriate point in the event stream.
 
 =head1 SEE ALSO
 

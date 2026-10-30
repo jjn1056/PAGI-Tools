@@ -3,7 +3,7 @@
 0.003000 - 2026-09-30
 
   Most of the 0.002002 API is replaced; there are no compatibility aliases.
-  UPGRADING.md has a table of what replaces what and a worked port;
+  UPGRADING.md has a table of what replaces what and worked ports;
   UPGRADING-REFERENCE.md has the details. Needs PAGI::Server 0.003000.
 
   [New]
@@ -518,11 +518,15 @@
     a value is no longer percent-decoded (Cookie: a=x%2Fy reads "x%2Fy",
     where it read "x/y"), and a name sent twice gives the last value, where
     it gave the first. An application that stores such values encodes and
-    decodes them itself. Its path dies "this scope has no path" on a scope
-    with none, where it answered undef. PAGI::Request->new($scope), or with
-    an undef receive, builds a Request that reads the scope and has no
-    body: its body methods die "this Request was built from the scope
-    alone; it has no body" before reading or marking anything.
+    decodes them itself. A quoted value is unquoted as Mojolicious does:
+    the quotes are removed and \" and \\ undone (a="x\"y" reads x"y,
+    where it read x\"y). Its path dies "this scope has no path" on a scope
+    with none, where it answered undef, and raw_path and request_uri die
+    the same on a scope with neither raw_path nor path, where they answered
+    '/'. PAGI::Request->new($scope), or with an undef receive, builds a
+    Request that reads the scope and has no body: its body methods die
+    "this Request was built from the scope alone; it has no body" before
+    reading or marking anything.
   - PAGI::WebSocket and PAGI::SSE are PAGI::HTTPConnections, and new
     builds a new object on every call: the object is no longer cached in
     the scope (pagi.websocket, pagi.sse), so a second new over one scope,
@@ -532,8 +536,9 @@
     pagi.request.headers). path_param is strict, as Request's: a name the
     route did not capture dies naming the ones it did, where it returned
     undef (strict => 0 gives undef). path dies "this scope has no path" on
-    a scope without one, where SSE answered '/' and WebSocket undef. Both
-    gain cookies and cookie.
+    a scope without one, where SSE answered '/' and WebSocket undef, and
+    raw_path and request_uri die the same on a scope with neither raw_path
+    nor path, where they answered '/'. Both gain cookies and cookie.
   - PAGI::WebSocket and PAGI::SSE drive only the answer they gave. A
     helper over a connection another helper answered fails locally, sending
     nothing and reading nothing, with "this connection was answered by
@@ -559,7 +564,9 @@
     accept or start the server rejected raises at that await and stays the
     connection's answerer, as Starlette's WebSocket does: its later sends,
     try_send*, keepalive, close and close_or_deny go to the server, and
-    SSE never issues a second sse.start.
+    SSE never issues a second sse.start, where WebSocket sends croaked
+    "Cannot send on closed WebSocket", SSE sends returned without sending,
+    try_send* returned 0, and keepalive and close sent nothing.
   - The middleware reads requests through PAGI::HTTPConnection, each
     reader keeping its own meaning. A header checked against something
     reads every field joined ", " (D1), so a repeated one fails the check:

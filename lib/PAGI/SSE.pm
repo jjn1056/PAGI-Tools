@@ -1292,11 +1292,16 @@ call returns C<$self> without sending anything.
 
 B<DEFERRED ARM:> C<sse.keepalive> is illegal before C<sse.start> -- both
 L<PAGI::Utils::_SendValidation> and the reference server's C<EventValidator> reject
-it from the pre-start state. Calling C<keepalive> before L</start> does
-B<not> send anything: it records the interval/comment, and C<start> arms
-the recording (sends the real event) immediately afterward, where it is
-legal. A subsequent pre-start call with C<< interval => 0 >> clears the
-recording instead of arming anything. This is transparent to callers --
+it from the pre-start state. Calling C<keepalive> before L</start> is
+called does B<not> send anything: it records the interval/comment, and
+C<start> arms the recording (sends the real event) once its C<sse.start>
+has been sent, where it is legal. A subsequent pre-start call with an
+interval of 0 clears the recording instead of arming anything. Once
+C<start> has been called -- its C<sse.start> still pending, completed, or
+rejected by the server -- C<keepalive> sends at once, after the start in
+call order, and drops any recording; a recording made before a start the
+server rejected is never armed, so call C<keepalive> again if the helper
+carries on. This is transparent to callers --
 C<< await $sse->keepalive($n) >> still "just works" whether called before or
 after C<start> -- and it's specifically what lets
 L<PAGI::Endpoint::SSE/keepalive_interval> be configured before C<on_connect>

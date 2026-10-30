@@ -579,8 +579,9 @@ CONNECT request.
 
 Returns the complete validated Host field, including an explicit port. Returns
 C<undef> only when Host is absent, and croaks when Host is malformed or occurs
-more than once. Use L<PAGI::HTTPConnection/header> with C<'host'> as the raw, joined-value escape
-hatch when that behavior is required.
+more than once. To read the field without validation, use
+L<PAGI::HTTPConnection/header> with C<'host'>: the raw value, or every value
+joined C<", "> when Host is repeated.
 
 =head2 content_type
 

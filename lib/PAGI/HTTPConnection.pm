@@ -317,11 +317,24 @@ with both HTTP and WebSockets".
     my $conn = PAGI::HTTPConnection->new($scope);
 
 Builds a connection over C<$scope>, an unblessed C<http>, C<websocket> or
-C<sse> scope hashref; any other type (C<lifespan>, say) croaks, as does a
-scope with no type and a second argument. It does not require
-C<pagi.connection> (L</connection> returns it when present). Building reads
-nothing and writes nothing: every parse happens on first use and is kept on
-the object.
+C<sse> scope hashref. It croaks when:
+
+=over 4
+
+=item * C<$scope> is not a hash reference, or is a blessed one;
+
+=item * the scope has no C<type>, or its type is empty or a reference;
+
+=item * the type is anything else (C<lifespan>, say) -- middleware that
+sees every scope checks C<< $scope->{type} >> before building one;
+
+=item * a second argument is passed.
+
+=back
+
+It does not require C<pagi.connection> (L</connection> returns it when
+present). Building reads nothing and writes nothing: every parse happens on
+first use and is kept on the object.
 
 =head1 SCOPE PROPERTIES
 
@@ -415,7 +428,11 @@ copy.
 
 A header's value (the name is case-insensitive), or C<undef> when absent. A
 header that appears more than once reads as every value joined with C<", ">
-in order; C<Set-Cookie> cannot be joined, read it with L</header_all>.
+in order: two C<Accept> fields read C<"text/html, application/json">, and two
+C<Origin> fields read a value no origin check accepts. Read each value with
+L</header_all>, or a value that must appear once (an id, an address) with
+C<< $conn->headers->get_single($name) >>, which gives C<undef> for a repeated
+field.
 
 =head2 header_all
 
