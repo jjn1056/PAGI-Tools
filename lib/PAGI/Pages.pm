@@ -12,7 +12,7 @@ use Scalar::Util qw(blessed);
 
 use PAGI::Pages::_Catalog;
 use PAGI::Pages::Application ();
-use PAGI::Request;
+use PAGI::HTTPConnection;
 use PAGI::ContentNegotiation;
 use PAGI::Response ();
 use PAGI::Response::Empty ();
@@ -773,11 +773,8 @@ sub _assembled_headers {
     my @headers = @{$page->{headers} || []};
 
     if ($page->{upgrade_connection}) {
-        my $no_body = sub {
-            return Future->fail('metadata-only Request cannot consume a body');
-        };
-        my $version = PAGI::Request->new(
-            _metadata_scope($scope), $no_body,
+        my $version = PAGI::HTTPConnection->new(
+            _metadata_scope($scope),
         )->http_version;
         croak 'PAGI::Pages status 426 Upgrade requires HTTP/1.1'
             unless defined($version) && !ref($version) && $version eq '1.1';
@@ -817,16 +814,10 @@ sub _select_representation {
     my @families = ($self->{default});
     push @families, grep { $_ ne $self->{default} } qw(html json text);
 
-    my $no_body = sub {
-        return Future->fail('metadata-only Request cannot consume a body');
-    };
-    # Negotiation reads a metadata view of the scope, without a header cache a
-    # WebSocket or SSE helper keeps there, while descriptor factories retain
-    # the original scope identity.
-    my $request = PAGI::Request->new(
-        _metadata_scope($scope), $no_body,
-    );
-    my @accept_values = $request->header_all('accept');
+    # Negotiation reads a metadata view of the scope, while descriptor
+    # factories retain the original scope identity.
+    my $connection = PAGI::HTTPConnection->new(_metadata_scope($scope));
+    my @accept_values = $connection->header_all('accept');
     my $accept = @accept_values ? join(', ', @accept_values) : undef;
     my $problem_rejected = $page->{kind} eq 'error'
         ? _problem_type_explicitly_rejected($accept) : 0;
