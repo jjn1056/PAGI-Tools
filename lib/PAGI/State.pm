@@ -111,10 +111,12 @@ Every builder receives C<$state>, a view of the same state through which it
 C<get>s what it depends on, in any order. Get other keys through that
 C<$state>, never through C<< $source->state >>, which would escape the cycle
 check. C<per_request> and C<factory> builders also receive C<$source>, what
-the asking view was made from: the L<PAGI::Request> (or L<PAGI::WebSocket>,
-L<PAGI::SSE>) for C<< $request->state >>, the scope hashref for
-C<< app_state($scope) >>. A middleware that wants its builders to get a
-Request asks through one: C<< PAGI::Request->new($scope, $receive)->state >>.
+the asking view was made from: the L<PAGI::HTTPConnection> for
+C<< $conn->state >> (a L<PAGI::Request>, L<PAGI::WebSocket> or L<PAGI::SSE>
+in a handler), the scope hashref for C<< app_state($scope) >>. A middleware
+that wants its builders to read the request -- its headers, cookies and
+query -- asks through C<< PAGI::HTTPConnection->new($scope)->state >>, which
+reads the scope without touching the body.
 
 A builder may be a block, a C<sub {...}> or an C<async sub {...}>. In the
 middle of a list, a C<sub> or C<async sub> builder takes the rest of the list

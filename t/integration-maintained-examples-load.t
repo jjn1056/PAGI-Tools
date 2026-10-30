@@ -146,4 +146,23 @@ subtest 'endpoint demo names endpoint classes at routes' => sub {
         'no middleware reads the raw scope headers by hand');
 };
 
+subtest 'example middleware reads the request through PAGI::HTTPConnection' => sub {
+    my %reads = (
+        'endpoint-class-demo/lib/MyApp/API.pm' =>
+            qr/PAGI::HTTPConnection->new\(\$scope\)->header\('x-demo-token'\)/,
+        'tenant-orders/app.pl' =>
+            qr/PAGI::HTTPConnection->new\(\$scope\)->headers->get_single\('x-api-key'\).*?my \$conn = PAGI::HTTPConnection->new\(\$scope\);.*?\$conn->header\('authorization'\).*?\$conn->query_param\('region'\)/s,
+        'signed-requests/app.pl' =>
+            qr/PAGI::HTTPConnection->new\(\$scope\)->header\('x-signature'\)/,
+        'state-lifetimes/lib/MyApp/Middleware/AccessLog.pm' =>
+            qr/PAGI::HTTPConnection->new\(\$scope\)->state/,
+    );
+    for my $file (sort keys %reads) {
+        my $source = source_text("$Bin/../examples/$file");
+        like($source, $reads{$file}, "$file reads through PAGI::HTTPConnection");
+        unlike($source, qr/grep \{ lc\(\$_->\[0\]\) eq '[a-z-]+' \} \@\{ ?\$scope->\{headers\}/,
+            "$file has no hand-written header loop");
+    }
+};
+
 done_testing;

@@ -3,8 +3,8 @@ use strict;
 use warnings;
 use Future::AsyncAwait;
 
+use PAGI::HTTPConnection;
 use PAGI::Pages qw(not_found unauthorized);
-use PAGI::Request;
 use PAGI::Response qw(response);
 use PAGI::Routing qw(endpoint middleware mount route router sse);
 use PAGI::Routing::URL qw(path_for);
@@ -52,10 +52,10 @@ sub require_demo_token {
     my ($self, $inner) = @_;
     return async sub {
         my ($scope, $receive, $send) = @_;
-        my $request = PAGI::Request->new($scope, $receive);
+        my $token = PAGI::HTTPConnection->new($scope)->header('x-demo-token');
 
         return await $inner->($scope, $receive, $send)
-            if ($request->header('x-demo-token') // '') eq 'demo-token';
+            if ($token // '') eq 'demo-token';
 
         my $response = unauthorized(
             challenge => 'DemoToken realm="endpoint-class-demo"',
