@@ -131,6 +131,30 @@ subtest 'HTTP, WebSocket and SSE scopes get the key on a copy; others pass throu
     ok(!exists $lifespan->{'pagi.request.factory'}, 'lifespan: no key');
 };
 
+subtest 'request_for_scope without a receive keeps the class' => sub {
+    my $inner;
+    my $app = PAGI::Middleware::RequestClass->new(class => 'Local::AppRequest')->wrap(sub {
+        ($inner) = @_;
+        return Future->done;
+    });
+    $app->({ type => 'http', path => '/', headers => [['x-a', '1']] },
+        sub { Future->done({ type => 'http.disconnect' }) }, sub { Future->done })->get;
+    my $request = PAGI::Utils::request_for_scope($inner);
+    is(ref $request, 'Local::AppRequest', "RequestClass's factory (written with \@_)");
+    is($request->header('x-a'), '1', 'it reads the scope');
+    like(dies { $request->body->get }, qr/built from the scope alone; it has no body/,
+        'and has no body');
+
+    my $signature_factory = do {
+        use feature 'signatures';
+        no warnings 'experimental::signatures';
+        sub ($scope, $receive) { Local::OtherRequest->new($scope, $receive) };
+    };
+    is(ref(PAGI::Utils::request_for_scope(
+            { type => 'http', path => '/', headers => [], 'pagi.request.factory' => $signature_factory })),
+        'Local::OtherRequest', 'a factory written with a signature gets ($scope, undef)');
+};
+
 subtest 'mounts, http_default and a route of its own' => sub {
     my $native = async sub {
         my ($scope, $receive, $send) = @_;

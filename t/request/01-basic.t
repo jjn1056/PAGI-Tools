@@ -306,15 +306,18 @@ subtest 'charset is the Content-Type charset parameter' => sub {
     is($req->charset, undef, 'undef without a Content-Type');
 };
 
-subtest 'constructor requires a supported request scope and receive callback' => sub {
+subtest 'constructor requires a supported request scope; a receive is a coderef or absent' => sub {
     my $scope = {
         type => 'http',
         method => 'GET',
         headers => [],
     };
 
-    like(dies { PAGI::Request->new({ type => 'http' }) }, qr/receive coderef/i,
-        'receive callback is required');
+    # A Request may be built from the scope alone, and then has no body
+    # (HTTPConnection design 2026-10-30; t/request/no-receive.t).
+    ok(lives { PAGI::Request->new({ type => 'http' }) }, 'the receive may be absent');
+    like(dies { PAGI::Request->new({ type => 'http' }, {}) }, qr/receive coderef/i,
+        'a receive that is not a coderef is refused');
     like(dies { PAGI::Request->new({ headers => [] }, $receive) },
         qr/scope type is required/i, 'scope type is required');
     like(dies { PAGI::Request->new({ type => 'lifespan' }, $receive) },

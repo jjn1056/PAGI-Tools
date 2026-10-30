@@ -73,7 +73,7 @@ reports the failure to the server.
 The script receives the CGI variables and the server's C<PATH>, not the rest of
 the server's environment. C<SCRIPT_NAME> and C<PATH_INFO> are decoded paths as
 bytes and C<REQUEST_URI> is the path and query the client sent
-(L<PAGI::Request/request_uri>); C<HTTPS> is C<on> for an https request.
+(L<PAGI::HTTPConnection/request_uri>); C<HTTPS> is C<on> for an https request.
 Request headers become C<HTTP_*> variables, repeated headers joined with
 C<, >, except C<Proxy>, which never becomes C<HTTP_PROXY> (httpoxy,
 CVE-2016-5385). CGI requires C<CONTENT_LENGTH> for a body: a request body

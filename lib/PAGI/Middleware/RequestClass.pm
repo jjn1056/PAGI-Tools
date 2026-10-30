@@ -126,6 +126,10 @@ including ones you did not write.
 WebSocket and SSE scopes (a C<deny> handler gets one). It must accept them,
 as L<PAGI::Request/new> does.
 
+=item * B<No receive.> The class's C<new> may be called with an undef
+receive, for a Request that has no body (L<PAGI::Utils/request_for_scope>
+without one). It must accept it, as L<PAGI::Request/new> does.
+
 =item * B<A cheap constructor.> An endpoint built per request (see
 L<PAGI::Endpoint>) gets one instance for its builder and another for its
 method, so C<new> runs twice for that request. Keep it cheap, and never
@@ -155,7 +159,10 @@ The same key can be set by hand, for a factory that is more than C<new>:
 
 The factory is called with C<($scope, $receive)>, must return a
 L<PAGI::Request> instance or subclass synchronously, and must not read the
-body. An absent or undef key means a plain L<PAGI::Request>.
+body. C<$receive> may be C<undef>: L<PAGI::Utils/request_for_scope> called
+without one passes C<($scope, undef)>, for a Request that has no body
+(L<PAGI::Request/new>), so a factory must accept and pass on an undef
+receive. An absent or undef key means a plain L<PAGI::Request>.
 
 =head1 CONFIGURATION
 

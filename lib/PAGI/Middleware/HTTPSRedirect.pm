@@ -47,7 +47,7 @@ path (C<GET http://evil/x>) with C<Invalid request target>, since a redirect
 built from it could name another host. C<refuse> replaces the refusal.
 
 Redirect targets use L<PAGI::Response::Redirect>. The redirect target is
-C<https://>, the authority, and L<PAGI::Request/request_uri>: the path and
+C<https://>, the authority, and L<PAGI::HTTPConnection/request_uri>: the path and
 query the client requested, still encoded, including any mount prefix.
 Authority selection, exclusions, secure-request pass-through, and HSTS remain
 owned by this middleware.

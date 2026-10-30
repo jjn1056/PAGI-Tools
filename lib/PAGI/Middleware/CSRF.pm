@@ -10,6 +10,7 @@ use PAGI::Utils::SecureCompare qw(secure_compare);
 use Scalar::Util qw(blessed);
 use HTTP::MultiPartParser ();
 use PAGI::Exception::RequestBody ();
+use PAGI::HTTPConnection ();
 use PAGI::Request ();
 use PAGI::Request::MultipartStream ();
 use PAGI::Response::Text ();
@@ -378,8 +379,8 @@ async sub _form_token {
     for my $pair (split /[&;]/, $body) {
         my ($name, $value) = split /=/, $pair, 2;
         next unless defined($name) && length($name)
-            && PAGI::Request::_url_decode($name) eq $self->{form_field};
-        return ('token', PAGI::Request::_url_decode($value // ''));
+            && PAGI::HTTPConnection::_url_decode($name) eq $self->{form_field};
+        return ('token', PAGI::HTTPConnection::_url_decode($value // ''));
     }
     return ('missing');
 }

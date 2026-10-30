@@ -205,10 +205,11 @@
     as the routes read it, as Starlette's body-size limit does.
   - PAGI::Utils exports request_for_scope($scope, $receive): a new Request
     of the application's class (RequestClass's, else PAGI::Request), for
-    middleware, error handlers and a framework's own dispatch to read what
-    the scope holds. A limited-use Request: not the route handler's, and
-    it does not own the body; code that must not read the body passes a
-    receive that dies, as Authentication and ErrorHandler do.
+    middleware, error handlers and a framework's own dispatch to hand
+    application code the Request it expects. A limited-use Request: not the
+    route handler's, and it does not own the body. request_for_scope($scope),
+    without a receive, gives a Request with no body, whose body methods die
+    at once; the factory is then called with ($scope, undef).
   - Cookbook: "Linking inside a mounted app"; PAGI::Routing::URL's
     path_for shows absolute, sibling and parent references in a Mount.
   - examples/gut-check: everyday applications next to their Starlette
@@ -513,6 +514,15 @@
     repeated If-Modified-Since now reads "date1, date2", which
     PAGI::Middleware::ConditionalGet cannot parse, so the client gets the
     full response where the last date alone could produce a 304.
+  - PAGI::Request is a PAGI::HTTPConnection and reads cookies as it does:
+    a value is no longer percent-decoded (Cookie: a=x%2Fy reads "x%2Fy",
+    where it read "x/y"), and a name sent twice gives the last value, where
+    it gave the first. An application that stores such values encodes and
+    decodes them itself. Its path dies "this scope has no path" on a scope
+    with none, where it answered undef. PAGI::Request->new($scope), or with
+    an undef receive, builds a Request that reads the scope and has no
+    body: its body methods die "this Request was built from the scope
+    alone; it has no body" before reading or marking anything.
   - PAGI::Test::Client's form and query values are characters, sent UTF-8
     percent-encoded, as its path and json already were: each character
     was sent as one byte, so "caf\x{e9}" reached the application as

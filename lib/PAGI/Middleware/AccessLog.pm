@@ -190,7 +190,7 @@ __END__
 
 =head1 LOG FORMATS
 
-The request field in every format is L<PAGI::Request/request_uri>: the path
+The request field in every format is L<PAGI::HTTPConnection/request_uri>: the path
 and query the client requested, percent-encoded, including any mount prefix.
 A client cannot forge a log line with an encoded CR LF.
 

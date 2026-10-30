@@ -343,7 +343,7 @@ When a reverse proxy publishes the application under C</app>, every link and
 redirect it emits must start with C</app>. The application sees C<root_path>
 C</app> and its own C<path> below it (see
 L<PAGI::Spec::Www/Paths, Mounts and Root Paths>), and C<path_for>,
-C<url_for>, L<PAGI::Request/request_uri> and the C<next> of a
+C<url_for>, L<PAGI::HTTPConnection/request_uri> and the C<next> of a
 L<PAGI::Middleware::Requires> redirect all include the prefix. Test it as it will be served, requesting the browser's URL:
 
   use v5.40;
@@ -2645,7 +2645,7 @@ propagates unhandled errors to the notifier's C<invoke_error> method.
 
 Some work should start only once the client has its answer: a welcome email
 for a signup that succeeded, say. Register it on the connection's
-C<on_complete> (L<PAGI::Request/connection>), and hand what it starts to the
+C<on_complete> (L<PAGI::HTTPConnection/connection>), and hand what it starts to the
 same lifespan-owned L<PAGI::FutureOwner>:
 
   use v5.40;

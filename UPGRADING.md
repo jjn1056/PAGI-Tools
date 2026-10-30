@@ -66,6 +66,8 @@ in [UPGRADING-REFERENCE.md](UPGRADING-REFERENCE.md).
 | `each_json` died (a 1011 server error) on a message that is not JSON | it closes 1007 and returns; pass `on_invalid_json`, or override `handle_invalid_json`, to answer otherwise |
 | `MyEndpoint->to_app` (an Endpoint class name) | `endpoint('MyEndpoint')->to_app`, or `MyEndpoint->new->to_app`; on a class name it now dies |
 | `$request->header`, `PAGI::Headers->get`, `PAGI::Response->header` returned the last value of a repeated field | every value joined `", "` in order, as Mojo::Headers, PSGI and Plack::Request do; read `Set-Cookie` with `header_all` / `get_all`; `get_single` still rejects duplicates |
+| `$request->cookie` / `cookies` percent-decoded each value (`a=x%2Fy` read `x/y`) | the value as the client sent it (`x%2Fy`), quotes removed; encode and decode your own values (as Starlette and Mojolicious read cookies) |
+| `$request->cookie` gave the first value of a cookie name sent twice | the last value, as query and form parameters do |
 
 Behaviour that changes without a code change: stock refusals and error
 responses are plain text, each replaceable by one option ([details](UPGRADING-REFERENCE.md#audit-changed-first-party-defaults));
