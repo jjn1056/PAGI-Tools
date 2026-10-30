@@ -40,13 +40,6 @@ sub _init {
     );
 }
 
-# The receive behind a backend's Request: reading the body there dies, and
-# the message names the backend's line, not PAGI::Request's.
-our @CARP_NOT = ('PAGI::Request');
-sub _no_body {
-    croak 'Authentication backends read headers and cookies, not the body; check a signed body in the handler';
-}
-
 sub wrap {
     my ($self, $app) = @_;
     my $backend = $self->{backend};
@@ -61,7 +54,7 @@ sub wrap {
 
         # The backend reads the request's headers and cookies; the body is
         # the application's, so the backend's Request has none to read.
-        my $request = PAGI::Utils::request_for_scope($scope, \&_no_body);
+        my $request = PAGI::Utils::request_for_scope($scope);
         my @results;
         my $authenticated = eval {
             my $returned = ref($backend) eq 'CODE'

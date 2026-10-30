@@ -9,6 +9,7 @@ use Fcntl qw(S_ISDIR);
 use Future::AsyncAwait;
 use parent 'PAGI::App::File';
 use File::Spec;
+use PAGI::HTTPConnection ();
 use PAGI::Response::HTML ();
 use PAGI::Response::JSON ();
 use PAGI::Routing::HeadBoundary;
@@ -206,8 +207,8 @@ async sub _send_listing {
     # Sort directories first, then by name
     @entries = sort { $b->{is_dir} <=> $a->{is_dir} || $a->{name} cmp $b->{name} } @entries;
 
-    # Check Accept header for JSON
-    my $accept = $self->_get_header($scope, 'accept') // '';
+    # Check Accept for JSON, every field joined
+    my $accept = PAGI::HTTPConnection->new($scope)->header('accept') // '';
     if ($accept =~ m{application/json}) {
         my $response = PAGI::Response::JSON->new(\@entries);
         return await PAGI::Utils::invoke_app(
@@ -316,7 +317,8 @@ listings remain navigable without leaving their mount.
 
 =head1 JSON FORMAT
 
-When Accept header contains C<application/json>, returns JSON:
+When the Accept header (every Accept field, joined) contains
+C<application/json>, returns JSON:
 
     [
       { "name": "file.txt", "is_dir": 0, "size": 1234, "mtime": 1234567890 },

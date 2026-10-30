@@ -12,7 +12,9 @@ use PAGI::Tools qw(compose middleware response route);
 # Starlette's ServerErrorMiddleware hands its handler Request(scope) with no
 # receive: the body was the application's, and on a real server reading it
 # again would wait for an event that never comes. Reading it dies at once,
-# naming the handler's line.
+# naming the handler's line, with the message of every Request built from the
+# scope alone (spec 2026-10-30 section 5: ErrorHandler calls
+# request_for_scope($scope), and its own _no_body stub goes).
 
 my $read_line;
 # raise => 0 keeps the response of an error that is answered and rethrown.
@@ -39,9 +41,9 @@ subtest 'a handler that reads the body dies at once, naming its line' => sub {
     my @warnings;
     local $SIG{__WARN__} = sub { push @warnings, @_ };
     like dies { $client->post('/', form => { title => 'hi' }) },
-        qr/\AErrorHandler handlers read the request's headers, not its body: the body was the application's at \Q${\__FILE__}\E line \Q$read_line\E\./,
+        qr/\Athis Request was built from the scope alone; it has no body at \Q${\__FILE__}\E line \Q$read_line\E\./,
         'the failure the server gets says why and where';
-    like \@warnings, [qr/\APAGI ErrorHandler handler failed while answering "the route failed": ErrorHandler handlers read/],
+    like \@warnings, [qr/\APAGI ErrorHandler handler failed while answering "the route failed": this Request was built from the scope alone/],
         'and one line names the error it was answering';
 };
 
@@ -54,7 +56,7 @@ subtest 'so does a catch entry' => sub {
     my @warnings;
     local $SIG{__WARN__} = sub { push @warnings, @_ };
     like dies { $client->post('/', form => { title => 'hi' }) },
-        qr/\AErrorHandler handlers read the request's headers, not its body/,
+        qr/\Athis Request was built from the scope alone; it has no body/,
         'the failure the server gets says why';
     like \@warnings, [qr/\APAGI ErrorHandler catch entry failed while answering "the route failed": /],
         'and one line names the error it was answering';

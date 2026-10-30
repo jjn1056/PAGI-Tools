@@ -97,6 +97,13 @@ C<Host> header. An origin in C<trusted_origins> always passes, and a request
 with neither header (a non-browser client, or an older browser) is left to
 the token check. A failure is recorded as C<cross_origin>.
 
+Each header is read with every field of its name joined C<", ">
+(L<PAGI::HTTPConnection/header>), so one sent twice -- an C<Origin> or a
+token header -- matches nothing and fails its check. The token cookie is read
+as L<PAGI::HTTPConnection/cookie> reads it: from every Cookie field, quotes
+removed, never percent-decoded, the last of a repeated name winning; an empty
+one counts as no cookie.
+
 A WebSocket handshake gets the same origin check: it carries the browser's
 cookies and WebSockets are outside CORS, so a page on another site could
 otherwise open an authenticated socket (cross-site WebSocket hijacking). A
@@ -296,12 +303,13 @@ sub wrap {
 
         # $stored is the token this request must match: the session's, or the
         # cookie's (undef when the client has none yet).
-        my ($token, $stored) = $self->_token_for($scope);
+        my $connection = PAGI::HTTPConnection->new($scope);
+        my ($token, $stored) = $self->_token_for($scope, $connection);
         my %recorded = ('pagi.csrf_token' => $token);
         my $failure;
         unless ($self->{safe_methods}{$scope->{method}}) {
-            $failure = $self->_origin_failure($scope)
-                // $self->_failure_for($stored, $self->_get_submitted_token($scope));
+            $failure = $self->_origin_failure($connection)
+                // $self->_failure_for($stored, $self->_get_submitted_token($connection));
             $recorded{'pagi.csrf_failure'} = $failure if defined $failure;
         }
 
@@ -330,7 +338,7 @@ sub wrap {
         # application or the refusal -- is handed the replay of the whole
         # body.
         my $downstream = $receive;
-        my $content_type = PAGI::Request->new($scope, $receive)->content_type;
+        my $content_type = $connection->headers->content_type // '';
         if (defined($failure) && $failure eq 'missing_token' && defined($self->{form_field})
                 && ($content_type eq 'application/x-www-form-urlencoded' || $content_type eq 'multipart/form-data')) {
             my ($reading, $replaying) = record_receive($receive);
@@ -518,12 +526,13 @@ sub _rotating_send {
 async sub _websocket_handshake {
     my ($self, $app, $scope, $receive, $send) = @_;
     my $session = $scope->{'pagi.session'};
+    my $connection = PAGI::HTTPConnection->new($scope);
     my $token = ($self->{session}
             ? (ref($session) eq 'HASH' ? $session->{csrf_token} : undef)
-            : $self->_get_cookie_token($scope))
+            : $self->_get_cookie_token($connection))
         // $self->_generate_token();
     my %recorded = ('pagi.csrf_token' => $token);
-    my $failure = $self->_origin_failure($scope);
+    my $failure = $self->_origin_failure($connection);
     $recorded{'pagi.csrf_failure'} = $failure if defined $failure;
     my $target = defined($failure) && $self->{refuse} ? $self->{refuse} : $app;
     await $target->($self->modify_scope($scope, \%recorded), $receive, $send);
@@ -534,7 +543,7 @@ async sub _websocket_handshake {
 # existing cookie -- never a regenerated one, so a token the client already
 # holds still has something to match -- or a fresh token when it has none.
 sub _token_for {
-    my ($self, $scope) = @_;
+    my ($self, $scope, $connection) = @_;
     if ($self->{session}) {
         my $session = $scope->{'pagi.session'};
         die 'CSRF session => 1 needs Session middleware outside it (missing pagi.session)'
@@ -542,7 +551,7 @@ sub _token_for {
         my $token = $session->{csrf_token} //= $self->_generate_token();
         return ($token, $token);
     }
-    my $cookie = $self->_get_cookie_token($scope);
+    my $cookie = $self->_get_cookie_token($connection);
     return ($cookie // $self->_generate_token(), $cookie);
 }
 
@@ -550,13 +559,14 @@ sub _token_for {
 # Modelled on Go's net/http CrossOriginProtection: Sec-Fetch-Site decides
 # when present; otherwise Origin's host and port must equal Host (the
 # scheme is not compared: a TLS-terminating proxy leaves the scope http).
-# A request with neither header is left to the token check.
+# A request with neither header is left to the token check. Each header is
+# read with every field joined, so a repeated one fails its check.
 sub _origin_failure {
-    my ($self, $scope) = @_;
-    my $origin = $self->_get_header($scope, 'origin');
+    my ($self, $connection) = @_;
+    my $origin = $connection->header('origin');
     return undef if defined($origin) && $self->{trusted_origins}{lc $origin};
 
-    my $site = $self->_get_header($scope, 'sec-fetch-site');
+    my $site = $connection->header('sec-fetch-site');
     if (defined $site) {
         $site = lc $site;
         return $site eq 'same-origin' || $site eq 'none' ? undef : 'cross_origin';
@@ -564,7 +574,7 @@ sub _origin_failure {
     return undef unless defined $origin;
 
     my ($authority) = $origin =~ m{\A[a-z][a-z0-9+.-]*://([^/?#]+)\z}i;
-    my $host = $self->_get_header($scope, 'host');
+    my $host = $connection->header('host');
     return undef if defined($authority) && defined($host) && lc($authority) eq lc($host);
     return 'cross_origin';
 }
@@ -574,32 +584,16 @@ sub _generate_token {
     return unpack('H*', secure_random_bytes(32));
 }
 
+# The token cookie's value; undef when there is none or it is empty.
 sub _get_cookie_token {
-    my ($self, $scope) = @_;
-
-    my $cookie_header = $self->_get_header($scope, 'cookie');
-    return unless $cookie_header;
-
-    my $name = $self->{cookie_name};
-    if ($cookie_header =~ /(?:^|;\s*)\Q$name\E=([^;]+)/) {
-        return $1;
-    }
-    return;
+    my ($self, $connection) = @_;
+    my $token = $connection->cookie($self->{cookie_name});
+    return defined($token) && length($token) ? $token : undef;
 }
 
 sub _get_submitted_token {
-    my ($self, $scope) = @_;
-    return $self->_get_header($scope, $self->{token_header});
-}
-
-sub _get_header {
-    my ($self, $scope, $name) = @_;
-
-    $name = lc($name);
-    for my $h (@{$scope->{headers} // []}) {
-        return $h->[1] if lc($h->[0]) eq $name;
-    }
-    return;
+    my ($self, $connection) = @_;
+    return $connection->header($self->{token_header});
 }
 
 1;

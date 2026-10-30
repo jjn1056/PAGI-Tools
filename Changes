@@ -560,6 +560,36 @@
     connection's answerer, as Starlette's WebSocket does: its later sends,
     try_send*, keepalive, close and close_or_deny go to the server, and
     SSE never issues a second sse.start.
+  - The middleware reads requests through PAGI::HTTPConnection, each
+    reader keeping its own meaning. A header checked against something
+    reads every field joined ", " (D1), so a repeated one fails the check:
+    CORS's Origin, CSRF's Origin, Sec-Fetch-Site, Host and token header
+    (each read the first field). A header used as a value is absent when
+    sent twice, and the reader's fallback applies: ReverseProxy's
+    X-Real-IP, X-Forwarded-Proto and X-Forwarded-Port (the socket's own
+    client, scheme and port stand, where the first field was used),
+    Session::State::Header's session header (no session id), RequestId's
+    incoming id under trust_incoming (a new id is generated) and
+    MethodOverride's override header (its _method query parameter is
+    checked). MethodOverride's _method gives the last of a repeated
+    parameter and splits on ';' as well as '&', where the first counted.
+    GZip compresses when any Accept-Encoding field names gzip (only the
+    first counted). App::Directory sends its JSON listing when any Accept
+    field names application/json (only the first counted). AccessLog logs
+    a repeated Referer or User-Agent joined (it logged the last). CSRF's
+    token cookie, Session::State::Cookie's session cookie and the Cookie
+    middleware's pagi.cookies are read as PAGI::HTTPConnection reads
+    cookies (D5): from every Cookie field (only the first counted), quotes
+    removed, the last of a repeated name winning (CSRF and the Cookie
+    middleware took the first), and the Cookie middleware no longer
+    percent-decodes (pagi.cookies holds "x%2Fy" for Cookie: a=x%2Fy, where
+    it held "x/y"). ContentNegotiation's Accept, Response::File's Range,
+    ConditionalGet and CSRF's form Content-Type read as before.
+    Session::State::Cookie and ::Header extract take an http, websocket or
+    sse scope: an untyped hash dies. Authentication's backend and
+    ErrorHandler's handler and catch entries get request_for_scope($scope):
+    reading their Request's body dies "this Request was built from the
+    scope alone; it has no body", where each had its own message.
   - PAGI::Test::Client's form and query values are characters, sent UTF-8
     percent-encoded, as its path and json already were: each character
     was sent as one byte, so "caf\x{e9}" reached the application as

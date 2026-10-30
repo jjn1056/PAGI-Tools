@@ -3,6 +3,7 @@ package PAGI::Middleware::Session::State::Cookie;
 use strict;
 use warnings;
 use parent 'PAGI::Middleware::Session::State';
+use PAGI::HTTPConnection ();
 
 =head1 NAME
 
@@ -76,20 +77,17 @@ sub new {
 
     my $session_id = $state->extract($scope);
 
-Find the Cookie header in C<$scope-E<gt>{headers}> (case-insensitive),
-parse the cookie string, and return the value matching C<cookie_name>.
-Returns undef if no matching cookie is found.
+Return the C<cookie_name> cookie as L<PAGI::HTTPConnection/cookie> reads
+it: from every Cookie field, quotes removed, never percent-decoded, the last
+of a repeated name winning. Returns undef if no matching cookie is found.
+C<$scope> is an http, websocket or sse scope.
 
 =cut
 
 sub extract {
     my ($self, $scope) = @_;
 
-    my $cookie_header = $self->_get_header($scope, 'cookie');
-    return unless defined $cookie_header;
-
-    my $cookies = $self->_parse_cookies($cookie_header);
-    return $cookies->{$self->{cookie_name}};
+    return PAGI::HTTPConnection->new($scope)->cookie($self->{cookie_name});
 }
 
 =head2 inject
@@ -122,33 +120,6 @@ sub clear {
     my $cookie = "$self->{cookie_name}=; Path=" . ($self->{cookie_options}{path} // '/') . "; Max-Age=0";
     $cookie .= "; HttpOnly" if $self->{cookie_options}{httponly};
     push @$headers, ['Set-Cookie', $cookie];
-}
-
-sub _get_header {
-    my ($self, $scope, $name) = @_;
-
-    $name = lc($name);
-    for my $h (@{$scope->{headers} // []}) {
-        return $h->[1] if lc($h->[0]) eq $name;
-    }
-    return;
-}
-
-sub _parse_cookies {
-    my ($self, $header) = @_;
-
-    my %cookies;
-    for my $pair (split /\s*;\s*/, $header) {
-        my ($name, $value) = split /=/, $pair, 2;
-        next unless defined $name && $name ne '';
-        $name =~ s/^\s+//;
-        $name =~ s/\s+$//;
-        $value //= '';
-        $value =~ s/^\s+//;
-        $value =~ s/\s+$//;
-        $cookies{$name} = $value;
-    }
-    return \%cookies;
 }
 
 sub _format_cookie {

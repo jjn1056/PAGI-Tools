@@ -367,14 +367,17 @@ subtest 'a backend cannot read the body; the application receives it untouched' 
         return unauth_result();
     });
     my $ran = 0;
+    # The backend's Request is request_for_scope($scope): no body, and the
+    # message every such Request gives (spec 2026-10-30 section 5: the
+    # _no_body stubs go).
     like dies {
         $middleware->wrap(async sub { $ran = 1 })->(
             { type => 'http', method => 'POST', headers => [] },
             client_receive({ type => 'http.request', body => 'payload=1', more => 0 }),
             sub { Future->done },
         )->get;
-    }, qr/\AAuthentication backends read headers and cookies, not the body; check a signed body in the handler at \Q${\__FILE__}\E line \d+/,
-        'the backend\'s body read dies at the backend, naming where the check goes';
+    }, qr/\Athis Request was built from the scope alone; it has no body at \Q${\__FILE__}\E line \d+/,
+        'the backend\'s body read dies at the backend\'s line';
     is $ran, 0, 'and the application never runs';
 
     my $by_app;

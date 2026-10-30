@@ -5,6 +5,7 @@ use warnings;
 use parent 'PAGI::Middleware';
 use Future::AsyncAwait;
 use Cookie::Baker ();
+use PAGI::HTTPConnection ();
 use PAGI::Utils ();
 
 =head1 NAME
@@ -44,7 +45,9 @@ Plack::Builder does.
 =head1 DESCRIPTION
 
 PAGI::Middleware::Cookie parses the Cookie header and makes the parsed
-cookies available in C<< $scope->{'pagi.cookies'} >> as a hashref.
+cookies available in C<< $scope->{'pagi.cookies'} >> as a hashref, read as
+L<PAGI::HTTPConnection/cookies> reads them: from every Cookie field, quotes
+removed, never percent-decoded, the last of a repeated name winning.
 
 It also provides a helper for setting response cookies.
 
@@ -80,9 +83,8 @@ sub wrap {
             return;
         }
 
-        # Parse cookies from Cookie header
-        my $cookie_header = $self->_get_header($scope, 'cookie') // '';
-        my $cookies = $self->_parse_cookies($cookie_header);
+        # Every Cookie field, as PAGI::HTTPConnection reads them
+        my $cookies = PAGI::HTTPConnection->new($scope)->cookies;
 
         # Create cookie jar for setting response cookies
         my @response_cookies;
@@ -118,13 +120,6 @@ sub wrap {
     };
 }
 
-sub _parse_cookies {
-    my ($self, $header) = @_;
-
-    return {} unless defined $header && length $header;
-    return Cookie::Baker::crush_cookie($header);
-}
-
 sub _format_set_cookie {
     my ($self, $name, $value, %opts) = @_;
 
@@ -139,16 +134,6 @@ sub _format_set_cookie {
     $cookie_opts{httponly}  = $opts{httponly} if $opts{httponly};
     $cookie_opts{samesite}  = $opts{samesite} if defined $opts{samesite};
     return Cookie::Baker::bake_cookie($name, \%cookie_opts);
-}
-
-sub _get_header {
-    my ($self, $scope, $name) = @_;
-
-    $name = lc($name);
-    for my $h (@{$scope->{headers} // []}) {
-        return $h->[1] if lc($h->[0]) eq $name;
-    }
-    return;
 }
 
 # Simple cookie jar class for method-style access

@@ -467,24 +467,6 @@ async sub serve {
     return await $response->_respond_with_plan($send, $plan);
 }
 
-sub _get_header_values {
-    my ($self, $scope, $name) = @_;
-
-    $name = lc $name;
-    my @values;
-    for my $header (@{$scope->{headers} // []}) {
-        push @values, $header->[1]
-            if lc($header->[0]) eq $name;
-    }
-    return @values;
-}
-
-sub _get_header {
-    my ($self, $scope, $name) = @_;
-    my @values = $self->_get_header_values($scope, $name);
-    return @values ? $values[0] : undef;
-}
-
 # Answers a refused request: the caller's refuse application or the plain
 # default, with the reason in pagi.file_failure. The protocol fields a
 # status requires (Allow, Content-Range) are File's to set, whoever answers:

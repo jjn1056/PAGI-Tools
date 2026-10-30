@@ -4,6 +4,7 @@ use strict;
 use warnings;
 use parent 'PAGI::Middleware';
 use Future::AsyncAwait;
+use PAGI::HTTPConnection ();
 use PAGI::Utils ();
 
 =head1 NAME
@@ -137,40 +138,21 @@ sub wrap {
 }
 
 # The method the request asks for, from the header or the query, in that
-# order; undef when it asks for none.
+# order; undef when it asks for none. A repeated header is absent (the
+# query is then checked); a repeated query parameter gives its last value.
 sub _get_override_method {
     my ($self, $scope) = @_;
+    my $connection = PAGI::HTTPConnection->new($scope);
 
     # Check header first (most secure)
     if ($self->{check_header}) {
-        my $header_name = lc($self->{header});
-        for my $h (@{$scope->{headers} // []}) {
-            if (lc($h->[0]) eq $header_name) {
-                return $h->[1];
-            }
-        }
+        my $method = $connection->headers->get_single($self->{header});
+        return $method if defined $method;
     }
 
     # Check query parameter
     if ($self->{check_param}) {
-        my $query = $scope->{query_string} // '';
-        my $param_name = $self->{param};
-
-        # Simple query string parsing
-        for my $pair (split /&/, $query) {
-            my ($key, $value) = split /=/, $pair, 2;
-            $key //= '';
-            $value //= '';
-            # URL decode
-            $key =~ s/\+/ /g;
-            $key =~ s/%([0-9A-Fa-f]{2})/chr(hex($1))/ge;
-            $value =~ s/\+/ /g;
-            $value =~ s/%([0-9A-Fa-f]{2})/chr(hex($1))/ge;
-
-            if ($key eq $param_name) {
-                return $value;
-            }
-        }
+        return $connection->query_param($self->{param});
     }
 
     return undef;
@@ -186,10 +168,12 @@ When a POST request is received:
 
 =over 4
 
-=item 1. Check X-HTTP-Method-Override header (if enabled). If it is sent,
-it decides.
+=item 1. Check X-HTTP-Method-Override header (if enabled). If it is sent
+once, it decides; sent more than once, it counts as absent.
 
-=item 2. Check _method query parameter (if enabled)
+=item 2. Check _method query parameter (if enabled), read as
+L<PAGI::HTTPConnection/query_param> reads it: percent-decoded, C<&> or C<;>
+between parameters, the last of a repeated one winning
 
 =item 3. If found and method is allowed, override scope->{method}
 

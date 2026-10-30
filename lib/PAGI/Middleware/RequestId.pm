@@ -5,6 +5,7 @@ use warnings;
 use parent 'PAGI::Middleware';
 use Future::AsyncAwait;
 use PAGI::Utils::Random qw(secure_random_bytes);
+use PAGI::HTTPConnection ();
 use PAGI::Utils ();
 
 =head1 NAME
@@ -54,7 +55,8 @@ The header name to use for the request ID.
 =item * trust_incoming (default: 0)
 
 If true, use an existing request ID from the incoming request headers
-instead of generating a new one.
+instead of generating a new one. An ID header sent more than once counts as
+absent, so a new ID is generated.
 
 =item * generator (default: built-in UUID generator)
 
@@ -95,8 +97,6 @@ sub _generate_id {
 sub wrap {
     my ($self, $app) = @_;
 
-    my $header_name = lc($self->{header});
-
     return async sub  {
         my ($scope, $receive, $send) = @_;
         # Only handle HTTP requests
@@ -105,15 +105,11 @@ sub wrap {
             return;
         }
 
-        # Check for existing request ID if trust_incoming is enabled
+        # The incoming request ID, if trust_incoming is enabled; a repeated
+        # one is absent, so a new one is generated.
         my $request_id;
         if ($self->{trust_incoming}) {
-            for my $h (@{$scope->{headers} // []}) {
-                if (lc($h->[0]) eq $header_name) {
-                    $request_id = $h->[1];
-                    last;
-                }
-            }
+            $request_id = PAGI::HTTPConnection->new($scope)->headers->get_single($self->{header});
         }
 
         # Generate new ID if none found

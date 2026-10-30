@@ -7,6 +7,7 @@ use Future::AsyncAwait;
 use PAGI::Response::Empty ();
 use PAGI::Utils ();
 use PAGI::Headers;
+use PAGI::HTTPConnection ();
 use PAGI::Utils::Middleware ();
 
 =head1 NAME
@@ -131,8 +132,9 @@ sub wrap {
             return;
         }
 
-        # Get Origin header
-        my $origin = $self->_get_header($scope, 'origin');
+        # Origin, every field joined: a repeated Origin matches no allowed
+        # origin.
+        my $origin = PAGI::HTTPConnection->new($scope)->header('origin');
 
         # Check if this is a preflight request
         if ($scope->{method} eq 'OPTIONS' && $origin) {
@@ -210,16 +212,6 @@ sub _is_origin_allowed {
     return 1 if grep { $_ eq '*' } @{$self->{origins}};
     return 1 if grep { $_ eq $origin } @{$self->{origins}};
     return 0;
-}
-
-sub _get_header {
-    my ($self, $scope, $name) = @_;
-
-    $name = lc($name);
-    for my $h (@{$scope->{headers} // []}) {
-        return $h->[1] if lc($h->[0]) eq $name;
-    }
-    return;
 }
 
 1;

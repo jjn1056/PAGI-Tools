@@ -8,7 +8,7 @@ use Digest::MD5 qw(md5_hex);
 use Fcntl qw(S_ISREG);
 use PAGI::Utils ();
 use PAGI::Utils::Headers qw(format_etag parse_etag);
-use PAGI::Headers ();
+use PAGI::HTTPConnection ();
 
 =encoding UTF-8
 
@@ -152,7 +152,7 @@ sub new {
         && ($method eq 'GET' || $method eq 'HEAD');
     my $not_modified = 0;
     if ($conditional_http) {
-        my $request_headers = PAGI::Headers->new($scope->{headers} // []);
+        my $request_headers = PAGI::HTTPConnection->new($scope)->headers;
         if ($request_headers->has('If-None-Match')) {
             my $condition = $request_headers->if_none_match;
             $not_modified = $condition->{any}
@@ -183,7 +183,7 @@ sub new {
     my $range;
     if ($handle_ranges
             && defined($method) && !ref($method) && $method eq 'GET') {
-        my @values = _header_values($scope, 'range');
+        my @values = PAGI::HTTPConnection->new($scope)->header_all('range');
         $range = join ',', map {
             defined($_) && !ref($_) ? $_ : ''
         } @values if @values;
@@ -256,19 +256,6 @@ sub _valid_entity_tag {
     my $parsed = parse_etag($value);
     return defined($parsed) && format_etag($parsed->{value},
         weak => $parsed->{weak}) eq $value ? 1 : 0;
-}
-
-sub _header_values {
-    my ($scope, $name) = @_;
-    $name = lc $name;
-    my @values;
-    for my $header (@{$scope->{headers} // []}) {
-        next unless ref($header) eq 'ARRAY' && @$header >= 2;
-        my $field = $header->[0];
-        next unless defined($field) && !ref($field);
-        push @values, $header->[1] if lc($field) eq $name;
-    }
-    return @values;
 }
 
 sub _single_byte_range {
