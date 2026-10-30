@@ -283,8 +283,10 @@ subtest 'an inherited Stream reaches original sends incrementally and observes s
     is([map { $_->{body} // '<start>' } @sent], ['<start>', 'first'],
         'first chunk follows start');
 
+    # D7: while this helper is refusing, start fails locally.
     my $before_start = scalar @sent;
-    ok($sse->start->get == $sse, 'live start is a no-op after decline commitment');
+    like(dies { $sse->start->get }, qr/^this helper is refusing the connection /,
+        'live start fails locally after decline commitment');
     is(scalar @sent, $before_start, 'no live start or keepalive follows committed decline');
 
     $settlements[1]->done;
@@ -350,9 +352,13 @@ subtest 'an inherited Stream reaches original sends incrementally and observes s
     ok($sse->scope->{'pagi.connection'}->response_started, 'post-start producer failure cannot reopen the slot');
     $sse->scope->{'pagi.connection'}->_deliver_notifications;
     is($close_calls, 0, 'producer failure cannot publish terminal cleanup');
-    $sse->start->get;
+    # D7: while this helper is refusing, start and a repeated decline fail
+    # locally with the refusing message.
+    like(dies { $sse->start->get }, qr/^this helper is refusing the connection /,
+        'start fails locally while declining');
     ok(!exists $sse->{_pending_keepalive}, 'declining to start discards deferred keepalive');
-    like(dies { $sse->decline(PAGI::Response::Text->new('again'))->get }, qr/no response started/, 'repeated decline rejected');
+    like(dies { $sse->decline(PAGI::Response::Text->new('again'))->get },
+        qr/^this helper is refusing the connection /, 'repeated decline rejected');
     $sse->scope->{'pagi.connection'}->_deliver_notifications;
     is($close_calls, 0, 'repeated decline cannot publish terminal cleanup');
     $sse->scope->{'pagi.connection'}->_mark_disconnected('server_error', 'producer failed');

@@ -63,13 +63,28 @@ sub _refresh_connection {
     return;
 }
 
-# An initial helper cannot claim a response slot already used by an application.
-# Accepted/started helpers continue to use their established protocol.
-sub _response_claimed_before_start {
+# A helper drives only what it answered (PAGI::Utils::_ProtocolHelpers holds
+# the claim rules): while its own refusal is in progress, or once another
+# helper answered the open connection, it fails locally.
+sub _refusing { PAGI::Utils::_ProtocolHelpers::refusing($_[0]) }
+sub _answered_by_another { PAGI::Utils::_ProtocolHelpers::answered_by_another($_[0]) }
+
+# This helper answered: its start completed, or it is issued and still
+# pending (start keeps the pending start in _starting). Either way it drives
+# the connection as a started stream; the server keeps a scope's sends in
+# call order. A rejected start leaves the helper as it was before it (D6).
+sub _answered {
     my ($self) = @_;
-    $self->_refresh_connection;
-    return $self->{_state} eq 'pending'
-        && $self->{scope}{'pagi.connection'}->response_started;
+    return $self->is_started || ($self->{_starting} ? 1 : 0);
+}
+
+# A keepalive saved for a start this helper may not make is dropped.
+sub _require_ownership {
+    my ($self) = @_;
+    my $refused = PAGI::Utils::_ProtocolHelpers::ownership_refusal($self);
+    return unless $refused;
+    delete $self->{_pending_keepalive};
+    croak $refused;
 }
 
 sub disconnect_detail {
@@ -173,10 +188,7 @@ sub start {
 
 async sub _start {
     my ($self, %opts) = @_;
-    if ($self->_response_claimed_before_start) {
-        delete $self->{_pending_keepalive};
-        return $self;
-    }
+    $self->_require_ownership;
 
     # Idempotent - don't start twice
     return $self if $self->is_started || $self->is_closed || $self->connection_state eq 'closing';
@@ -191,9 +203,13 @@ async sub _start {
         $event->{headers} = $headers;
     }
 
+    # The helper owns the connection from the moment its start is issued.
+    $self->{_claim} = 'answering';
     await PAGI::Utils::_ProtocolHelpers::forward_send($self, $event);
-    $self->_set_state('started') unless $self->is_closed;
-    return $self if $self->is_closed;
+    # A close made while the start was pending stands, and no saved
+    # keepalive is armed after it.
+    $self->_set_state('started') if $self->connection_state eq 'pending';
+    return $self unless $self->is_started;
 
     # Arm any keepalive requested before the stream started (see
     # keepalive()'s deferred-arm note below) -- illegal before sse.start,
@@ -223,12 +239,13 @@ async sub _start {
 async sub keepalive {
     my ($self, $interval, $comment) = @_;
 
-    # Safe no-op once closed (including via decline) -- there is no live
-    # connection left for the server to time a ping against.
-    if ($self->_response_claimed_before_start) {
+    # Safe no-op once closed or while declining -- there is no stream for
+    # the server to time a ping against.
+    if ($self->_refusing) {
         delete $self->{_pending_keepalive};
         return $self;
     }
+    $self->_require_ownership;
     return $self if $self->is_closed || $self->connection_state eq 'closing';
 
     $interval //= 0;
@@ -259,11 +276,9 @@ async sub keepalive {
 async sub decline {
     my ($self, @targets) = @_;
     my $app = PAGI::Utils::_ProtocolHelpers::prepare_refusal(
-        $self->{scope}, 'SSE decline', @targets,
+        $self, 'SSE decline', @targets,
     );
-    await PAGI::Utils::invoke_app(
-        $app, $self->{scope}, $self->{receive}, $self->{send},
-    );
+    await PAGI::Utils::_ProtocolHelpers::refuse($self, $app);
     return $self;
 }
 
@@ -277,8 +292,8 @@ sub last_event_id {
 async sub send {
     my ($self, $data) = @_;
 
-    return $self if $self->_response_claimed_before_start;
     croak "Cannot send on closed SSE connection" if $self->is_closed || $self->connection_state eq 'closing';
+    $self->_require_ownership;
     defined($data = PAGI::Utils::_string_value($data))
         or croak 'send requires a string or an object that overloads stringification';
 
@@ -297,8 +312,8 @@ async sub send {
 async sub send_json {
     my ($self, $data) = @_;
 
-    return $self if $self->_response_claimed_before_start;
     croak "Cannot send on closed SSE connection" if $self->is_closed || $self->connection_state eq 'closing';
+    $self->_require_ownership;
 
     await $self->start unless $self->is_started;
 
@@ -316,8 +331,8 @@ async sub send_json {
 async sub send_event {
     my ($self, %opts) = @_;
 
-    return $self if $self->_response_claimed_before_start;
     croak "Cannot send on closed SSE connection" if $self->is_closed || $self->connection_state eq 'closing';
+    $self->_require_ownership;
     croak "send_event requires 'data' parameter" unless exists $opts{data};
 
     my $event = _send_event_for(%opts);
@@ -337,7 +352,7 @@ sub try_send { my $self = shift; return $self->_keep($self->_try_send(@_)) }
 
 async sub _try_send {
     my ($self, $data) = @_;
-    return 0 if $self->_response_claimed_before_start || $self->is_closed || $self->connection_state eq 'closing';
+    return 0 if $self->_refusing || $self->_answered_by_another || $self->is_closed || $self->connection_state eq 'closing';
 
     eval {
         defined($data = PAGI::Utils::_string_value($data))
@@ -359,7 +374,7 @@ sub try_send_json { my $self = shift; return $self->_keep($self->_try_send_json(
 
 async sub _try_send_json {
     my ($self, $data) = @_;
-    return 0 if $self->_response_claimed_before_start || $self->is_closed || $self->connection_state eq 'closing';
+    return 0 if $self->_refusing || $self->_answered_by_another || $self->is_closed || $self->connection_state eq 'closing';
 
     eval {
         await $self->start unless $self->is_started;
@@ -380,8 +395,8 @@ async sub _try_send_json {
 async sub send_comment {
     my ($self, $comment) = @_;
 
-    return $self if $self->_response_claimed_before_start;
     croak "Cannot send on closed SSE connection" if $self->is_closed || $self->connection_state eq 'closing';
+    $self->_require_ownership;
     defined($comment = PAGI::Utils::_string_value($comment))
         or croak 'send_comment requires a string or an object that overloads stringification';
 
@@ -399,7 +414,7 @@ sub try_send_comment { my $self = shift; return $self->_keep($self->_try_send_co
 
 async sub _try_send_comment {
     my ($self, $comment) = @_;
-    return 0 if $self->_response_claimed_before_start || $self->is_closed || $self->connection_state eq 'closing';
+    return 0 if $self->_refusing || $self->_answered_by_another || $self->is_closed || $self->connection_state eq 'closing';
 
     eval {
         defined($comment = PAGI::Utils::_string_value($comment))
@@ -421,7 +436,7 @@ sub try_send_event { my $self = shift; return $self->_keep($self->_try_send_even
 
 async sub _try_send_event {
     my ($self, %opts) = @_;
-    return 0 if $self->_response_claimed_before_start || $self->is_closed || $self->connection_state eq 'closing';
+    return 0 if $self->_refusing || $self->_answered_by_another || $self->is_closed || $self->connection_state eq 'closing';
 
     eval {
         my $event = _send_event_for(%opts);
@@ -604,7 +619,9 @@ sub _keep {
 # Close the connection
 sub close {
     my ($self, @args) = @_;
-    return Future->done($self) if $self->_response_claimed_before_start;
+    # A refusal is already this helper's answer.
+    return Future->done($self) if $self->_refusing;
+    $self->_require_ownership;
     if ($self->{_close_callbacks_ran}) {
         return $self->{_close_send}
             ? $self->_keep($self->{_close_send}->without_cancel->then(sub { Future->done($self) }))
@@ -616,7 +633,7 @@ sub close {
         if $self->{_close_send};
     return Future->done($self) if $self->is_closed;
     croak "SSE close requires an active accepted/started connection"
-        unless $self->is_started;
+        unless $self->_answered;
     $self->{_state} = 'closing';
     my $settled = $self->{_close_send} = Future->new;
     my $send;
@@ -648,10 +665,7 @@ sub close {
 # never by reading receive.
 async sub run {
     my ($self) = @_;
-    if ($self->_response_claimed_before_start) {
-        delete $self->{_pending_keepalive};
-        return;
-    }
+    $self->_require_ownership;
     await $self->start unless $self->is_started || $self->is_closed;
     await $self->{_cleanup_future}->without_cancel;
     return;
@@ -660,7 +674,7 @@ async sub run {
 # Iterate over items and send events
 async sub each {
     my ($self, $source, $callback) = @_;
-    return $self if $self->_response_claimed_before_start;
+    $self->_require_ownership;
 
     await $self->start unless $self->is_started;
 
@@ -703,7 +717,7 @@ async sub each {
 # Requires Future::IO to be installed
 async sub every {
     my ($self, $interval, $callback) = @_;
-    return $self if $self->_response_claimed_before_start;
+    $self->_require_ownership;
 
     croak "every() requires interval" unless defined $interval && $interval > 0;
     croak "every() requires callback coderef" unless ref $callback eq 'CODE';
@@ -1036,8 +1050,50 @@ without creating a clean terminal outcome.
 Waits for connection end and its asynchronous cleanup without reading the
 receive queue. Use this to keep a live stream handler open.
 
-Safe no-op after L</decline>, where no live stream was opened. For a started
-stream that has ended, it joins the same cleanup completion.
+After a L</decline> that completed, where no live stream was opened, it
+returns once cleanup is done; while the decline's response is still in
+progress it croaks (see L</WHICH HELPER ANSWERS>). For a started stream that
+has ended, it joins the same cleanup completion.
+
+=head1 WHICH HELPER ANSWERS
+
+A connection has one answer, and a helper drives only the answer it gave.
+Building a second helper over the same scope (C<new> always builds a new
+object) gives a helper that did not answer, so which helper answered
+decides what each can do. C<sse.start> is this helper's accept.
+
+B<This helper answered.> From the moment this helper issues its C<start>,
+before the server's send completes, it owns the connection: sends,
+iteration, C<run>, C<keepalive> and C<close> work as on a started stream.
+A send made while the start is still pending joins that start and goes out
+after it; a C<close> made then goes out after the start, in call order, and
+the completed start does not reopen the stream. If the server rejects the
+start, the error raises at its C<await> and nothing else changes: the helper
+keeps its claim, and code that catches the error and keeps using it gets no
+protection from the rules below. After a failed start, build a new helper if
+the connection is still live and unanswered, or use the helper that answered
+if another did.
+
+B<This helper is refusing.> Once the response of this helper's L</decline>
+has started and the connection is still open, the refusal is its answer.
+Its C<start>, a second C<decline>, C<send>, C<send_json>, C<send_event>,
+C<send_comment>, C<each>, C<every> and C<run> croak
+C<this helper is refusing the connection>, sending nothing and reading
+nothing; C<try_send*> return 0; C<close> and C<keepalive> return quietly.
+The refusal itself completes as usual. A refusal that settles with no
+response started answered nothing, and the helper may try again.
+
+B<Another helper answered.> While the connection is open and its response
+was started by another helper, every operation of this one croaks
+C<this connection was answered by another helper; use that one>, sending
+nothing and reading nothing, except C<try_send*>, which return 0. That
+includes C<close> and C<keepalive>: ending a stream another helper owns is
+that helper's call. A middleware that must act on the connection's data
+wraps C<$send> or C<$receive> instead.
+
+B<The connection has ended.> Every helper behaves as it does for an ended
+connection: sends croak C<Cannot send on closed SSE connection>, and
+C<start>, C<close>, C<keepalive> and C<run> do nothing more.
 
 =head1 CONNECTION STATE ACCESSORS
 
@@ -1525,8 +1581,8 @@ A framework may subclass PAGI::SSE (Thunderhorse does). The contract:
 =over 4
 
 =item * B<State.> The object holds C<scope>, C<receive> and C<send>, and its
-private connection state, every field of which starts with C<_> (C<_state>
-and the callbacks and the disconnect reason among them). A subclass adds fields under any other name.
+private connection state, every field of which starts with C<_> (C<_state>,
+C<_claim>, and the callbacks and the disconnect reason among them). A subclass adds fields under any other name.
 
 =item * B<One object per scope.> Build it once the scope is final, after
 the route match and inside the innermost middleware, from the channels the

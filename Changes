@@ -534,6 +534,28 @@
     undef (strict => 0 gives undef). path dies "this scope has no path" on
     a scope without one, where SSE answered '/' and WebSocket undef. Both
     gain cookies and cookie.
+  - PAGI::WebSocket and PAGI::SSE drive only the answer they gave. A
+    helper over a connection another helper answered fails locally, sending
+    nothing and reading nothing, with "this connection was answered by
+    another helper; use that one": its accept and start, which returned
+    quietly; its sends, where WebSocket croaked "Cannot send on closed
+    WebSocket" and SSE returned as if sent; WebSocket receive and what is
+    built on it, which returned undef as if the client had left; SSE each,
+    every and run, which returned; close, close_or_deny and keepalive,
+    which returned quietly; and deny and decline, which croaked "requires a
+    live connection with no response started". Its try_send* still return
+    0. While a helper's own deny or decline is under way (its response
+    started, the connection open), its accept, start, a second deny or
+    decline, its sends and its receives croak "this helper is refusing the
+    connection", where they returned quietly or croaked "Cannot send on
+    closed WebSocket"; close, close_or_deny, keepalive and try_send* stay
+    quiet. A helper owns the connection from the moment it issues its
+    accept or start: a send, close, close_or_deny, keepalive or try_send
+    made while that accept or start is still pending reaches the server
+    after it, and a WebSocket receive reads, where WebSocket sends croaked
+    "Cannot send on closed WebSocket", receive returned undef, SSE sends
+    returned without sending, try_send* returned 0, and close,
+    close_or_deny and keepalive returned quietly.
   - PAGI::Test::Client's form and query values are characters, sent UTF-8
     percent-encoded, as its path and json already were: each character
     was sent as one byte, so "caf\x{e9}" reached the application as

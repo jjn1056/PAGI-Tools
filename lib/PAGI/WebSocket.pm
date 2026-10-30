@@ -64,13 +64,26 @@ sub _refresh_connection {
     return;
 }
 
-# An initial helper cannot claim a response slot already used by an application.
-# Accepted/started helpers continue to use their established protocol.
-sub _response_claimed_before_start {
+# A helper drives only what it answered (PAGI::Utils::_ProtocolHelpers holds
+# the claim rules): while its own refusal is in progress, or once another
+# helper answered the open connection, it fails locally.
+sub _refusing { PAGI::Utils::_ProtocolHelpers::refusing($_[0]) }
+sub _answered_by_another { PAGI::Utils::_ProtocolHelpers::answered_by_another($_[0]) }
+
+# This helper answered: its accept completed, or it is issued and still
+# pending. Either way it drives the connection as an accepted socket; the
+# server keeps a scope's sends in call order. A rejected accept leaves the
+# helper as it was before it (D6).
+sub _answered {
     my ($self) = @_;
-    $self->_refresh_connection;
-    return $self->{_state} eq 'connecting'
-        && $self->{scope}{'pagi.connection'}->response_started;
+    return $self->is_connected || ($self->{_accept_pending} ? 1 : 0);
+}
+
+sub _require_ownership {
+    my ($self) = @_;
+    my $refused = PAGI::Utils::_ProtocolHelpers::ownership_refusal($self);
+    croak $refused if $refused;
+    return;
 }
 
 sub disconnect_detail {
@@ -305,9 +318,10 @@ async sub _trigger_error {
 # Accept the WebSocket connection
 async sub accept {
     my ($self, %opts) = @_;
-    return $self if $self->_response_claimed_before_start || $self->connection_state eq 'closing';
+    return $self if $self->connection_state eq 'closing';
 
     return $self if $self->is_closed;
+    $self->_require_ownership;
 
     my $event = {
         type => 'websocket.accept',
@@ -319,8 +333,14 @@ async sub accept {
         $event->{headers} = $headers;
     }
 
-    await PAGI::Utils::_ProtocolHelpers::forward_send($self, $event);
-    $self->_set_state('connected') unless $self->is_closed;
+    # The helper owns the connection from the moment its accept is issued.
+    $self->{_claim} = 'answering';
+    my $sent = PAGI::Utils::_ProtocolHelpers::forward_send($self, $event);
+    $self->{_accept_pending} = 1;
+    $sent->on_ready(sub { delete $self->{_accept_pending} });
+    await $sent;
+    # A close made while the accept was pending stands.
+    $self->_set_state('connected') if $self->connection_state eq 'connecting';
 
     return $self;
 }
@@ -341,15 +361,17 @@ sub _keep {
 # Close the WebSocket connection
 sub close {
     my ($self, @args) = @_;
-    return Future->done($self) if $self->_response_claimed_before_start;
+    # A refusal is already this helper's answer.
+    return Future->done($self) if $self->_refusing;
+    $self->_require_ownership;
     return $self->_keep($self->{_close_send}->without_cancel->then(sub { Future->done($self) }))
         if $self->{_close_send};
     return Future->done if $self->is_closed;
     # Before accept the scope is an HTTP exchange: refusing it is deny's job.
     croak 'WebSocket close is only valid after accept; use deny'
-        if $self->{_state} eq 'connecting';
+        if $self->{_state} eq 'connecting' && !$self->_answered;
     croak "WebSocket close requires an active accepted/started connection"
-        unless $self->is_connected;
+        unless $self->_answered;
     my ($code, $reason) = @args;
     if (defined $reason) {
         defined($reason = PAGI::Utils::_string_value($reason))
@@ -379,11 +401,9 @@ sub close {
 async sub deny {
     my ($self, @targets) = @_;
     my $app = PAGI::Utils::_ProtocolHelpers::prepare_refusal(
-        $self->{scope}, 'WebSocket deny', @targets,
+        $self, 'WebSocket deny', @targets,
     );
-    await PAGI::Utils::invoke_app(
-        $app, $self->{scope}, $self->{receive}, $self->{send},
-    );
+    await PAGI::Utils::_ProtocolHelpers::refuse($self, $app);
     return $self;
 }
 
@@ -392,8 +412,9 @@ async sub deny {
 # gone -- a client that hung up is not the application's error.
 async sub close_or_deny {
     my ($self, $code, $reason, $response) = @_;
-    return $self if $self->_response_claimed_before_start;
-    if ($self->connection_state eq 'connecting') {
+    return $self if $self->_refusing;
+    $self->_require_ownership;
+    if (!$self->_answered && $self->connection_state eq 'connecting') {
         require PAGI::Response::Text;
         await $self->deny($response // PAGI::Response::Text->new(
             (defined($reason) && length($reason) ? $reason : 'Forbidden'), status => 403,
@@ -408,7 +429,8 @@ async sub close_or_deny {
 async sub send_text {
     my ($self, $text) = @_;
 
-    croak "Cannot send on closed WebSocket" if $self->_response_claimed_before_start || $self->is_closed || $self->connection_state eq 'closing';
+    croak "Cannot send on closed WebSocket" if $self->is_closed || $self->connection_state eq 'closing';
+    $self->_require_ownership;
     defined($text = PAGI::Utils::_string_value($text))
         or croak 'send_text requires a string or an object that overloads stringification';
 
@@ -424,7 +446,8 @@ async sub send_text {
 async sub send_bytes {
     my ($self, $bytes) = @_;
 
-    croak "Cannot send on closed WebSocket" if $self->_response_claimed_before_start || $self->is_closed || $self->connection_state eq 'closing';
+    croak "Cannot send on closed WebSocket" if $self->is_closed || $self->connection_state eq 'closing';
+    $self->_require_ownership;
     defined($bytes = PAGI::Utils::_string_value($bytes))
         or croak 'send_bytes requires a string or an object that overloads stringification';
     defined($bytes = PAGI::Utils::_byte_string($bytes))
@@ -442,7 +465,8 @@ async sub send_bytes {
 async sub send_json {
     my ($self, $data) = @_;
 
-    croak "Cannot send on closed WebSocket" if $self->_response_claimed_before_start || $self->is_closed || $self->connection_state eq 'closing';
+    croak "Cannot send on closed WebSocket" if $self->is_closed || $self->connection_state eq 'closing';
+    $self->_require_ownership;
 
     my $json = JSON::MaybeXS::encode_json($data);
 
@@ -464,7 +488,7 @@ sub try_send_text { my $self = shift; return $self->_keep($self->_try_send_text(
 
 async sub _try_send_text {
     my ($self, $text) = @_;
-    return 0 if $self->_response_claimed_before_start || !$self->is_connected;
+    return 0 if $self->_refusing || $self->_answered_by_another || !$self->_answered;
 
     eval {
         defined($text = PAGI::Utils::_string_value($text))
@@ -493,7 +517,7 @@ sub try_send_bytes { my $self = shift; return $self->_keep($self->_try_send_byte
 
 async sub _try_send_bytes {
     my ($self, $bytes) = @_;
-    return 0 if $self->_response_claimed_before_start || !$self->is_connected;
+    return 0 if $self->_refusing || $self->_answered_by_another || !$self->_answered;
 
     eval {
         defined($bytes = PAGI::Utils::_string_value($bytes))
@@ -524,7 +548,7 @@ sub try_send_json { my $self = shift; return $self->_keep($self->_try_send_json(
 
 async sub _try_send_json {
     my ($self, $data) = @_;
-    return 0 if $self->_response_claimed_before_start || !$self->is_connected;
+    return 0 if $self->_refusing || $self->_answered_by_another || !$self->_answered;
 
     my $json = JSON::MaybeXS::encode_json($data);
     eval {
@@ -553,7 +577,8 @@ async sub _try_send_json {
 async sub receive {
     my ($self) = @_;
 
-    return undef if $self->is_closed || $self->_response_claimed_before_start;
+    return undef if $self->is_closed;
+    $self->_require_ownership;
 
     while (1) {
         my $event = await $self->{receive}->();
@@ -714,7 +739,8 @@ async sub run {
 # Sends websocket.keepalive event to server - loop-agnostic, server handles timers
 async sub keepalive {
     my ($self, $interval, $timeout) = @_;
-    return $self if $self->is_closed || $self->_response_claimed_before_start || $self->connection_state eq 'closing';
+    return $self if $self->is_closed || $self->_refusing || $self->connection_state eq 'closing';
+    $self->_require_ownership;
 
     $interval //= 0;
 
@@ -952,7 +978,9 @@ close observer does not cancel the server's send.
 
 Before C<accept>, the scope is still an HTTP exchange, so C<close> croaks
 C<WebSocket close is only valid after accept; use deny> and sends nothing;
-refuse the handshake with L</deny>.
+refuse the handshake with L</deny>. Once this helper's C<accept> is issued,
+C<close> sends its Close after it, even while the accept is still pending
+(see L</WHICH HELPER ANSWERS>).
 
 The router and endpoint C<to_app> boundary send a missing close on successful
 handler return only for an accepted, still-active socket. Handler exceptions
@@ -1049,11 +1077,51 @@ Ends the socket however its state allows, for code that cannot know
 whether the handshake was accepted -- an error handler, a framework's
 dispatch. Before L</accept> it refuses with L</deny>: the given Response,
 or a C<403 text/plain> whose body is C<$reason> (C<Forbidden> when there
-is none), as ASGI answers a close before accept. After accept it calls
-L</close> with C<$code> and C<$reason>. Once the connection is closed --
+is none), as ASGI answers a close before accept. After accept, or once this
+helper's accept is issued, it calls L</close> with C<$code> and C<$reason>.
+Once the connection is closed --
 the client hung up, or the socket was already ended -- it sends nothing and
 does not die, so a client that left is not reported as an application
 error.
+
+=head1 WHICH HELPER ANSWERS
+
+A connection has one answer, and a helper drives only the answer it gave.
+Building a second helper over the same scope (C<new> always builds a new
+object) gives a helper that did not answer, so which helper answered
+decides what each can do.
+
+B<This helper answered.> From the moment this helper issues its C<accept>,
+before the server's send completes, it owns the connection: sends, receives,
+C<keepalive>, C<close> and C<close_or_deny> work as on an accepted socket,
+and an operation made while the accept is still pending reaches the server
+after it, in call order. If the server rejects the accept, the error raises
+at its C<await> and nothing else changes: the helper keeps its claim, and
+code that catches the error and keeps using it gets no protection from the
+rules below. After a failed accept, build a new helper if the connection is
+still live and unanswered, or use the helper that answered if another did.
+
+B<This helper is refusing.> Once the response of this helper's L</deny> has
+started and the connection is still open, the refusal is its answer. Its
+C<accept>, a second C<deny>, C<send_text>, C<send_bytes>, C<send_json>,
+C<receive> and everything built on it (C<receive_*>, C<each_*>, C<run>)
+croak C<this helper is refusing the connection>, sending nothing and reading
+nothing; C<try_send_*> return 0; C<close>, C<close_or_deny> and
+C<keepalive> return quietly. The refusal itself completes as usual. A
+refusal that settles with no response started answered nothing, and the
+helper may try again.
+
+B<Another helper answered.> While the connection is open and its response
+was started by another helper, every operation of this one croaks
+C<this connection was answered by another helper; use that one>, sending
+nothing and reading nothing, except C<try_send_*>, which return 0. That
+includes C<close>, C<close_or_deny> and C<keepalive>: closing a socket
+another helper owns is that helper's call. A middleware that must act on
+the connection's data wraps C<$send> or C<$receive> instead.
+
+B<The connection has ended.> Every helper behaves as it does for an ended
+connection: sends croak C<Cannot send on closed WebSocket>, C<receive>
+returns C<undef>, and C<accept>, C<close> and C<keepalive> do nothing.
 
 =head1 STATE ACCESSORS
 
@@ -1563,8 +1631,8 @@ A framework may subclass PAGI::WebSocket (Thunderhorse does). The contract:
 =over 4
 
 =item * B<State.> The object holds C<scope>, C<receive> and C<send>, and its
-private connection state, every field of which starts with C<_> (C<_state>
-and the C<_close_*> fields and the callbacks among them). A subclass adds fields under any other name.
+private connection state, every field of which starts with C<_> (C<_state>,
+C<_claim>, C<_accept_pending>, and the C<_close_*> fields and the callbacks among them). A subclass adds fields under any other name.
 
 =item * B<One object per scope.> Build it once the scope is final, after
 the route match and inside the innermost middleware, from the channels the

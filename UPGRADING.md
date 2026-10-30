@@ -71,6 +71,9 @@ in [UPGRADING-REFERENCE.md](UPGRADING-REFERENCE.md).
 | `PAGI::WebSocket->new` / `PAGI::SSE->new` over a scope that already had one returned that object (cached in the scope as `pagi.websocket` / `pagi.sse`) | a new object on every call, and nothing stored in the scope: build one per connection and pass it on |
 | `$ws->path_param` / `$sse->path_param` returned `undef` for a name the route did not capture | it dies naming the names it did capture, as `$request->path_param` does; pass `strict => 0` for `undef` |
 | `$sse->path` answered `'/'` on a scope without a path | it dies "this scope has no path": a PAGI scope always has one |
+| A second `PAGI::WebSocket` / `PAGI::SSE` over a connection another helper answered: `accept` / `start` / `close` / `keepalive` returned quietly, WebSocket sends croaked "Cannot send on closed WebSocket", `receive` returned `undef`, SSE sends returned as if sent | every operation croaks "this connection was answered by another helper; use that one" and sends and reads nothing (`try_send*` still return 0): use the helper that answered, or wrap `$send` / `$receive` in a middleware |
+| After `$ws->deny` / `$sse->decline` started its response, `accept`, `start`, sends and `receive` returned quietly or croaked "Cannot send on closed WebSocket" | they croak "this helper is refusing the connection"; `close`, `close_or_deny`, `keepalive` and `try_send*` stay quiet |
+| A send, `close` or `keepalive` from another branch of the handler while the helper's own `accept` / `start` was still pending died "Cannot send on closed WebSocket" or did nothing | it reaches the server after the accept or start, in call order |
 
 Behaviour that changes without a code change: stock refusals and error
 responses are plain text, each replaceable by one option ([details](UPGRADING-REFERENCE.md#audit-changed-first-party-defaults));

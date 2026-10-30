@@ -210,7 +210,9 @@ for my $kind (qw(websocket sse)) {
         my $f = $kind eq 'websocket' ? $h->deny($response) : $h->decline($response);
         ok($conn->response_started, 'committed refusal body still in progress');
         ok(!$h->is_closed, 'refusal start is not terminal');
-        is($h->receive->get, undef, 'committed refusal never reads message queue') if $kind eq 'websocket';
+        # D7: while this helper is refusing, receive fails locally and reads nothing.
+        like(dies { $h->receive->get }, qr/^this helper is refusing the connection /,
+            'committed refusal never reads message queue') if $kind eq 'websocket';
         $body->done;
         ok($f->is_ready, 'refusal return observes send settlement');
         is(scalar @calls, 0, 'refusal return does not publish hooks');
@@ -292,7 +294,8 @@ for my $case (
         my $refusal = $kind eq 'websocket' ? $helper->deny($response) : $helper->decline($response);
         ok(!$refusal->is_ready, 'committed refusal body is pending');
         if ($outcome eq 'throws') {
-            like(dies {$helper->$method(@$args)->get}, qr/Cannot send/, 'throwing method rejects locally');
+            # D7: the refusing message, not "Cannot send on closed WebSocket".
+            like(dies {$helper->$method(@$args)->get}, qr/^this helper is refusing the connection /, 'throwing method rejects locally');
         } else {
             is($helper->$method(@$args)->get, 0, 'boolean method rejects with false');
         }

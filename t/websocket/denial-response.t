@@ -284,12 +284,14 @@ subtest 'Response receives the original WebSocket scope unchanged' => sub {
     is([map { $_->{body} // '<start>' } @sent], ['<start>', 'first'],
         'first chunk follows start');
 
+    # D7: while this helper is refusing, accept and a second deny fail
+    # locally with the refusing message.
     my $before_accept = scalar @sent;
-    my $accept = $ws->accept;
-    ok($accept->is_ready, 'accept is an immediate no-op after denial commitment');
+    like(dies { $ws->accept->get }, qr/^this helper is refusing the connection /,
+        'accept fails locally after denial commitment');
     is(scalar @sent, $before_accept, 'accept cannot send after denial commitment');
     like(dies { $ws->deny(PAGI::Response::Text->new('again'))->get },
-        qr/no response started/i, 'a second denial cannot claim the committed slot');
+        qr/^this helper is refusing the connection /, 'a second denial cannot claim the committed slot');
 
     $settlements[1]->done;
     is([map { $_->{body} // '<start>' } @sent], ['<start>', 'first', 'second'],
