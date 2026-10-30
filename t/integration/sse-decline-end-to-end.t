@@ -108,7 +108,7 @@ subtest 'concrete SSE decline Response returns a real HTTP 404 over the real ser
     like($wire, qr/Not Found/,             'decline body delivered');
     unlike($wire, qr{text/event-stream},   'NOT an event stream');
     ok($eof, 'connection closed');
-    is($endpoint->{advertised_www_version}, '0.6', 'server advertises Www 0.6');
+    is($endpoint->{advertised_www_version}, '0.7', 'server advertises Www 0.7');
     ok($endpoint->{connection}, 'scope exposes a connection object');
     ok($endpoint->{connection}->can('on_end')
         && $endpoint->{connection}->can('end_future'),

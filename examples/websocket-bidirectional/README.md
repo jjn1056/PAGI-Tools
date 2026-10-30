@@ -56,12 +56,11 @@ be cancelled.)
 ## Two producers, no queue
 
 `incoming` and `outgoing` both send on the same socket, whenever they like.
-The PAGI specification requires sends on a connection to go out one at a time
-("Sends Are Sequential"), and `PAGI::WebSocket` does that for you: a send made
-while another is in flight waits for it. So any handler with more than one
-producer — this one, a chat where a reply races a broadcast, a server push
-racing a request — simply calls the send methods. Only code that calls the raw
-`$send` itself has to serialize its own sends.
+A server implementing PAGI::Spec::Www 0.7 keeps a connection's sends in the
+order they were called ("Sends Are Sequential"), so any handler with more than
+one producer — this one, a chat where a reply races a broadcast, a server push
+racing a request — simply calls the send methods, with no queue of its own. On
+a server reporting an earlier `spec_version`, sends must not overlap.
 
 ## Run
 

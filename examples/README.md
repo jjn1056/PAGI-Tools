@@ -73,7 +73,7 @@ HTTP:
 WebSocket and SSE:
 
 - `websocket-echo` - the smallest WebSocket application: one route, one handler
-- `websocket-bidirectional` - a receive loop and a server-initiated send loop on the same socket; `PAGI::WebSocket` sends one at a time, so the two need no coordination
+- `websocket-bidirectional` - a receive loop and a server-initiated send loop on the same socket; a Www 0.7 server keeps the connection's sends in call order, so the two need no coordination
 - `sse-dashboard` - live metrics pushed to every connected dashboard over SSE
 - `sse-close` - ending an SSE stream explicitly, with a client-facing sentinel event
 - `protocol-refusal` - all six application forms accepted by WebSocket `deny` and SSE `decline`, exposed as twelve executable routes

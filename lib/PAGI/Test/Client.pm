@@ -329,7 +329,7 @@ sub _build_scope {
     my $scope = {
         type         => 'http',
         # Fixture contract: PAGI 0.5 with Www 0.6 universal connection state.
-        pagi         => { version => '0.5', spec_version => '0.6' },
+        pagi         => { version => '0.5', spec_version => '0.7' },
         http_version => '1.1',
         method       => $method,
         scheme       => 'http',
@@ -417,7 +417,7 @@ sub websocket {
     my $scope = {
         type         => 'websocket',
         # Fixture contract: PAGI 0.5 with Www 0.6 universal connection state.
-        pagi         => { version => '0.5', spec_version => '0.6' },
+        pagi         => { version => '0.5', spec_version => '0.7' },
         http_version => '1.1',
         scheme       => 'ws',
         path         => $path,
@@ -531,7 +531,7 @@ sub sse {
     my $scope = {
         type         => 'sse',
         # Fixture contract: PAGI 0.5 with Www 0.6 universal connection state.
-        pagi         => { version => '0.5', spec_version => '0.6' },
+        pagi         => { version => '0.5', spec_version => '0.7' },
         http_version => '1.1',
         method       => $method,
         scheme       => 'http',
@@ -998,7 +998,7 @@ cookies, and basic protocol flows. For behavior that depends on real socket I/O,
 HTTP framing, backpressure, or server lifecycle semantics, prefer testing
 against L<PAGI::Server>.
 
-HTTP, WebSocket, and SSE fixtures advertise Www C<spec_version 0.6> and carry
+HTTP, WebSocket, and SSE fixtures advertise Www C<spec_version 0.7> and carry
 the complete per-scope C<pagi.connection> interface. A manual WebSocket/SSE
 test-side C<close> records the peer outcome; application terminal sends record
 clean completion. The streaming test objects' C<pump> method advances queued
