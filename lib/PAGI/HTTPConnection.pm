@@ -194,11 +194,20 @@ sub cookies {
             my ($name, $value) = split /=/, $piece, 2;
             next unless defined $value;
             for ($name, $value) { s/\A\s+//; s/\s+\z// }
-            $value = $1 if $value =~ /\A"(.*)"\z/s;
-            $cookies{$name} = $value;
+            $cookies{$name} = _unquote($value);
         }
     }
     return $self->{_cookies} = \%cookies;
+}
+
+# A value wrapped in double quotes loses them, and \\ and \" inside become
+# \ and " (Mojo::Util's unquote); any other value is returned as is.
+sub _unquote {
+    my ($str) = @_;
+    return $str unless $str =~ s/\A"(.*)"\z/$1/s;
+    $str =~ s/\\\\/\\/g;
+    $str =~ s/\\"/"/g;
+    return $str;
 }
 
 # Single cookie value
@@ -505,8 +514,10 @@ subclasses, not a method to call.
 Every cookie the client sent, as a hashref of name to value, parsed on first
 use and kept on the object. Every C<Cookie> field is read and split into
 cookies on C<;> only, as RFC 6265 writes the field (a C<,> is part of a
-value); each name and value is trimmed, a value wrapped in double quotes is
-unquoted, and nothing is percent-decoded: the value is what the client sent.
+value); each name and value is trimmed. A value wrapped in double quotes is
+unquoted as Mojolicious does: the surrounding quotes are removed and, inside,
+C<\"> becomes C<"> and C<\\> becomes C<\>; any other value is taken as is.
+Nothing is percent-decoded: C<a=x%2Fy> reads C<x%2Fy>, as the client sent it.
 A name sent more than once gives the last value. A piece without C<=> is not
 a cookie and is skipped.
 

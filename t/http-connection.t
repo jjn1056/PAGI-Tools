@@ -240,6 +240,9 @@ subtest 'D5/D5b: cookies' => sub {
     is $cookies_of->('cart=sku1,sku2; theme=dark'), { cart => 'sku1,sku2', theme => 'dark' },
         'split on ";" only: a comma stays in the value';
     is $cookies_of->('a="x y"'), { a => 'x y' }, 'a quoted value is unquoted';
+    is $cookies_of->('a="x\"y"'), { a => 'x"y' }, 'unquoting undoes \"';
+    is $cookies_of->('a="x\\\\y"'), { a => 'x\\y' }, 'unquoting undoes \\\\';
+    is $cookies_of->('a=x\"y'), { a => 'x\"y' }, 'an unquoted value keeps its backslashes';
     is $cookies_of->('a=x%2Fy'), { a => 'x%2Fy' }, 'no percent-decoding';
     is $cookies_of->('a=1; a=2'), { a => '2' }, 'a repeated name: the last wins';
     is $cookies_of->('a=1', 'b=2'), $cookies_of->('a=1; b=2'),
