@@ -81,7 +81,10 @@ subtest 'param method for route parameters' => sub {
 
     is($ws->path_param('id'), '42', 'param returns route parameter');
     is($ws->path_param('name'), 'test', 'param returns another route parameter');
-    is($ws->path_param('missing'), undef, 'param returns undef for missing');
+    # D3 (ruled 2026-10-30): a missing name dies, as Request's path_param does.
+    like(dies { $ws->path_param('missing') }, qr/path_param 'missing' not found\. Available: id, name/,
+        'param dies for missing, naming the available ones');
+    is($ws->path_param('missing', strict => 0), undef, 'strict => 0 returns undef for missing');
 };
 
 subtest 'params method returns all route parameters' => sub {
@@ -95,9 +98,12 @@ subtest 'params method returns all route parameters' => sub {
     is($params, { foo => 'bar', baz => 'qux' }, 'params returns all route params');
 };
 
-subtest 'param returns undef when no route params in scope' => sub {
+subtest 'param dies when no route params in scope' => sub {
     my $ws = PAGI::WebSocket->new(make_scope(), $receive, $send);
-    is($ws->path_param('anything'), undef, 'param returns undef when no params');
+    # D3 (ruled 2026-10-30): strict, as Request's path_param.
+    like(dies { $ws->path_param('anything') }, qr/path_param 'anything' not found\. No path params set/,
+        'param dies when no params');
+    is($ws->path_param('anything', strict => 0), undef, 'strict => 0 returns undef');
     is($ws->path_params, {}, 'params returns empty hash when no params');
 };
 

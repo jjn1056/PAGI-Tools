@@ -197,7 +197,6 @@ sub _application_for {
 sub _metadata_scope {
     my ($scope) = @_;
     my %metadata = %$scope;
-    delete $metadata{'pagi.request.headers'};
     return \%metadata;
 }
 

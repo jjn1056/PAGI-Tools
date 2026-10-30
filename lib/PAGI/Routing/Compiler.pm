@@ -14,7 +14,6 @@ use PAGI::Routing::Resolver ();
 use PAGI::SSE;
 use PAGI::Exception::HTTP ();
 use PAGI::Utils ();
-use PAGI::Utils::Scope ();
 use PAGI::WebSocket;
 
 my $ALLOW_STATE_KEY = "\0PAGI::Routing::Compiler::allow";
@@ -356,15 +355,6 @@ sub _compile_protocol_leaf {
         my $kind = $route->kind;
         $app = async sub {
             my ($scope, $receive, $send) = @_;
-            my $cache_key = $kind eq 'websocket'
-                ? 'pagi.websocket'
-                : 'pagi.sse';
-            my $expected_class = $kind eq 'websocket'
-                ? 'PAGI::WebSocket'
-                : 'PAGI::SSE';
-            PAGI::Utils::Scope::_compatible_cached_scope_object(
-                $scope, $cache_key, $expected_class,
-            );
             my $protocol = $kind eq 'websocket'
                 ? PAGI::WebSocket->new($scope, $receive, $send)
                 : PAGI::SSE->new($scope, $receive, $send);

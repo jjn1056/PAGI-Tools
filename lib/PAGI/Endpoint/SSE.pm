@@ -8,7 +8,6 @@ use Future::AsyncAwait;
 use Carp qw(croak);
 use Scalar::Util qw(blessed);
 use PAGI::SSE;
-use PAGI::Utils::Scope ();
 
 # Keepalive interval in seconds (0 = disabled)
 sub keepalive_interval { 0 }
@@ -71,9 +70,6 @@ sub to_app {
         my $type = $scope->{type} // '';
         croak "Expected sse scope, got '$type'" unless $type eq 'sse';
 
-        PAGI::Utils::Scope::_compatible_cached_scope_object(
-            $scope, 'pagi.sse', 'PAGI::SSE',
-        );
         my $sse = PAGI::SSE->new($scope, $receive, $send);
 
         await $endpoint->handle($sse);

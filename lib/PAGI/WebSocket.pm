@@ -1,15 +1,12 @@
 package PAGI::WebSocket;
 use strict;
 use warnings;
+use parent 'PAGI::HTTPConnection';
 use Carp qw(croak);
 use PAGI::Utils ();
-use PAGI::Utils::Scope ();
-use Encode qw(decode FB_CROAK FB_DEFAULT LEAVE_SRC);
-use Hash::MultiValue;
 use Future::AsyncAwait;
 use Future;
 use JSON::MaybeXS ();
-use PAGI::Headers ();
 use PAGI::Utils::_ProtocolHelpers ();
 use PAGI::FutureOwner;
 use Scalar::Util qw(blessed);
@@ -29,26 +26,17 @@ sub new {
     # PAGI::Spec::Www 0.6: servers provide pagi.connection on every scope.
     PAGI::Utils::_ProtocolHelpers::require_connection($scope, 'PAGI::WebSocket');
 
-    # Return existing WebSocket object if one was already created for this scope
-    # This ensures consistent state (is_connected, is_closed, callbacks) if
-    # multiple code paths create WebSocket objects from the same scope.
-    return $scope->{'pagi.websocket'} if $scope->{'pagi.websocket'};
-
-    my $self = bless {
-        scope   => $scope,
-        receive => $receive,
-        send    => $send,
-        _state  => 'connecting',  # connecting -> connected -> closed
-        _close_code   => undef,
-        _close_reason => undef,
-        _on_close     => [],
-        _on_error     => [],
-        _on_message   => [],
-    }, $class;
-
-    # Cache in scope for reuse (weakened to avoid circular reference leak)
-    $scope->{'pagi.websocket'} = $self;
-    Scalar::Util::weaken($scope->{'pagi.websocket'});
+    # One object per call: nothing is cached in the scope, so a handler
+    # keeps the object it was given (SUBCLASSING).
+    my $self = $class->SUPER::new($scope);
+    $self->{receive} = $receive;
+    $self->{send} = $send;
+    $self->{_state} = 'connecting';  # connecting -> connected -> closed
+    $self->{_close_code} = undef;
+    $self->{_close_reason} = undef;
+    $self->{_on_close} = [];
+    $self->{_on_error} = [];
+    $self->{_on_message} = [];
 
     $self->{_cleanup_future} = Future->new;
     $self->{_owner} = PAGI::FutureOwner->new;
@@ -91,138 +79,9 @@ sub disconnect_detail {
     return $self->{_disconnect_detail};
 }
 
-# Scope property accessors
-sub scope        { shift->{scope} }
-sub connection   { shift->{scope}{'pagi.connection'} }
-sub path         { shift->{scope}{path} }
-sub raw_path      { PAGI::Utils::Scope::raw_path(shift->{scope}) }
-sub request_uri   { PAGI::Utils::Scope::request_uri(shift->{scope}) }
-sub raw_path_info { PAGI::Utils::Scope::raw_path_info(shift->{scope}) }
-sub query_string { shift->{scope}{query_string} // '' }
-sub scheme       { shift->{scope}{scheme} // 'ws' }
-sub http_version { shift->{scope}{http_version} // '1.1' }
+# What the scope holds is read through PAGI::HTTPConnection; the
+# subprotocols the client offered are WebSocket's own.
 sub subprotocols { shift->{scope}{subprotocols} // [] }
-sub client       { shift->{scope}{client} }
-sub server       { shift->{scope}{server} }
-
-
-# Application state (injected by PAGI::Lifespan, read-only)
-sub has_state {
-    my $self = shift;
-    return 0 unless exists $self->{scope}{state};
-    croak 'PAGI::WebSocket state must be a hashref'
-        unless ref($self->{scope}{state}) eq 'HASH';
-    return 1;
-}
-
-sub state {
-    my $self = shift;
-    require PAGI::State;
-    return PAGI::State->new($self) // PAGI::State->_without_state;
-}
-
-# Path parameter accessors - captured from URL path by router
-# Stored in scope->{path_params} for router-agnostic access
-sub path_params {
-    my ($self) = @_;
-    return $self->{scope}{path_params} // {};
-}
-
-sub path_param {
-    my ($self, $name) = @_;
-    my $params = $self->{scope}{path_params} // {};
-    return $params->{$name};
-}
-
-# Internal: URL decode a string (handles + as space)
-sub _url_decode {
-    my ($str) = @_;
-    return '' unless defined $str;
-    $str =~ s/\+/ /g;
-    $str =~ s/%([0-9A-Fa-f]{2})/chr(hex($1))/ge;
-    return $str;
-}
-
-# Internal: Decode UTF-8 with replacement or croak in strict mode
-sub _decode_utf8 {
-    my ($str, $strict) = @_;
-    return '' unless defined $str;
-    my $flag = $strict ? FB_CROAK : FB_DEFAULT;
-    $flag |= LEAVE_SRC;
-    return decode('UTF-8', $str, $flag);
-}
-
-# Query params as Hash::MultiValue (cached in scope)
-# Options: strict => 1 (croak on invalid UTF-8), raw => 1 (skip UTF-8 decoding)
-sub query_params {
-    my ($self, %opts) = @_;
-    my $strict = delete $opts{strict} // 0;
-    my $raw    = delete $opts{raw}    // 0;
-    croak("Unknown options to query_params: " . join(', ', keys %opts)) if %opts;
-
-    my $cache_key = $raw ? 'pagi.websocket.query.raw' : ($strict ? 'pagi.websocket.query.strict' : 'pagi.websocket.query');
-    return $self->{scope}{$cache_key} if $self->{scope}{$cache_key};
-
-    my $qs = $self->query_string;
-    my @pairs;
-
-    for my $part (split /[&;]/, $qs) {
-        next unless length $part;
-        my ($key, $val) = split /=/, $part, 2;
-        $key //= '';
-        $val //= '';
-
-        # URL decode (handles + as space)
-        my $key_decoded = _url_decode($key);
-        my $val_decoded = _url_decode($val);
-
-        # UTF-8 decode unless raw mode
-        my $key_final = $raw ? $key_decoded : _decode_utf8($key_decoded, $strict);
-        my $val_final = $raw ? $val_decoded : _decode_utf8($val_decoded, $strict);
-
-        push @pairs, $key_final, $val_final;
-    }
-
-    $self->{scope}{$cache_key} = Hash::MultiValue->new(@pairs);
-    return $self->{scope}{$cache_key};
-}
-
-# Raw query params (no UTF-8 decoding)
-sub raw_query_params {
-    my $self = shift;
-    return $self->query_params(raw => 1);
-}
-
-# Shortcut for single query param
-sub query_param {
-    my ($self, $name, %opts) = @_;
-    return $self->query_params(%opts)->get($name);
-}
-
-# Raw single query param
-sub raw_query_param {
-    my ($self, $name) = @_;
-    return $self->query_param($name, raw => 1);
-}
-
-# Single header lookup (case-insensitive, repeated fields joined ", ")
-sub header {
-    my ($self, $name) = @_;
-    return $self->headers->get($name);
-}
-
-# All headers as PAGI::Headers (cached in scope)
-sub headers {
-    my ($self) = @_;
-    return $self->{scope}{'pagi.request.headers'}
-        //= PAGI::Headers->new($self->{scope}{headers} // []);
-}
-
-# All values for a header
-sub header_all {
-    my ($self, $name) = @_;
-    return $self->headers->get_all($name);
-}
 
 # State accessors
 sub connection_state { my $self = shift; $self->_refresh_connection; return $self->{_state} }
@@ -993,70 +852,50 @@ built by hand, as in tests, supplies one with L<PAGI::Test::ConnectionState>:
         'pagi.connection' => PAGI::Test::ConnectionState->new(websocket => 1),
     };
 
-B<Singleton pattern:> The WebSocket object is cached in C<< $scope->{'pagi.websocket'} >>.
-If you call C<new()> multiple times with the same scope, you get the same
-WebSocket object back. This ensures consistent state (is_connected, is_closed,
-callbacks) across multiple code paths that may create WebSocket objects from
-the same scope.
+Each call builds a new object and stores nothing in the scope, so build one
+per connection and pass it on (see L</SUBCLASSING>).
 
 An application that constructs the helper itself should
 C<await $ws-E<gt>finished> before it returns; see L</finished>. Routes and the
 Endpoint classes do this for you.
 
+=head1 INHERITED FROM PAGI::HTTPConnection
+
+A PAGI::WebSocket is a L<PAGI::HTTPConnection>: what can be read from the
+scope alone comes from the methods it inherits, documented there. Each parse
+(headers, query, cookies) is kept on the object; nothing is written to the
+scope.
+
+=over 4
+
+=item * Scope properties: C<scope>, C<connection>, C<client>, C<server>,
+C<scheme> (C<ws> unless the scope says otherwise), C<http_version>, C<path>,
+C<raw_path>, C<raw_path_info>, C<request_uri>, C<query_string>
+
+=item * Headers: C<headers>, C<header>, C<header_all>
+
+=item * Query parameters: C<query_params>, C<query_param>,
+C<raw_query_params>, C<raw_query_param>
+
+=item * Path parameters: C<path_params>, C<path_param> (strict: a name the
+route did not capture dies, naming the ones it did; pass C<< strict => 0 >>
+for C<undef>), and the subclass hook C<_default_path_param_strict_opt>
+
+=item * Cookies: C<cookies>, C<cookie>
+
+=item * Application state: C<state>, C<has_state>
+
+=back
+
+C<path> dies C<this scope has no path> on a scope without one.
+
 =head1 SCOPE ACCESSORS
-
-=head2 scope, path, raw_path, query_string, scheme, http_version
-
-    my $path = $ws->path;              # /chat/room1
-    my $qs = $ws->query_string;        # token=abc
-    my $scheme = $ws->scheme;          # ws or wss
-
-Standard PAGI scope properties with sensible defaults.
-
-C<raw_path> is the full path the client requested, percent-encoded as sent.
-Mounts leave it unchanged, so inside a mount it still starts with the mount
-prefix (see L<PAGI::Spec::Www/Paths, Mounts and Root Paths>). Without one in
-the scope it is C<root_path> followed by C<path>, percent-encoded. Never use
-it for authorization: different encodings reach the same C<path>.
-
-=head2 request_uri
-
-    my $here = $ws->request_uri;   # /app/admin/users?x=1
-
-The path and query the client requested: C<raw_path>, then C<?> and
-C<query_string> when there is one, with any byte a URI cannot hold
-percent-encoded and a leading C<//> reduced to C</>. It is the URL to
-redirect back to, at any mount depth and behind a server root path.
-
-=head2 raw_path_info
-
-    my $rest = $ws->raw_path_info;  # /a%2Fb inside mount('/files')
-
-The part of C<raw_path> below C<root_path>, still encoded, for code that must
-tell an encoded C</> from a separator. Returns C<undef> when it cannot be
-found: an encoded C</> straddles the mount boundary, or C<path> was rewritten.
 
 =head2 subprotocols
 
     my $protos = $ws->subprotocols;    # ['chat', 'json']
 
 Returns arrayref of requested subprotocols.
-
-=head2 client, server
-
-    my $client = $ws->client;          # ['192.168.1.1', 54321]
-
-Client and server address info.
-
-=head2 header, headers, header_all
-
-    my $origin = $ws->header('origin');
-    my $all_cookies = $ws->header_all('cookie');
-    my $headers = $ws->headers;        # PAGI::Headers
-
-Case-insensitive header access through L<PAGI::Headers>. C<header> reads a
-repeated field as every value joined with C<", "> in order; C<header_all>
-returns them separately (needed for C<Set-Cookie>).
 
 =head2 Per-Connection Shared State
 
@@ -1067,94 +906,6 @@ L<PAGI::Middleware::Stash> stacked above the handler provides:
     my $stash = PAGI::Stash->new($ws);
 
 =cut
-
-=head2 state
-
-    my $db = $websocket->state->get('db');
-
-Returns a L<PAGI::State> facade for application state injected by
-L<PAGI::Lifespan>. Without application state the facade is empty, and its
-C<get> and C<data> die naming the likely cause (did lifespan startup run?
-L<PAGI::Test::Client> needs C<< lifespan => 1 >>); present state must be a
-hashref or this method croaks. The facade is read-oriented and catches
-missing top-level keys through C<get>.
-
-Repeated calls have equivalent behavior over the same backing state, but do
-not promise facade object identity. C<< $state->data >> is the explicit escape
-hatch when an integration genuinely requires the raw hashref.
-
-Application state is distinct from L<PAGI::Stash>, which holds mutable
-per-connection data, and from C<connection_state>, which reports this
-WebSocket's protocol lifecycle.
-
-=head2 has_state
-
-    if ($websocket->has_state) {
-        ...
-    }
-
-Returns true when lifespan application state is present and a hashref. Returns
-false only when it is absent; malformed present state croaks.
-
-=head2 path_param
-
-    my $id = $ws->path_param('id');
-
-Returns a path parameter by name. Path parameters are captured from the URL
-path by a router and stored in C<< $scope->{path_params} >>.
-
-    # Route: /chat/:room
-    my $room = $ws->path_param('room');
-
-=head2 path_params
-
-    my $params = $ws->path_params;  # { room => 'general', id => '42' }
-
-Returns hashref of all path parameters from scope.
-
-=head2 query_params
-
-    my $params = $ws->query_params;  # Hash::MultiValue
-    my $params = $ws->query_params(strict => 1);  # Die on invalid UTF-8
-    my $params = $ws->query_params(raw => 1);     # Skip UTF-8 decoding
-
-Get query parameters as L<Hash::MultiValue>.
-
-B<Options:>
-
-=over 4
-
-=item * C<strict> - If true, die on invalid UTF-8 sequences. Default: false
-(invalid bytes replaced with U+FFFD).
-
-=item * C<raw> - If true, skip UTF-8 decoding entirely and return raw bytes.
-Default: false.
-
-=back
-
-=head2 query_param
-
-    my $value = $ws->query_param('user');
-    my $value = $ws->query_param('page', strict => 1);
-    my $value = $ws->query_param('id', raw => 1);
-
-Shortcut for C<< $ws->query_params(%opts)->get($name) >>. Accepts the same
-C<strict> and C<raw> options as C<query_params>. L<PAGI::Request> and
-L<PAGI::SSE> have the same four query accessors.
-
-=head2 raw_query_params
-
-    my $params = $ws->raw_query_params;
-
-Returns query params without UTF-8 decoding. Equivalent to
-C<< $ws->query_params(raw => 1) >>.
-
-=head2 raw_query_param
-
-    my $value = $ws->raw_query_param('user');
-
-Returns a single query param without UTF-8 decoding. Equivalent to
-C<< $ws->query_param($name, raw => 1) >>.
 
 =head1 LIFECYCLE METHODS
 
@@ -1815,21 +1566,17 @@ A framework may subclass PAGI::WebSocket (Thunderhorse does). The contract:
 private connection state, every field of which starts with C<_> (C<_state>
 and the C<_close_*> fields and the callbacks among them). A subclass adds fields under any other name.
 
-=item * B<One object per connection.> Build it once, after the final route
-match, and never replace its C<scope>, C<receive> or C<send>: its state
-machine (accept, send and receive, close, disconnect) assumes the same channels for its whole life, and
-swapping them, above all after C<accept>, breaks it. Path parameters reach it
-through the scope, written there in place before it is built (see
-L<PAGI::Request/SUBCLASSING>).
-
-=item * B<Built where the channels are final.> A Request holds no connection
-state, so when a middleware hands the inner application a copy of the scope,
-a new Request over the copy is all it takes. A WebSocket object I<is> the
-connection: C<new> returns the object already cached in the scope
-(C<pagi.websocket>), and a middleware's copy carries that key, so building again over
-the copy hands back the first object, still bound to the first channels.
-Build it inside the innermost middleware, from the channels the handler
-receives. State a framework gathers earlier in a dispatch belongs on its own
+=item * B<One object per scope.> Build it once the scope is final, after
+the route match and inside the innermost middleware, from the channels the
+handler receives, and never replace its C<scope>, C<receive> or C<send>: its
+state machine (accept, send and receive, close, disconnect) assumes the
+same channels for its whole life. C<new> builds a new object on every call
+and stores nothing in the scope, so a second C<new> does not find the first:
+pass the one object on. Successive route matches over one scope reuse the
+object, reading their path parameters live from the scope, written there in
+place (see L<PAGI::Request/SUBCLASSING>); a middleware's copy of the scope is
+a new scope, and gets a new object. Nothing rebinds an object to another
+scope. State a framework gathers earlier in a dispatch belongs on its own
 context or in the scope, not on this object.
 
 =item * B<The pattern.> Starlette builds one C<WebSocket(scope, receive,

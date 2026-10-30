@@ -68,6 +68,9 @@ in [UPGRADING-REFERENCE.md](UPGRADING-REFERENCE.md).
 | `$request->header`, `PAGI::Headers->get`, `PAGI::Response->header` returned the last value of a repeated field | every value joined `", "` in order, as Mojo::Headers, PSGI and Plack::Request do; read `Set-Cookie` with `header_all` / `get_all`; `get_single` still rejects duplicates |
 | `$request->cookie` / `cookies` percent-decoded each value (`a=x%2Fy` read `x/y`) | the value as the client sent it (`x%2Fy`), quotes removed; encode and decode your own values (as Starlette and Mojolicious read cookies) |
 | `$request->cookie` gave the first value of a cookie name sent twice | the last value, as query and form parameters do |
+| `PAGI::WebSocket->new` / `PAGI::SSE->new` over a scope that already had one returned that object (cached in the scope as `pagi.websocket` / `pagi.sse`) | a new object on every call, and nothing stored in the scope: build one per connection and pass it on |
+| `$ws->path_param` / `$sse->path_param` returned `undef` for a name the route did not capture | it dies naming the names it did capture, as `$request->path_param` does; pass `strict => 0` for `undef` |
+| `$sse->path` answered `'/'` on a scope without a path | it dies "this scope has no path": a PAGI scope always has one |
 
 Behaviour that changes without a code change: stock refusals and error
 responses are plain text, each replaceable by one option ([details](UPGRADING-REFERENCE.md#audit-changed-first-party-defaults));

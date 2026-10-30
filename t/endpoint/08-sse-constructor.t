@@ -20,12 +20,6 @@ sub run_until_client_leaves {
     return $running->get;
 }
 
-{
-    package Local::WrongSSECache;
-    sub new { return bless { scope => $_[1] }, $_[0] }
-    sub scope { return $_[0]{scope} }
-}
-
 subtest 'can create SSE endpoint subclass' => sub {
     require PAGI::Endpoint::SSE;
 
@@ -92,7 +86,7 @@ subtest 'class to_app constructs its endpoint immediately and only once' => sub 
         'connections do not construct additional endpoint objects';
 };
 
-subtest 'app reuses only a compatible exact-scope SSE cache' => sub {
+subtest 'app builds its own SSE stream, never one built earlier over the scope' => sub {
     {
         package CacheAwareEndpoint;
         use parent 'PAGI::Endpoint::SSE';
@@ -103,56 +97,19 @@ subtest 'app reuses only a compatible exact-scope SSE cache' => sub {
         }
     }
 
-    for my $case (
-        'parent SSE',
-        'wrong class',
-        'throwing scope',
-        'same scope SSE',
-    ) {
-        subtest $case => sub {
-            my $scope = sse_scope(path => '/events');
-            my $parent_scope = sse_scope(path => '/parent');
-            my $parent = PAGI::SSE->new(
-                $parent_scope, sub { Future->done }, sub { Future->done },
-            );
-            my $cached = $case eq 'parent SSE'
-                ? $parent
-                : $case eq 'wrong class'
-                    ? Local::WrongSSECache->new($scope)
-                    : $case eq 'throwing scope'
-                        ? bless({}, 'PAGI::SSE')
-                        : PAGI::SSE->new(
-                            $scope, receive_from($scope), sub { Future->done },
-                        );
-            $scope->{'pagi.sse'} = $cached;
-            $CacheAwareEndpoint::seen = undef;
+    my $scope = sse_scope(path => '/events');
+    my $earlier = PAGI::SSE->new($scope, receive_from($scope), sub { Future->done });
+    $CacheAwareEndpoint::seen = undef;
 
-            my $run = sub {
-                run_until_client_leaves(CacheAwareEndpoint->new->to_app, $scope);
-            };
-            if ($case eq 'throwing scope') {
-                no warnings 'redefine';
-                local *PAGI::SSE::scope = sub { die 'cached scope exploded' };
-                $run->();
-            }
-            else {
-                $run->();
-            }
+    run_until_client_leaves(CacheAwareEndpoint->new->to_app, $scope);
 
-            isa_ok($CacheAwareEndpoint::seen, ['PAGI::SSE'],
-                'the endpoint receives an SSE stream');
-            is(refaddr($CacheAwareEndpoint::seen->scope), refaddr($scope),
-                'the endpoint stream owns the selected scope');
-            if ($case eq 'same scope SSE') {
-                is(refaddr($CacheAwareEndpoint::seen), refaddr($cached),
-                    'the same-scope exact class cache is reused');
-            }
-            else {
-                isnt(refaddr($CacheAwareEndpoint::seen), refaddr($cached),
-                    'the incompatible cached object is replaced');
-            }
-        };
-    }
+    isa_ok($CacheAwareEndpoint::seen, ['PAGI::SSE'],
+        'the endpoint receives an SSE stream');
+    isnt(refaddr($CacheAwareEndpoint::seen), refaddr($earlier),
+        'a new one, not the one built earlier (RV1)');
+    is(refaddr($CacheAwareEndpoint::seen->scope), refaddr($scope),
+        'over the scope the endpoint was called with');
+    ok(!exists $scope->{'pagi.sse'}, 'nothing is cached in the scope');
 };
 
 done_testing;

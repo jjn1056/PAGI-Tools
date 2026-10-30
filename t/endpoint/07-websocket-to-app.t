@@ -13,18 +13,6 @@ use PAGI::Routing qw(router websocket);
 use lib 't/lib';
 use PAGITest::Connected qw(ws_scope receive_from);
 
-{
-    package Local::WrongWebSocketCache;
-    sub new { return bless { scope => $_[1] }, $_[0] }
-    sub scope { return $_[0]{scope} }
-}
-
-{
-    package Local::DyingWebSocketCache;
-    sub new { return bless {}, $_[0] }
-    sub scope { die 'cached scope exploded' }
-}
-
 package SimpleWSEndpoint {
     use parent 'PAGI::Endpoint::WebSocket';
     use Future::AsyncAwait;
@@ -91,7 +79,7 @@ subtest 'websocket route accepts a configured endpoint object' => sub {
         'websocket route uses the configured endpoint object';
 };
 
-subtest 'app reuses only a compatible exact-scope WebSocket cache' => sub {
+subtest 'app builds its own WebSocket, never one built earlier over the scope' => sub {
     {
         package CacheAwareEndpoint;
         use parent 'PAGI::Endpoint::WebSocket';
@@ -102,50 +90,20 @@ subtest 'app reuses only a compatible exact-scope WebSocket cache' => sub {
         }
     }
 
-    for my $case (
-        'parent WebSocket',
-        'wrong class',
-        'throwing scope',
-        'same scope WebSocket',
-    ) {
-        subtest $case => sub {
-            my $scope = ws_scope(path => '/ws');
-            # A same-scope helper shares the scope's own receive channel.
-            my $receive = receive_from($scope, { type => 'websocket.disconnect', code => 1000 });
-            my $parent_scope = ws_scope(path => '/parent');
-            my $parent = PAGI::WebSocket->new(
-                $parent_scope, sub { Future->done }, sub { Future->done },
-            );
-            my $cached = $case eq 'parent WebSocket'
-                ? $parent
-                : $case eq 'wrong class'
-                    ? Local::WrongWebSocketCache->new($scope)
-                    : $case eq 'throwing scope'
-                        ? Local::DyingWebSocketCache->new
-                        : PAGI::WebSocket->new(
-                            $scope, $receive, sub { Future->done },
-                        );
-            $scope->{'pagi.websocket'} = $cached;
-            $CacheAwareEndpoint::seen = undef;
+    my $scope = ws_scope(path => '/ws');
+    my $receive = receive_from($scope, { type => 'websocket.disconnect', code => 1000 });
+    my $earlier = PAGI::WebSocket->new($scope, $receive, sub { Future->done });
+    $CacheAwareEndpoint::seen = undef;
 
-            CacheAwareEndpoint->new->to_app->(
-                $scope, $receive, sub { Future->done },
-            )->get;
+    CacheAwareEndpoint->new->to_app->($scope, $receive, sub { Future->done })->get;
 
-            isa_ok($CacheAwareEndpoint::seen, ['PAGI::WebSocket'],
-                'the endpoint receives a WebSocket');
-            is(refaddr($CacheAwareEndpoint::seen->scope), refaddr($scope),
-                'the endpoint connection owns the selected scope');
-            if ($case eq 'same scope WebSocket') {
-                is(refaddr($CacheAwareEndpoint::seen), refaddr($cached),
-                    'the same-scope exact class cache is reused');
-            }
-            else {
-                isnt(refaddr($CacheAwareEndpoint::seen), refaddr($cached),
-                    'the incompatible cached object is replaced');
-            }
-        };
-    }
+    isa_ok($CacheAwareEndpoint::seen, ['PAGI::WebSocket'],
+        'the endpoint receives a WebSocket');
+    isnt(refaddr($CacheAwareEndpoint::seen), refaddr($earlier),
+        'a new one, not the one built earlier (RV1)');
+    is(refaddr($CacheAwareEndpoint::seen->scope), refaddr($scope),
+        'over the scope the endpoint was called with');
+    ok(!exists $scope->{'pagi.websocket'}, 'nothing is cached in the scope');
 };
 
 done_testing;

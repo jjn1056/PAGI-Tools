@@ -523,6 +523,17 @@
     an undef receive, builds a Request that reads the scope and has no
     body: its body methods die "this Request was built from the scope
     alone; it has no body" before reading or marking anything.
+  - PAGI::WebSocket and PAGI::SSE are PAGI::HTTPConnections, and new
+    builds a new object on every call: the object is no longer cached in
+    the scope (pagi.websocket, pagi.sse), so a second new over one scope,
+    or over a middleware's copy, gets a second object -- build one per
+    connection and pass it on. Their query and header parses are kept on
+    the object, not in the scope (pagi.websocket.query*, pagi.sse.query*,
+    pagi.request.headers). path_param is strict, as Request's: a name the
+    route did not capture dies naming the ones it did, where it returned
+    undef (strict => 0 gives undef). path dies "this scope has no path" on
+    a scope without one, where SSE answered '/' and WebSocket undef. Both
+    gain cookies and cookie.
   - PAGI::Test::Client's form and query values are characters, sent UTF-8
     percent-encoded, as its path and json already were: each character
     was sent as one byte, so "caf\x{e9}" reached the application as

@@ -25,8 +25,9 @@ subtest 'WebSocket uses the shared PAGI header container' => sub {
     isa_ok($websocket->headers, ['PAGI::Headers'], 'one header container');
     is($websocket->headers->get('X-TRACE'), 'one, two', 'case-insensitive lookup (D1: repeated fields join)');
     is([$websocket->header_all('x-TrAcE')], ['one', 'two'], 'repeated values');
-    is(refaddr($scope->{'pagi.request.headers'}), refaddr($websocket->headers),
-        'scope caches the public header container');
+    is(refaddr($websocket->headers), refaddr($websocket->headers),
+        'the header container is kept on the object');
+    ok(!exists $scope->{'pagi.request.headers'}, 'and not written to the scope');
 };
 
 subtest 'SSE uses the shared PAGI header container' => sub {
@@ -42,8 +43,9 @@ subtest 'SSE uses the shared PAGI header container' => sub {
     isa_ok($sse->headers, ['PAGI::Headers'], 'one header container');
     is($sse->headers->get('X-TRACE'), 'one, two', 'case-insensitive lookup (D1: repeated fields join)');
     is([$sse->header_all('x-TrAcE')], ['one', 'two'], 'repeated values');
-    is(refaddr($scope->{'pagi.request.headers'}), refaddr($sse->headers),
-        'scope caches the public header container');
+    is(refaddr($sse->headers), refaddr($sse->headers),
+        'the header container is kept on the object');
+    ok(!exists $scope->{'pagi.request.headers'}, 'and not written to the scope');
 };
 
 subtest 'Request and WebSocket each parse headers, Request first' => sub {

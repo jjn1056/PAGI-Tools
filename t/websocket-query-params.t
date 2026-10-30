@@ -102,18 +102,21 @@ subtest 'semicolon delimiter' => sub {
     is($ws->query_param('c'), '3', 'parses with ampersand');
 };
 
-subtest 'caching in scope' => sub {
+subtest 'cached on the object, not in the scope' => sub {
     my $scope = ws_scope(
         path         => '/ws',
         query_string => 'x=1',
     );
     my $ws = PAGI::WebSocket->new($scope, $receive, $send);
 
-    $ws->query_params;
-    ok(exists $scope->{'pagi.websocket.query'}, 'query_params cached in scope');
+    my $decoded = $ws->query_params;
+    is($ws->query_params, exact_ref($decoded), 'query_params parsed once per object');
 
-    $ws->query_params(raw => 1);
-    ok(exists $scope->{'pagi.websocket.query.raw'}, 'raw query_params cached separately');
+    my $raw = $ws->query_params(raw => 1);
+    is($ws->query_params(raw => 1), exact_ref($raw), 'raw query_params kept separately');
+    isnt($raw, exact_ref($decoded), 'raw and decoded are different parses');
+
+    is([grep { /^pagi\.websocket\.query/ } keys %$scope], [], 'nothing is written to the scope');
 };
 
 subtest 'strict mode dies on invalid UTF-8' => sub {

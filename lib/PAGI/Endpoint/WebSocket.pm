@@ -7,7 +7,6 @@ use Future;
 use Future::AsyncAwait;
 use Carp qw(croak);
 use Scalar::Util qw(blessed);
-use PAGI::Utils::Scope ();
 use PAGI::WebSocket;
 
 # Encoding: 'text', 'bytes', or 'json'
@@ -24,9 +23,6 @@ sub to_app {
         my $type = $scope->{type} // '';
         croak "Expected websocket scope, got '$type'" unless $type eq 'websocket';
 
-        PAGI::Utils::Scope::_compatible_cached_scope_object(
-            $scope, 'pagi.websocket', 'PAGI::WebSocket',
-        );
         my $websocket = PAGI::WebSocket->new($scope, $receive, $send);
 
         await Future->wrap($endpoint->handle($websocket));

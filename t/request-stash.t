@@ -139,7 +139,8 @@ subtest 'path_param only returns path params, not query params' => sub {
     is($req->query_param('baz'), 'qux', 'query() returns query param');
 };
 
-subtest 'protocol objects retain direct default path parameter access' => sub {
+# D3 (ruled 2026-10-30): WebSocket and SSE path_param is strict, as Request's.
+subtest 'protocol objects read path parameters as Request does' => sub {
     my @cases = (
         ['WebSocket', \&ws_scope, sub { PAGI::WebSocket->new($_[0], sub {}, sub {}) }],
         ['SSE', \&sse_scope, sub { PAGI::SSE->new($_[0], sub {}, sub {}) }],
@@ -150,7 +151,9 @@ subtest 'protocol objects retain direct default path parameter access' => sub {
         my $source = $build->($scope_for->(path_params => { room => 'lobby' }));
         is($source->path_params, { room => 'lobby' }, "$name returns direct path parameters");
         is($source->path_param('room'), 'lobby', "$name returns a present path parameter");
-        is($source->path_param('missing'), undef, "$name defaults a missing path parameter to undef");
+        like(dies { $source->path_param('missing') }, qr/path_param 'missing' not found\. Available: room/,
+            "$name dies on a missing path parameter, naming the available ones");
+        is($source->path_param('missing', strict => 0), undef, "$name with strict => 0 gives undef");
     }
 };
 
