@@ -198,7 +198,11 @@ Object with methods for setting response cookies:
 C<set> writes the value as is, so it must be RFC 6265 cookie-octets:
 printable ASCII except space, C<">, C<,>, C<;> and C<\>. Any other
 character croaks, naming it, with "encode it first (Base64, say)"; nothing
-is percent-encoded. L<PAGI::Response/cookie> follows the same rule.
+is percent-encoded. The name must be a non-empty RFC 6265 token (letters,
+digits and C<!#$%&'*+-.^_`|~>), else it croaks too, and an undefined value
+croaks. A C<samesite> option other than C<Lax>, C<Strict> or C<None> (any
+case, the whole word) writes no SameSite attribute.
+L<PAGI::Response/cookie> follows the same rules.
 
 =back
 

@@ -37,8 +37,36 @@ subtest 'attributes are spelled and ordered as Cookie::Baker 0.12 did' => sub {
     }
 };
 
-subtest 'a name outside the token characters is percent-encoded' => sub {
-    is bake('a b/c', 'v'), 'a%20b%2Fc=v', 'name encoded as Cookie::Baker encoded it';
+subtest 'a token name is written as is and reads back' => sub {
+    require PAGI::HTTPConnection;
+    for my $name ('session_id', '__Host-x', 'a.b', "!#\$%&'*+-.^_`|~09azAZ") {
+        my $line = bake($name, 'v');
+        is $line, "$name=v", "$name written as is";
+        my $conn = PAGI::HTTPConnection->new({ type => 'http', path => '/', headers => [['cookie', $line]] });
+        is $conn->cookies, { $name => 'v' }, "$name reads back under the same name";
+    }
+};
+
+subtest 'a name that is not a cookie-name token croaks, naming the character' => sub {
+    for my $char (split //, " \t\"(),/:;<=>?\@[\\]{}\x00\x1F\x7F\xE9") {
+        my $label = sprintf 'U+%04X', ord $char;
+        like dies { bake("a${char}b", 'v') },
+            qr/\Acookie name contains '\Q$char\E' which is not allowed in a cookie name/,
+            "$label refused";
+    }
+    like dies { bake('', 'v') }, qr/\Acookie name must not be empty/, 'an empty name croaks';
+};
+
+subtest 'an undefined value croaks, without a warning' => sub {
+    my @warnings;
+    local $SIG{__WARN__} = sub { push @warnings, @_ };
+    like dies { bake('a', undef) }, qr/\Acookie value must be defined/, 'undef value refused';
+    is \@warnings, [], 'no warning';
+};
+
+subtest 'an unknown samesite value is omitted, a prefix of a known one is not accepted' => sub {
+    is bake('a', 'v', samesite => 'Laxity'), 'a=v', 'Laxity writes no SameSite';
+    is bake('a', 'v', samesite => 'Strictly'), 'a=v', 'Strictly writes no SameSite';
 };
 
 subtest 'a cookie-octet value is written as is' => sub {

@@ -27,4 +27,14 @@ is $res->header('set-cookie'),
     'a=; path=/x; expires=Thu, 01-Jan-1970 00:00:00 GMT; max-age=0',
     'delete_cookie writes an expired empty cookie';
 
+like dies { PAGI::Response->new('x')->cookie(a => undef) },
+    qr/cookie value must be a string/, 'an undef value keeps Response\'s own refusal';
+
+like dies { PAGI::Response->new('x')->cookie('a b' => 'v') },
+    qr/\Acookie name contains ' ' which is not allowed in a cookie name at \Q$0\E line \d+/,
+    'a bad name croaks at the caller';
+
+is(PAGI::Response->new('x')->cookie('a', 'v', samesite => 'Laxity')->header('set-cookie'),
+    'a=v; path=/', 'an unknown samesite value is omitted');
+
 done_testing;

@@ -25,13 +25,15 @@ Returns a Set-Cookie value. C<$value> must consist of RFC 6265 cookie-octets
 whitespace, C<">, C<,>, C<;> or C<\>) and is written as is; anything else
 croaks, because a browser ends a value at the first C<;> and other readers
 split on C<,> or strip quotes, so only these characters read back unchanged
-through any client. A name outside C<A-Za-z0-9-._~> is percent-encoded.
+through any client. A name must be a non-empty
+RFC 6265 token (letters, digits and C<!#$%&'*+-.^_`|~>) and an undefined
+value is refused; both croak, naming the offending character.
 
 The attributes are C<domain>, C<path>, C<expires> (an epoch number, a
 relative time such as C<+1h>, C<now>, or a ready date string), C<max-age>,
 C<samesite> (C<lax>, C<strict> or C<none>, any case; C<none> implies
 C<secure>), C<secure>, C<httponly> and C<partitioned> (which implies
-C<SameSite=None> and C<secure>). They are written in that order.
+C<SameSite=None> and C<secure>). They are written in that order. Any other C<samesite> value writes no SameSite attribute.
 
 =cut
 
@@ -45,6 +47,11 @@ my %TERM = (
 sub set_cookie_string {
     my ($name, $value, %attrs) = @_;
 
+    croak "cookie value must be defined" unless defined $value;
+    croak "cookie name must not be empty" unless length $name;
+    if ($name =~ /([^!#\$%&'*+\-.^_`|~0-9A-Za-z])/) {
+        croak "cookie name contains '$1' which is not allowed in a cookie name";
+    }
     if ($value =~ /([^\x21\x23-\x2B\x2D-\x3A\x3C-\x5B\x5D-\x7E])/) {
         croak "cookie value contains '$1' which browsers cannot carry; "
             . "encode it first (Base64, say)";
@@ -53,7 +60,6 @@ sub set_cookie_string {
         $attrs{samesite} = 'none';
         $attrs{secure}   = 1;
     }
-    $name =~ s/([^A-Za-z0-9\-._~])/sprintf '%%%02X', ord $1/ge;
 
     my @parts = ("$name=$value");
     push @parts, "domain=$attrs{domain}" if $attrs{domain};

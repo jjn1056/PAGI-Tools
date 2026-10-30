@@ -362,7 +362,11 @@ one above 0x7E) croaks, naming it, with "encode it first (Base64, say)":
 a browser ends a value at the first C<;>, and other readers split on C<,> or
 strip quotes, so only these characters read back unchanged through any
 client. Nothing is percent-encoded; encode a value that needs it before
-passing it, and decode it after reading it back.
+passing it, and decode it after reading it back. The name must be a
+non-empty RFC 6265 token (letters, digits and C<!#$%&'*+-.^_`|~>); any other
+character croaks, naming it, as the name is never encoded or decoded. A
+C<samesite> option other than C<Lax>, C<Strict> or C<None> (any case, the
+whole word) writes no SameSite attribute.
 
 Header names are HTTP tokens (RFC 9110): letters, digits and
 C<!#$%&'*+-.^_`|~>. A name with anything else (a space, a colon, a

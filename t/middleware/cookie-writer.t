@@ -35,4 +35,17 @@ is run_jar(sub { $_[0]->delete('a', domain => 'example.com') }),
     ['a=; domain=example.com; path=/; expires=Thu, 01-Jan-1970 00:00:00 GMT'],
     'delete writes an expired empty cookie';
 
+{
+    my @warnings;
+    local $SIG{__WARN__} = sub { push @warnings, @_ };
+    my $undef_err;
+    run_jar(sub { my ($jar) = @_; $undef_err = dies { $jar->set(a => undef) } });
+    like $undef_err, qr/\Acookie value must be defined/, 'an undef value croaks';
+    is \@warnings, [], 'no warning';
+}
+
+my $name_err;
+run_jar(sub { my ($jar) = @_; $name_err = dies { $jar->set('a b' => 'v') } });
+like $name_err, qr/cookie name contains ' ' which is not allowed in a cookie name/, 'a bad name croaks';
+
 done_testing;
