@@ -101,6 +101,9 @@ a larger framework:
 
 =item * L<PAGI::Request>, L<PAGI::Response>, L<PAGI::WebSocket>, and L<PAGI::SSE>
 
+=item * L<PAGI::HTTPConnection> for reading a request's headers, query and cookies
+from the scope alone, in middleware or across HTTP, WebSocket and SSE
+
 =item * L<PAGI::Routing> and L<PAGI::Routing::URL>
 
 =item * L<PAGI::Routing::OpenAPI> for an OpenAPI document from an application's routes

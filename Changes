@@ -7,6 +7,15 @@
   UPGRADING-REFERENCE.md has the details. Needs PAGI::Server 0.003000.
 
   [New]
+  - PAGI::HTTPConnection, Starlette's HTTPConnection: what can be known
+    about an http, websocket or sse request without talking to it --
+    path, headers, query, path parameters, cookies, client and application
+    state -- built from the scope alone, so middleware can read a request
+    without touching its body or socket, and a helper written against it
+    serves any of the three protocols. It never writes the scope and keeps
+    every parse on the object. A scope with no path dies where the path is
+    read; cookies come from every Cookie field, split on ';' only, quotes
+    removed, never percent-decoded, the last of a repeated name winning.
   - PAGI::Middleware::Stash (middleware('Stash')) gives every layer below
     it one shared stash, so a middleware sees what a handler stored, after
     the handler returns, through any scope copies between them.

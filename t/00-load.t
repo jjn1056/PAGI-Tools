@@ -43,6 +43,7 @@ my @load_modules = qw(
     PAGI::Endpoint::HTTP
     PAGI::Endpoint::SSE
     PAGI::Endpoint::WebSocket
+    PAGI::HTTPConnection
     PAGI::Request
     PAGI::Request::BodyStream
     PAGI::Request::MultipartStream
