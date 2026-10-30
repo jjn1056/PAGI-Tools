@@ -56,6 +56,8 @@ sub set_cookie_string {
         croak "cookie value contains '$1' which browsers cannot carry; "
             . "encode it first (Base64, say)";
     }
+    croak "samesite must be Lax, Strict or None"
+        if defined $attrs{samesite} && $attrs{samesite} !~ /\A(?:lax|strict|none)\z/i;
     if ($attrs{partitioned}) {
         $attrs{samesite} = 'none';
         $attrs{secure}   = 1;
@@ -67,8 +69,6 @@ sub set_cookie_string {
     push @parts, 'expires=' . _date($attrs{expires}) if defined $attrs{expires};
     push @parts, "max-age=$attrs{'max-age'}" if exists $attrs{'max-age'};
     if (defined $attrs{samesite}) {
-        croak "samesite must be Lax, Strict or None"
-            unless $attrs{samesite} =~ /\A(?:lax|strict|none)\z/i;
         my $samesite = ucfirst lc $attrs{samesite};
         push @parts, "SameSite=$samesite";
         $attrs{secure} = 1 if $samesite eq 'None';

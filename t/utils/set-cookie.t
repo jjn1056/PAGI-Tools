@@ -72,6 +72,14 @@ subtest 'a given samesite must be Lax, Strict or None, the whole word' => sub {
     is bake('a', 'v'), 'a=v', 'no samesite writes none';
 };
 
+subtest 'partitioned does not excuse a bad samesite' => sub {
+    like dies { bake('a', 'v', samesite => 'bogus', partitioned => 1) },
+        qr/\Asamesite must be Lax, Strict or None at \Q$0\E line \d+/,
+        'a bad samesite croaks with partitioned';
+    is bake('a', 'v', samesite => 'Lax', partitioned => 1),
+        'a=v; SameSite=None; secure; Partitioned', 'a valid samesite is still forced to None';
+};
+
 subtest 'a cookie-octet value is written as is' => sub {
     is bake('a', 'x/y'), 'a=x/y', 'slash';
     is bake('a', 'x%y'), 'a=x%y', 'percent';
