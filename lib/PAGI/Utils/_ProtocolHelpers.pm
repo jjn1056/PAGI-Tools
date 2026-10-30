@@ -56,6 +56,14 @@ sub answered_by_another {
         && $connection->is_connected && $connection->response_started;
 }
 
+# True while this helper's refusal runs, and after it once its response
+# started (a refusal that started nothing drops the claim): the refusal is
+# the helper's answer, whether or not the connection has ended yet.
+sub refused {
+    my ($helper) = @_;
+    return ($helper->{_claim} // '') eq 'refusing';
+}
+
 # Why this helper may not drive the connection, or undef when it may.
 sub ownership_refusal {
     my ($helper) = @_;
@@ -150,6 +158,14 @@ C<ownership_refusal> returns the message a helper croaks with in either
 case ("this helper is refusing the connection", "this connection was
 answered by another helper; use that one"), or C<undef> when the helper may
 drive the connection.
+
+=head2 refused
+
+    return if PAGI::Utils::_ProtocolHelpers::refused($helper);
+
+True while C<$helper>'s refusal runs, and after it once its response
+started (its claim is C<'refusing'>), even if the connection has not ended
+yet: an endpoint whose C<on_connect> refused stops there.
 
 =head2 prepare_refusal
 

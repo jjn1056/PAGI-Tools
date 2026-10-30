@@ -82,16 +82,35 @@ subtest 'during its own pending refusal a concurrent send_event fails as refusin
         'the refusal completes';
 };
 
-# D6: a rejected own start raises at its await, and nothing else happens.
-subtest 'a send that dies on start: the start raises that error' => sub {
-    my ($sse, $sent) = helper_with_send(sub { die "start rejected\n" if $_[0]{type} eq 'sse.start' });
+# D6: a rejected own start raises at its await. The helper keeps the claim it
+# recorded when it sent the start and is still treated as the answerer:
+# every operation behaves as on a started stream, its sends reach the
+# server, and no second sse.start is sent. Rejected before the server
+# marked the response started (the send dies) and after it (the send's
+# Future fails).
+for my $case (
+    [dies  => sub { die "start rejected\n" }],
+    [fails => sub { Future->fail("start rejected\n") }],
+) {
+    my ($how, $reject) = @$case;
+    subtest "a start whose send $how: it raises, and the helper acts as started" => sub {
+        my ($sse, $sent) = helper_with_send(sub { $_[0]{type} eq 'sse.start' ? $reject->() : Future->done });
 
-    like dies { $sse->start->get }, qr/^start rejected$/, 'the start raises the error';
-    is $sent, [{ type => 'sse.start', status => 200 }], 'nothing more is sent';
-    is $sse->connection_state, 'pending', 'no special state';
-    like dies { $sse->close->get }, qr/^SSE close requires an active accepted\/started connection /,
-        'close is as before a start';
-    is $sent, [{ type => 'sse.start', status => 200 }], 'and nothing is sent';
-};
+        like dies { $sse->start->get }, qr/^start rejected$/, 'the start raises the error';
+        is $sse->connection_state, 'pending', 'no special state';
+        is $sse->scope->{'pagi.connection'}->response_started, ($how eq 'fails' ? 1 : 0),
+            'the server marked the response started ' . ($how eq 'fails' ? 'before' : 'never');
+
+        $sse->send('a')->get;
+        is $sse->try_send('b')->get, 1, 'try_send sends';
+        $sse->keepalive(5)->get;
+        $sse->start->get;
+        my $close = $sse->close;
+        is [map { $_->{type} } @$sent], ['sse.start', 'sse.send', 'sse.send', 'sse.keepalive', 'sse.close'],
+            'send, try_send, keepalive and close reach the server; no second sse.start';
+        $sse->scope->{'pagi.connection'}->_mark_complete;
+        ok lives { $close->get }, 'close completes';
+    };
+}
 
 done_testing;

@@ -69,13 +69,16 @@ sub _refresh_connection {
 sub _refusing { PAGI::Utils::_ProtocolHelpers::refusing($_[0]) }
 sub _answered_by_another { PAGI::Utils::_ProtocolHelpers::answered_by_another($_[0]) }
 
-# This helper answered: its start completed, or it is issued and still
-# pending (start keeps the pending start in _starting). Either way it drives
-# the connection as a started stream; the server keeps a scope's sends in
-# call order. A rejected start leaves the helper as it was before it (D6).
+# This helper answered: its start completed, or it was issued -- still
+# pending, or rejected by the server (D6: the helper keeps its claim and is
+# still treated as the answerer). Either way it drives the connection as a
+# started stream and never issues a second sse.start; the server keeps a
+# scope's sends in call order. Once the connection has ended, no helper has
+# answered it.
 sub _answered {
     my ($self) = @_;
-    return $self->is_started || ($self->{_starting} ? 1 : 0);
+    return $self->is_started
+        || (($self->{_claim} // '') eq 'answering' && $self->connection_state eq 'pending');
 }
 
 # A keepalive saved for a start this helper may not make is dropped.
@@ -191,7 +194,7 @@ async sub _start {
     $self->_require_ownership;
 
     # Idempotent - don't start twice
-    return $self if $self->is_started || $self->is_closed || $self->connection_state eq 'closing';
+    return $self if $self->_answered || $self->is_closed || $self->connection_state eq 'closing';
 
     my $event = {
         type   => 'sse.start',
@@ -251,7 +254,7 @@ async sub keepalive {
     $interval //= 0;
     $comment  //= '';
 
-    unless ($self->is_started) {
+    unless ($self->_answered) {
         if ($interval > 0) {
             $self->{_pending_keepalive} = { interval => $interval, comment => $comment };
         } else {
@@ -260,6 +263,8 @@ async sub keepalive {
         return $self;
     }
 
+    # Sent now, after the issued start, so a saved one is not armed later.
+    delete $self->{_pending_keepalive};
     await PAGI::Utils::_ProtocolHelpers::forward_send($self, {
         type     => 'sse.keepalive',
         interval => $interval,
@@ -1067,12 +1072,15 @@ before the server's send completes, it owns the connection: sends,
 iteration, C<run>, C<keepalive> and C<close> work as on a started stream.
 A send made while the start is still pending joins that start and goes out
 after it; a C<close> made then goes out after the start, in call order, and
-the completed start does not reopen the stream. If the server rejects the
-start, the error raises at its C<await> and nothing else changes: the helper
-keeps its claim, and code that catches the error and keeps using it gets no
-protection from the rules below. After a failed start, build a new helper if
-the connection is still live and unanswered, or use the helper that answered
-if another did.
+the completed start does not reopen the stream; a C<keepalive> made then is
+sent after the start. If the server rejects the start, the error raises at
+its C<await>; the helper keeps the claim it recorded when it sent the start
+and is still treated as the connection's answerer: its sends,
+C<try_send*>, C<keepalive> and C<close> go to the server as on a started
+stream (which the server may reject in turn), no second C<sse.start> is
+sent, and code that keeps using it gets no protection from the rules below.
+After a failed start, build a new helper if the connection is still live
+and unanswered, or use the helper that answered if another did.
 
 B<This helper is refusing.> Once the response of this helper's L</decline>
 has started and the connection is still open, the refusal is its answer.

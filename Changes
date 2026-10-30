@@ -555,7 +555,11 @@
     after it, and a WebSocket receive reads, where WebSocket sends croaked
     "Cannot send on closed WebSocket", receive returned undef, SSE sends
     returned without sending, try_send* returned 0, and close,
-    close_or_deny and keepalive returned quietly.
+    close_or_deny and keepalive returned quietly. A helper whose own
+    accept or start the server rejected raises at that await and stays the
+    connection's answerer, as Starlette's WebSocket does: its later sends,
+    try_send*, keepalive, close and close_or_deny go to the server, and
+    SSE never issues a second sse.start.
   - PAGI::Test::Client's form and query values are characters, sent UTF-8
     percent-encoded, as its path and json already were: each character
     was sent as one byte, so "caf\x{e9}" reached the application as

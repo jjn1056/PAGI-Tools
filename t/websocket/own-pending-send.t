@@ -110,17 +110,61 @@ subtest 'during its own pending refusal a concurrent send_text fails as refusing
         'the refusal completes';
 };
 
-# D6: a rejected own accept raises at its await, and nothing else happens.
-subtest 'a send that dies on accept: the accept raises that error' => sub {
-    my ($ws, $sent) = helper_with_send(sub { die "accept rejected\n" if $_[0]{type} eq 'websocket.accept' });
+# D6: a rejected own accept raises at its await. The helper keeps the claim
+# it recorded when it sent the accept and is still treated as the answerer:
+# every operation behaves as on an accepted socket, and its sends reach the
+# server (as Starlette's WebSocket, which marks itself connected before
+# awaiting the accept). Rejected before the server marked the response
+# started (the send dies) and after it (the send's Future fails).
+for my $case (
+    [dies  => sub { die "accept rejected\n" }],
+    [fails => sub { Future->fail("accept rejected\n") }],
+) {
+    my ($how, $reject) = @$case;
+    subtest "an accept whose send $how: it raises, and the helper acts as accepted" => sub {
+        my $reply = sub { $_[0]{type} eq 'websocket.accept' ? $reject->() : Future->done };
+        my ($ws, $sent) = helper_with_send($reply);
 
-    like dies { $ws->accept->get }, qr/^accept rejected$/, 'the accept raises the error';
+        like dies { $ws->accept->get }, qr/^accept rejected$/, 'the accept raises the error';
+        is $ws->connection_state, 'connecting', 'no special state';
+        is $ws->scope->{'pagi.connection'}->response_started, ($how eq 'fails' ? 1 : 0),
+            'the server marked the response started ' . ($how eq 'fails' ? 'before' : 'never');
+
+        $ws->send_text('a')->get;
+        is $ws->try_send_text('b')->get, 1, 'try_send_text sends';
+        $ws->keepalive(5)->get;
+        $ws->close(1000)->get;
+        is $sent, [
+            { type => 'websocket.accept' },
+            { type => 'websocket.send', text => 'a' },
+            { type => 'websocket.send', text => 'b' },
+            { type => 'websocket.keepalive', interval => 5 },
+            { type => 'websocket.close', code => 1000, reason => '' },
+        ], 'send_text, try_send_text, keepalive and close reach the server';
+
+        my ($other, $other_sent) = helper_with_send($reply);
+        like dies { $other->accept->get }, qr/^accept rejected$/, 'another rejected accept';
+        $other->close_or_deny(1011, 'bye')->get;
+        is $other_sent, [
+            { type => 'websocket.accept' },
+            { type => 'websocket.close', code => 1011, reason => 'bye' },
+        ], 'close_or_deny closes rather than denying';
+    };
+}
+
+# The "connection ended" row holds during a pending accept too.
+subtest 'a pending accept on a connection that then ends: try_send_* return 0' => sub {
+    my $hold = Future->new;
+    my ($ws, $sent) = helper_with_send(sub { $_[0]{type} eq 'websocket.accept' ? $hold : Future->done });
+    my $accept = $ws->accept;
+    $ws->scope->{'pagi.connection'}->_mark_disconnected('client_closed');
+
+    is $ws->try_send_text('x')->get, 0, 'try_send_text returns 0';
+    is $ws->try_send_bytes('x')->get, 0, 'try_send_bytes returns 0';
+    is $ws->try_send_json({})->get, 0, 'try_send_json returns 0';
     is $sent, [{ type => 'websocket.accept' }], 'nothing more is sent';
-    is $ws->connection_state, 'connecting', 'no special state';
-    like dies { $ws->close(1000)->get }, qr/^WebSocket close is only valid after accept; use deny /,
-        'close is as before an accept';
-    is $ws->try_send_text('x')->get, 0, 'try_send_text is as before an accept';
-    is $sent, [{ type => 'websocket.accept' }], 'and nothing is sent';
+    $hold->done;
+    $accept->get;
 };
 
 done_testing;

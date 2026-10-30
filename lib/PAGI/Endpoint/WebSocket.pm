@@ -8,6 +8,7 @@ use Future::AsyncAwait;
 use Carp qw(croak);
 use Scalar::Util qw(blessed);
 use PAGI::WebSocket;
+use PAGI::Utils::_ProtocolHelpers ();
 
 # Encoding: 'text', 'bytes', or 'json'
 sub encoding { 'text' }
@@ -57,7 +58,10 @@ async sub handle {
         await $websocket->accept;
     }
 
-    return if $websocket->is_closed;
+    # A refusal (deny) is on_connect's answer: there are no messages to read,
+    # even if the server has not yet reported the connection ended.
+    return if $websocket->is_closed
+        || PAGI::Utils::_ProtocolHelpers::refused($websocket);
 
     # Handle messages based on encoding
     eval {

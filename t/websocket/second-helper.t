@@ -157,4 +157,25 @@ subtest 'a refusal that started nothing leaves no claim behind' => sub {
     is $seen->{sent}, [], 'sends nothing';
 };
 
+# The "connection ended" row: once the connection another helper answered has
+# ended, a second helper behaves as today for an ended connection.
+subtest 'another answered, connection ended: as for an ended connection' => sub {
+    my $scope = ws_scope(path => '/ws');
+    PAGI::WebSocket->new($scope, sub { Future->new }, send_to($scope, []))->accept->get;
+    my ($ws, $seen) = recording_helper($scope);
+    $scope->{'pagi.connection'}->_mark_disconnected('client_closed');
+
+    ok lives { $ws->accept->get }, 'accept does nothing';
+    like dies { $ws->deny(PAGI::Response::Text->new('no', status => 403))->get },
+        qr/^WebSocket deny requires a live connection with no response started /, 'deny as today';
+    like dies { $ws->send_text('x')->get }, qr/^Cannot send on closed WebSocket /, 'send_text as today';
+    is $ws->try_send_text('x')->get, 0, 'try_send_text returns 0';
+    is $ws->receive->get, undef, 'receive returns undef';
+    ok lives { $ws->close(1000)->get }, 'close does nothing';
+    ok lives { $ws->close_or_deny(1000)->get }, 'close_or_deny does nothing';
+    ok lives { $ws->keepalive(10)->get }, 'keepalive does nothing';
+    is $seen->{sent}, [], 'sends nothing';
+    is $seen->{received}, 0, 'reads no receive';
+};
+
 done_testing;

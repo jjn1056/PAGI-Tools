@@ -70,13 +70,16 @@ sub _refresh_connection {
 sub _refusing { PAGI::Utils::_ProtocolHelpers::refusing($_[0]) }
 sub _answered_by_another { PAGI::Utils::_ProtocolHelpers::answered_by_another($_[0]) }
 
-# This helper answered: its accept completed, or it is issued and still
-# pending. Either way it drives the connection as an accepted socket; the
-# server keeps a scope's sends in call order. A rejected accept leaves the
-# helper as it was before it (D6).
+# This helper answered: its accept completed, or it was issued -- still
+# pending, or rejected by the server (D6: the helper keeps its claim and is
+# still treated as the answerer, as Starlette's WebSocket marks itself
+# connected before awaiting the accept). Either way it drives the connection
+# as an accepted socket; the server keeps a scope's sends in call order.
+# Once the connection has ended, no helper has answered it.
 sub _answered {
     my ($self) = @_;
-    return $self->is_connected || ($self->{_accept_pending} ? 1 : 0);
+    return $self->is_connected
+        || (($self->{_claim} // '') eq 'answering' && $self->connection_state eq 'connecting');
 }
 
 sub _require_ownership {
@@ -335,10 +338,7 @@ async sub accept {
 
     # The helper owns the connection from the moment its accept is issued.
     $self->{_claim} = 'answering';
-    my $sent = PAGI::Utils::_ProtocolHelpers::forward_send($self, $event);
-    $self->{_accept_pending} = 1;
-    $sent->on_ready(sub { delete $self->{_accept_pending} });
-    await $sent;
+    await PAGI::Utils::_ProtocolHelpers::forward_send($self, $event);
     # A close made while the accept was pending stands.
     $self->_set_state('connected') if $self->connection_state eq 'connecting';
 
@@ -488,7 +488,7 @@ sub try_send_text { my $self = shift; return $self->_keep($self->_try_send_text(
 
 async sub _try_send_text {
     my ($self, $text) = @_;
-    return 0 if $self->_refusing || $self->_answered_by_another || !$self->_answered;
+    return 0 if $self->is_closed || $self->_refusing || $self->_answered_by_another || !$self->_answered;
 
     eval {
         defined($text = PAGI::Utils::_string_value($text))
@@ -517,7 +517,7 @@ sub try_send_bytes { my $self = shift; return $self->_keep($self->_try_send_byte
 
 async sub _try_send_bytes {
     my ($self, $bytes) = @_;
-    return 0 if $self->_refusing || $self->_answered_by_another || !$self->_answered;
+    return 0 if $self->is_closed || $self->_refusing || $self->_answered_by_another || !$self->_answered;
 
     eval {
         defined($bytes = PAGI::Utils::_string_value($bytes))
@@ -548,7 +548,7 @@ sub try_send_json { my $self = shift; return $self->_keep($self->_try_send_json(
 
 async sub _try_send_json {
     my ($self, $data) = @_;
-    return 0 if $self->_refusing || $self->_answered_by_another || !$self->_answered;
+    return 0 if $self->is_closed || $self->_refusing || $self->_answered_by_another || !$self->_answered;
 
     my $json = JSON::MaybeXS::encode_json($data);
     eval {
@@ -1096,10 +1096,14 @@ before the server's send completes, it owns the connection: sends, receives,
 C<keepalive>, C<close> and C<close_or_deny> work as on an accepted socket,
 and an operation made while the accept is still pending reaches the server
 after it, in call order. If the server rejects the accept, the error raises
-at its C<await> and nothing else changes: the helper keeps its claim, and
-code that catches the error and keeps using it gets no protection from the
-rules below. After a failed accept, build a new helper if the connection is
-still live and unanswered, or use the helper that answered if another did.
+at its C<await>; the helper keeps the claim it recorded when it sent the
+accept and is still treated as the connection's answerer, as Starlette's
+WebSocket is: its sends, C<try_send_*>, C<keepalive>, C<close> and
+C<close_or_deny> go to the server as on an accepted socket (which the
+server may reject in turn), and code that keeps using it gets no protection
+from the rules below. After a failed accept, build a new helper if the
+connection is still live and unanswered, or use the helper that answered if
+another did.
 
 B<This helper is refusing.> Once the response of this helper's L</deny> has
 started and the connection is still open, the refusal is its answer. Its
@@ -1632,7 +1636,7 @@ A framework may subclass PAGI::WebSocket (Thunderhorse does). The contract:
 
 =item * B<State.> The object holds C<scope>, C<receive> and C<send>, and its
 private connection state, every field of which starts with C<_> (C<_state>,
-C<_claim>, C<_accept_pending>, and the C<_close_*> fields and the callbacks among them). A subclass adds fields under any other name.
+C<_claim>, and the C<_close_*> fields and the callbacks among them). A subclass adds fields under any other name.
 
 =item * B<One object per scope.> Build it once the scope is final, after
 the route match and inside the innermost middleware, from the channels the

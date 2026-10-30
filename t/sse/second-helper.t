@@ -151,4 +151,25 @@ subtest 'a refusal that started nothing leaves no claim behind' => sub {
     is $seen->{sent}, [], 'sends nothing';
 };
 
+# The "connection ended" row: once the connection another helper answered has
+# ended, a second helper behaves as today for an ended connection.
+subtest 'another answered, connection ended: as for an ended connection' => sub {
+    my $scope = sse_scope(path => '/events');
+    PAGI::SSE->new($scope, sub { Future->new }, send_to($scope, []))->start->get;
+    my ($sse, $seen) = recording_helper($scope);
+    $scope->{'pagi.connection'}->_mark_disconnected('client_closed');
+
+    ok lives { $sse->start->get }, 'start does nothing';
+    like dies { $sse->decline(PAGI::Response::Text->new('no', status => 403))->get },
+        qr/^SSE decline requires a live connection with no response started /, 'decline as today';
+    like dies { $sse->send('x')->get }, qr/^Cannot send on closed SSE connection /, 'send as today';
+    is $sse->try_send('x')->get, 0, 'try_send returns 0';
+    ok lives { $sse->each([1], sub { Future->done })->get }, 'each does nothing';
+    ok lives { $sse->run->get }, 'run returns';
+    ok lives { $sse->close->get }, 'close does nothing';
+    ok lives { $sse->keepalive(10)->get }, 'keepalive does nothing';
+    is $seen->{sent}, [], 'sends nothing';
+    is $seen->{received}, 0, 'reads no receive';
+};
+
 done_testing;
