@@ -63,8 +63,9 @@ curl localhost:5000/log
 ## The Starlette version
 
 `app.py` writes each middleware as a pure ASGI class that builds a
-`Request(scope, receive)`, copies the scope to change it, and hands on a
-receive that delivers the body it read; the tenant goes in the scope's
+`Request(scope, receive)` where it reads the body and an
+`HTTPConnection(scope)` where it reads only the scope, copies the scope to
+change it, and hands on a receive that delivers the body it read; the tenant goes in the scope's
 `state`, which the route reads as `request.state`. Run on PAGI-Server and on
 uvicorn 0.54.0 / Starlette 1.10.0, the four requests above and the log gave
 the same statuses and bodies.

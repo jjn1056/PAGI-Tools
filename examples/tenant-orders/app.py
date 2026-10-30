@@ -1,6 +1,7 @@
 # The same tenant orders API in Starlette, for comparison with app.pl:
-# pure ASGI middleware each read the request through a Request of their
-# own, and the route reads the body through its own.
+# pure ASGI middleware each read the request through an object of their own
+# -- a Request where they read the body, an HTTPConnection where they read
+# only the scope -- and the route reads the body through its own.
 #
 # Run:  pip install starlette uvicorn
 #       uvicorn app:app --port 8000
@@ -9,7 +10,7 @@ import json
 
 from starlette.applications import Starlette
 from starlette.middleware import Middleware
-from starlette.requests import Request
+from starlette.requests import HTTPConnection, Request
 from starlette.responses import JSONResponse
 from starlette.routing import Route
 
@@ -55,29 +56,29 @@ class LegacyApiKey:
         self.app = app
 
     async def __call__(self, scope, receive, send):
-        key = dict(scope.get("headers", [])).get(b"x-api-key")
+        key = HTTPConnection(scope).headers.get("x-api-key")
         if key is None:
             return await self.app(scope, receive, send)
         headers = [(k, v) for k, v in scope["headers"] if k not in (b"x-api-key", b"authorization")]
-        await self.app({**scope, "headers": headers + [(b"authorization", b"Bearer " + key)]}, receive, send)
+        await self.app({**scope, "headers": headers + [(b"authorization", b"Bearer " + key.encode("latin-1"))]}, receive, send)
 
 
-# Reads Authorization and the query through its own Request: the scope it
+# Reads Authorization and the query through its own HTTPConnection: the scope it
 # is given is LegacyApiKey's copy, so it sees the rewritten header.
 class Tenant:
     def __init__(self, app):
         self.app = app
 
     async def __call__(self, scope, receive, send):
-        request = Request(scope, receive)
-        auth = request.headers.get("authorization", "")
+        connection = HTTPConnection(scope)
+        auth = connection.headers.get("authorization", "")
         tenant = TENANT_FOR_KEY.get(auth[len("Bearer "):]) if auth.startswith("Bearer ") else None
         if tenant is None:
             refusal = JSONResponse({"error": "unknown API key"}, status_code=401,
                                    headers={"WWW-Authenticate": "Bearer"})
             return await refusal(scope, receive, send)
         state = {**scope.get("state", {}), "tenant": tenant,
-                 "region": request.query_params.get("region", "eu")}
+                 "region": connection.query_params.get("region", "eu")}
         await self.app({**scope, "state": state}, receive, send)
 
 
