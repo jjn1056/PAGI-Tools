@@ -58,7 +58,7 @@ for my $case (@cases) {
         }
 
         SKIP: {
-            skip 'example did not load', ($case->{name} eq 'endpoint demo' ? 23 : 2)
+            skip 'example did not load', ($case->{name} eq 'endpoint demo' ? 30 : 2)
                 unless ref($app) eq 'CODE'
                     || ($case->{class} && ref($app) eq $case->{class});
             my $client = PAGI::Test::Client->new(app => $app);
@@ -112,6 +112,7 @@ for my $case (@cases) {
                 # request to STDERR.
                 my $access_log = '';
                 my ($unsupported, $messages, $created);
+                my ($json_then_text, $text_then_json, $with_charset);
                 {
                     local *STDERR;
                     open STDERR, '>', \$access_log or die $!;
@@ -120,9 +121,22 @@ for my $case (@cases) {
                     $created = $client->post('/api/messages', json => {
                         text => 'Direct request object',
                     });
+                    # A repeated Content-Type field has no media type, in
+                    # either order.
+                    $json_then_text = $client->post('/api/messages',
+                        headers => [['Content-Type', 'application/json'],
+                                    ['Content-Type', 'text/plain']],
+                        body => '{"text":"json then text"}');
+                    $text_then_json = $client->post('/api/messages',
+                        headers => [['Content-Type', 'text/plain'],
+                                    ['Content-Type', 'application/json']],
+                        body => '{"text":"text then json"}');
+                    $with_charset = $client->post('/api/messages',
+                        headers => [['Content-Type', 'application/json; charset=utf-8']],
+                        body => '{"text":"with a charset"}');
                 }
                 like($access_log,
-                    qr{\APOST /api/messages 415 \S+\nGET /api/messages 200 \S+\nPOST /api/messages 201 \S+\n\z},
+                    qr{\APOST /api/messages 415 \S+\nGET /api/messages 200 \S+\nPOST /api/messages 201 \S+\nPOST /api/messages 415 \S+\nPOST /api/messages 415 \S+\nPOST /api/messages 201 \S+\n\z},
                     'AccessLog records each API request');
 
                 is($unsupported->status, 415,
@@ -147,6 +161,15 @@ for my $case (@cases) {
                     id   => 3,
                     text => 'Direct request object',
                 }, 'created message preserves the JSON request data');
+
+                is($json_then_text->status, 415,
+                    'application/json then text/plain is rejected');
+                is($text_then_json->status, 415,
+                    'text/plain then application/json is rejected');
+                is($with_charset->status, 201,
+                    'application/json with a charset parameter is accepted');
+                is($with_charset->json, { id => 4, text => 'with a charset' },
+                    'the charset-qualified body is read as JSON');
 
                 # The SSE endpoint keeps its subscriber id in the stream's
                 # stash, which the route's Stash middleware provides.

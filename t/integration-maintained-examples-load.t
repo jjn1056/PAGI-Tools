@@ -139,6 +139,11 @@ subtest 'endpoint demo names endpoint classes at routes' => sub {
     like($source,
         qr/route\('\/\*path'\s*=>\s*PAGI::App::File->from_app_path\('public'\)\)/,
         'static files are the final HTTP-only catch-all route');
+    like($source,
+        qr/PAGI::HTTPConnection->new\(\$scope\)->headers->content_type \/\/ ''/,
+        'the JSON check reads the parsed media type through PAGI::HTTPConnection');
+    unlike($source, qr/\$scope->\{headers\}/,
+        'no middleware reads the raw scope headers by hand');
 };
 
 done_testing;

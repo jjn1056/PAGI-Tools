@@ -79,7 +79,21 @@ connection-local subscriber state with the stream that owns it; the route's
 - Coderef middleware - Request timing, JSON validation
 - `PAGI::Middleware::Stash` - the SSE stream's stash
 
-The JSON-validation middleware is a native PAGI application, so its terminal
+The JSON-validation middleware reads the request through
+`PAGI::HTTPConnection`, which reads the scope without touching the body, so
+the endpoint still gets the whole body. `content_type` is the parsed media
+type -- lowercased, parameters dropped, and undef when the Content-Type field
+is missing or sent twice -- so the check is an exact comparison:
+
+```perl
+my $type = PAGI::HTTPConnection->new($scope)->headers->content_type // '';
+unless ($type eq 'application/json') { ... }
+```
+
+`application/json; charset=utf-8` passes; `text/plain`, or two Content-Type
+fields in either order, gets the 415.
+
+The middleware is a native PAGI application, so its terminal
 branch constructs a source-free stock application and delegates the exact
 channels explicitly:
 
