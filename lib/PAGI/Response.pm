@@ -4,7 +4,7 @@ use strict;
 use warnings;
 
 use Carp qw(croak);
-use Cookie::Baker ();
+use PAGI::Utils::_SetCookie ();
 use Exporter qw(import);
 use Future;
 use Future::AsyncAwait;
@@ -355,6 +355,15 @@ HTTP field values are octets: a character above 0xFF croaks, naming the
 header or cookie part, and text with one is encoded first (a non-ASCII
 download name is: File encodes C<filename> itself, following RFC 8187).
 
+C<cookie($name, $value, %options)> writes the value as is, so it must be
+RFC 6265 cookie-octets: printable ASCII except space, C<">, C<,>, C<;> and
+C<\>. Any other character (a control character, whitespace, one of those, or
+one above 0x7E) croaks, naming it, with "encode it first (Base64, say)":
+a browser ends a value at the first C<;>, and other readers split on C<,> or
+strip quotes, so only these characters read back unchanged through any
+client. Nothing is percent-encoded; encode a value that needs it before
+passing it, and decode it after reading it back.
+
 Header names are HTTP tokens (RFC 9110): letters, digits and
 C<!#$%&'*+-.^_`|~>. A name with anything else (a space, a colon, a
 character above 0x7E) croaks, naming it; one added straight to the
@@ -677,17 +686,17 @@ sub cookie {
     for my $option (qw(domain path)) {
         $options{$option} = _cookie_string($option, $options{$option}) if defined $options{$option};
     }
-    my %cookie = (value => $value, path => $options{path} // '/');
+    my %cookie = (path => $options{path} // '/');
     $cookie{domain}    = $options{domain}  if defined $options{domain};
     $cookie{expires}   = $options{expires} if defined $options{expires};
     $cookie{'max-age'} = $options{max_age} if defined $options{max_age};
     $cookie{secure}    = $options{secure} if $options{secure};
     $cookie{httponly}  = $options{httponly} if $options{httponly};
     $cookie{samesite}  = $options{samesite} if defined $options{samesite};
-    return $self->header('Set-Cookie', Cookie::Baker::bake_cookie($name, \%cookie));
+    return $self->header('Set-Cookie', PAGI::Utils::_SetCookie::set_cookie_string($name, $value, %cookie));
 }
 
-# A cookie's value, domain or path as a string, or croak: Cookie::Baker
+# A cookie's value, domain or path as a string, or croak: the writer
 # would otherwise send a reference as HASH(0x...).
 sub _cookie_string {
     my ($what, $value) = @_;

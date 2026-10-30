@@ -4,7 +4,7 @@ use strict;
 use warnings;
 use parent 'PAGI::Middleware';
 use Future::AsyncAwait;
-use Cookie::Baker ();
+use PAGI::Utils::_SetCookie ();
 use PAGI::HTTPConnection ();
 use PAGI::Utils ();
 
@@ -123,17 +123,14 @@ sub wrap {
 sub _format_set_cookie {
     my ($self, $name, $value, %opts) = @_;
 
-    my %cookie_opts = (
-        value => $value,
-        path  => $opts{path} // '/',
-    );
+    my %cookie_opts = (path => $opts{path} // '/');
     $cookie_opts{domain}    = $opts{domain}   if defined $opts{domain};
     $cookie_opts{expires}   = $opts{expires}  if defined $opts{expires};
     $cookie_opts{'max-age'} = $opts{max_age}  if defined $opts{max_age};
     $cookie_opts{secure}    = $opts{secure}   if $opts{secure};
     $cookie_opts{httponly}  = $opts{httponly} if $opts{httponly};
     $cookie_opts{samesite}  = $opts{samesite} if defined $opts{samesite};
-    return Cookie::Baker::bake_cookie($name, \%cookie_opts);
+    return PAGI::Utils::_SetCookie::set_cookie_string($name, $value, %cookie_opts);
 }
 
 # Simple cookie jar class for method-style access
@@ -161,12 +158,11 @@ sub delete {
     my ($self, $name, %opts) = @_;
 
     my %cookie_opts = (
-        value   => '',
         expires => 0,  # Epoch 0 = expired
         path    => $opts{path} // '/',
     );
     $cookie_opts{domain} = $opts{domain} if defined $opts{domain};
-    push @{$self->{cookies}}, Cookie::Baker::bake_cookie($name, \%cookie_opts);
+    push @{$self->{cookies}}, PAGI::Utils::_SetCookie::set_cookie_string($name, '', %cookie_opts);
 }
 
 package PAGI::Middleware::Cookie;
@@ -198,6 +194,11 @@ Object with methods for setting response cookies:
     );
 
     $scope->{'pagi.cookie_jar'}->delete('name');
+
+C<set> writes the value as is, so it must be RFC 6265 cookie-octets:
+printable ASCII except space, C<">, C<,>, C<;> and C<\>. Any other
+character croaks, naming it, with "encode it first (Base64, say)"; nothing
+is percent-encoded. L<PAGI::Response/cookie> follows the same rule.
 
 =back
 

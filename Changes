@@ -590,6 +590,18 @@
     ErrorHandler's handler and catch entries get request_for_scope($scope):
     reading their Request's body dies "this Request was built from the
     scope alone; it has no body", where each had its own message.
+  - PAGI::Response->cookie and the Cookie middleware's cookie jar write a
+    cookie's value as is instead of percent-encoding it (Cookie::Baker did):
+    the value must be RFC 6265 cookie-octets, printable ASCII except space,
+    '"', ',', ';' and '\', and any other character croaks, "cookie value
+    contains ';' which browsers cannot carry; encode it first (Base64,
+    say)". What PAGI writes reads back unchanged through any client:
+    cookie('a', 'x/y') sends "a=x/y" where it sent "a=x%2Fy", and a value
+    with ';' or a space, which it percent-encoded, croaks. A cookie already
+    set percent-encoded reads back encoded ("x%2Fy") until the application
+    sets it again. The attributes are spelled and ordered as before
+    (PAGI::Utils::_SetCookie, private); Cookie::Baker is no longer a
+    prerequisite.
   - PAGI::Test::Client's form and query values are characters, sent UTF-8
     percent-encoded, as its path and json already were: each character
     was sent as one byte, so "caf\x{e9}" reached the application as
