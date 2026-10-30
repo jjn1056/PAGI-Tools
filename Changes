@@ -1,6 +1,6 @@
 # Revision history for PAGI-Tools
 
-0.003000 - 2026-09-30
+0.003000
 
   Most of the 0.002002 API is replaced; there are no compatibility aliases.
   UPGRADING.md has a table of what replaces what and a worked port;
