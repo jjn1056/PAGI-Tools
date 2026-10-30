@@ -205,7 +205,7 @@ sub raw_query_param {
     return $self->query_param($name, raw => 1);
 }
 
-# Single header lookup (case-insensitive, returns last value)
+# Single header lookup (case-insensitive, repeated fields joined ", ")
 sub header {
     my ($self, $name) = @_;
     return $self->headers->get($name);
@@ -1054,7 +1054,9 @@ Client and server address info.
     my $all_cookies = $ws->header_all('cookie');
     my $headers = $ws->headers;        # PAGI::Headers
 
-Case-insensitive header access through L<PAGI::Headers>.
+Case-insensitive header access through L<PAGI::Headers>. C<header> reads a
+repeated field as every value joined with C<", "> in order; C<header_all>
+returns them separately (needed for C<Set-Cookie>).
 
 =head2 Per-Connection Shared State
 

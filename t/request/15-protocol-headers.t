@@ -23,7 +23,7 @@ subtest 'WebSocket uses the shared PAGI header container' => sub {
     );
 
     isa_ok($websocket->headers, ['PAGI::Headers'], 'one header container');
-    is($websocket->headers->get('X-TRACE'), 'two', 'case-insensitive lookup');
+    is($websocket->headers->get('X-TRACE'), 'one, two', 'case-insensitive lookup (D1: repeated fields join)');
     is([$websocket->header_all('x-TrAcE')], ['one', 'two'], 'repeated values');
     is(refaddr($scope->{'pagi.request.headers'}), refaddr($websocket->headers),
         'scope caches the public header container');
@@ -40,7 +40,7 @@ subtest 'SSE uses the shared PAGI header container' => sub {
     );
 
     isa_ok($sse->headers, ['PAGI::Headers'], 'one header container');
-    is($sse->headers->get('X-TRACE'), 'two', 'case-insensitive lookup');
+    is($sse->headers->get('X-TRACE'), 'one, two', 'case-insensitive lookup (D1: repeated fields join)');
     is([$sse->header_all('x-TrAcE')], ['one', 'two'], 'repeated values');
     is(refaddr($scope->{'pagi.request.headers'}), refaddr($sse->headers),
         'scope caches the public header container');
@@ -61,8 +61,8 @@ subtest 'Request and WebSocket each parse headers, Request first' => sub {
 
     is(refaddr($request->scope), refaddr($scope), 'Request keeps original scope');
     isnt(refaddr($websocket->headers), refaddr($cached), 'WebSocket parses its own');
-    is($websocket->header('X-TRACE'), 'two', 'to the same value');
-    is($request->header('X-TRACE'), 'two', 'Request lookup uses its own snapshot');
+    is($websocket->header('X-TRACE'), 'one, two', 'to the same value (D1: repeated fields join)');
+    is($request->header('X-TRACE'), 'one, two', 'Request lookup uses its own snapshot');
 };
 
 subtest 'Request and WebSocket each parse headers, WebSocket first' => sub {
@@ -80,7 +80,7 @@ subtest 'Request and WebSocket each parse headers, WebSocket first' => sub {
 
     is(refaddr($request->scope), refaddr($scope), 'Request keeps original scope');
     isnt(refaddr($request->headers), refaddr($cached), 'Request parses its own');
-    is($request->header('X-TRACE'), 'two', 'helper-first lookup remains last-value');
+    is($request->header('X-TRACE'), 'one, two', 'helper-first lookup joins (D1)');
     is($request->method, undef, 'Request does not fabricate a WebSocket method');
     is($request->scheme, 'wss', 'Request preserves the native WebSocket scheme');
 };
@@ -102,8 +102,8 @@ subtest 'Request and SSE each parse headers in both access orders' => sub {
 
         isnt(refaddr($second), refaddr($first),
             ($request_first ? 'Request-first' : 'SSE-first') . ': each parses its own');
-        is($request->header('X-TRACE'), 'two', 'Request reads its own snapshot');
-        is($sse->header('X-TRACE'), 'two', 'SSE reads the same value');
+        is($request->header('X-TRACE'), 'one, two', 'Request reads its own snapshot (D1: joined)');
+        is($sse->header('X-TRACE'), 'one, two', 'SSE reads the same value');
     }
 };
 

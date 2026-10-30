@@ -140,7 +140,7 @@ sub _header_snapshot {
 # Public: the cached PAGI::Headers object used by all Request header lookups.
 sub headers { return $_[0]->_header_snapshot }
 
-# Single header lookup (case-insensitive, last value)
+# Single header lookup (case-insensitive, repeated fields joined ", ")
 sub header     { return $_[0]->_header_snapshot->get($_[1]) }
 
 # All values for a header
@@ -772,7 +772,7 @@ scopes.
 
 Returns the complete validated Host field, including an explicit port. Returns
 C<undef> only when Host is absent, and croaks when Host is malformed or occurs
-more than once. Use L</header> with C<'host'> as the raw, last-value escape
+more than once. Use L</header> with C<'host'> as the raw, joined-value escape
 hatch when that behavior is required.
 
 =head2 http_version
@@ -797,7 +797,7 @@ With C<raise_on_error =E<gt> 1> a duplicate or malformed field throws a
 L<PAGI::Exception::HTTP> 400, C<The Content-Type header could not be parsed.>:
 the client sent it, so it is the client's error, which a Compose application
 answers by itself (see L</AUTH HELPERS>).
-Use C<< $request->header('Content-Type') >> for the raw last-value lookup;
+Use C<< $request->header('Content-Type') >> for the raw joined lookup;
 parsing does not alter the stored field.
 
 =head2 charset
@@ -826,8 +826,9 @@ it.
 
     my $value = $req->header('Content-Type');
 
-Get a single header value (case-insensitive). Returns the last value if
-the header appears multiple times.
+Get a header value (case-insensitive). A header that appears more than once
+reads as every value joined with C<", "> in order; C<Set-Cookie> cannot be
+joined, read it with L</header_all>.
 
 =head2 header_all
 

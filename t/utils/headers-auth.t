@@ -99,7 +99,8 @@ subtest 'singleton Authorization helpers do not select duplicate credentials' =>
         ['Authorization', 'Bearer first'], ['authorization', 'Bearer second'],
     ]);
 
-    is $headers->get('Authorization'), 'Bearer second', 'raw get still returns last';
+    # D1: raw get joins a repeated field (was: the last value).
+    is $headers->get('Authorization'), 'Bearer first, Bearer second', 'raw get joins';
     is $headers->get_single('Missing'), undef, 'missing singleton returns undef';
     is $headers->get_single('Authorization'), undef, 'duplicate singleton is unusable';
     is $headers->authorization_bearer, undef, 'duplicate credentials not selected';

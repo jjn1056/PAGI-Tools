@@ -140,7 +140,8 @@ subtest 'header accessors' => sub {
 
     is($ws->header('host'), 'example.com', 'single header');
     is($ws->header('Host'), 'example.com', 'case-insensitive');
-    is($ws->header('x-custom'), 'value2', 'returns last value for duplicates');
+    # D1: a repeated field reads joined ", " in order (was: the last value).
+    is($ws->header('x-custom'), 'value1, value2', 'joins duplicates');
     is($ws->header('nonexistent'), undef, 'returns undef for missing');
 
     my @customs = $ws->header_all('x-custom');

@@ -17,7 +17,8 @@ subtest 'empty + construction from pairs' => sub {
 subtest 'case-insensitive reads, original casing preserved' => sub {
     my $h = PAGI::Headers->new([['Content-Type','text/plain'],['X-Foo','a'],['X-Foo','b']]);
     is $h->get('content-type'), 'text/plain', 'get is case-insensitive';
-    is $h->get('X-FOO'), 'b', 'get returns the LAST value';
+    # D1: get joins a repeated field ", " in order (was: the last value).
+    is $h->get('X-FOO'), 'a, b', 'get joins a repeated field in order';
     is [$h->get_all('x-foo')], ['a','b'], 'get_all returns all values in order';
     is $h->has('CONTENT-TYPE'), 1, 'has is case-insensitive';
     is $h->has('x-bar'), 0, 'has false for absent';
@@ -96,19 +97,19 @@ subtest 'output forms + clone independence' => sub {
     is $h->get('x-a'), '1', 'clone is independent of the original';
 };
 
-subtest 'to_hash: flat (last value) and multi (arrayref), case-insensitively grouped' => sub {
+subtest 'to_hash: flat (joined) and multi (arrayref), case-insensitively grouped' => sub {
     my $h = PAGI::Headers->new([
         ['Content-Type','text/html'],
         ['X-Multi','a'], ['X-Multi','b'],
     ]);
-    is $h->to_hash, { 'Content-Type' => 'text/html', 'X-Multi' => 'b' },
-        'flat to_hash: one value per name, last wins (mirrors get)';
+    is $h->to_hash, { 'Content-Type' => 'text/html', 'X-Multi' => 'a, b' },
+        'flat to_hash: one value per name, repeated fields joined (mirrors get; D1)';
     is $h->to_hash(1), { 'Content-Type' => ['text/html'], 'X-Multi' => ['a','b'] },
         'to_hash(1): arrayref of all values per name (mirrors get_all)';
 
     my $mixed = PAGI::Headers->new([['X-Foo','1'],['x-foo','2']]);
-    is $mixed->to_hash, { 'X-Foo' => '2' },
-        'mixed-case same name grouped under first-seen casing, last value';
+    is $mixed->to_hash, { 'X-Foo' => '1, 2' },
+        'mixed-case same name grouped under first-seen casing, joined (D1)';
     is $mixed->to_hash(1), { 'X-Foo' => ['1','2'] },
         'to_hash(1) groups all case-insensitive matches';
 
@@ -116,13 +117,12 @@ subtest 'to_hash: flat (last value) and multi (arrayref), case-insensitively gro
     is $empty, {}, 'empty container -> empty hash';
 };
 
-subtest 'get returns the LAST value and never comma-joins' => sub {
+subtest 'get joins a repeated field (D1); get_all keeps values separate' => sub {
     my $h = PAGI::Headers->new;
     $h->add('Vary','Accept');
     $h->add('Vary','Accept-Encoding');
-    is $h->get('vary'), 'Accept-Encoding', 'get returns the last value';
-    isnt $h->get('vary'), 'Accept, Accept-Encoding',
-        'get does NOT comma-join (divergence from HTTP::Headers / Mojo::Headers)';
+    is $h->get('vary'), 'Accept, Accept-Encoding',
+        'get comma-joins, as HTTP::Headers / Mojo::Headers do (D1)';
     is [$h->get_all('vary')], ['Accept','Accept-Encoding'], 'get_all keeps values separate, in order';
 };
 
@@ -216,7 +216,7 @@ subtest 'get_single requires exactly one field occurrence' => sub {
     is $one->get_single('missing'), undef, 'missing field returns undef';
 
     my $duplicate = PAGI::Headers->new([['X-One', 'first'], ['x-one', 'second']]);
-    is $duplicate->get('X-One'), 'second', 'raw get keeps its last-value contract';
+    is $duplicate->get('X-One'), 'first, second', 'raw get joins the repeated field (D1)';
     is $duplicate->get_single('X-One'), undef, 'duplicates are not selected';
     like dies { $duplicate->get_single('X-One', raise_on_error => 1) },
         qr/single|multiple|occurrence/i, 'raise_on_error reports duplicate fields';
@@ -337,6 +337,15 @@ subtest 'undef header value is rejected (fail loud, never stored)' => sub {
     like dies { $h->set_default('X-D', undef) }, qr/value must be defined/, 'set_default rejects undef value';
     is $h->to_pairs, [['X-A','1']], 'nothing was stored by the rejected calls';
     like dies { $h->get(undef) }, qr/header name required/, 'the undef-NAME guard still holds';
+};
+
+subtest 'get joins a repeated field (D1)' => sub {
+    my $h = PAGI::Headers->new([['Accept','a'],['X','one'],['x','two'],['Y',"caf\xc3\xa9"]]);
+    is $h->get('x'), 'one, two', 'repeated field joined in order';
+    is $h->get('accept'), 'a', 'single field as is';
+    is $h->get('missing'), undef, 'absent is undef';
+    is $h->get('y'), "caf\xc3\xa9", 'bytes kept, not decoded';
+    is [$h->get_all('x')], ['one', 'two'], 'get_all unchanged';
 };
 
 done_testing;

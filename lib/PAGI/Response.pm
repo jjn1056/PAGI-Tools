@@ -328,6 +328,8 @@ public Response-specific emission method.
     is_buffered / body
 
 C<header($name, $value)> appends and preserves repeated-field order;
+C<header($name)> reads a repeated field as every value joined with C<", ">
+in order, and C<Set-Cookie> is read with C<header_all>;
 C<content_type> replaces Content-Type, and C<content_type(undef)> gives back the
 class's default type (Text's C<text/plain; charset=utf-8>, for one), so a typed
 body always says what it is; Empty and File have none, File's coming from the

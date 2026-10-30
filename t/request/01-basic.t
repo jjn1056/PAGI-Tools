@@ -78,10 +78,11 @@ subtest 'host validates the raw Host field instead of using a last-value lookup'
             headers => [$first, $second],
         }, $receive);
 
+        # D1: the raw lookup joins a repeated field (was: the last value).
         is(
             $request->header('host'),
-            $second->[1],
-            "raw lookup remains last-value for $description",
+            "$first->[1], $second->[1]",
+            "raw lookup joins $description",
         );
         like(
             dies { $request->host },
@@ -209,7 +210,7 @@ subtest 'case-insensitive header lookup' => sub {
     is($req->header('X-CUSTOM-HEADER'), 'custom-value', 'custom header uppercase');
 };
 
-subtest 'multiple headers with same name returns last value' => sub {
+subtest 'multiple headers with same name returns them joined' => sub {
     my $scope = {
         type => 'http',
         method => 'GET',
@@ -224,8 +225,9 @@ subtest 'multiple headers with same name returns last value' => sub {
     };
 
     my $req = PAGI::Request->new($scope, $receive);
-    is($req->header('accept'), 'text/plain', 'returns last accept header value');
-    is($req->header('x-custom'), 'third', 'returns last x-custom header value');
+    # D1: a repeated field reads joined ", " in order (was: the last value).
+    is($req->header('accept'), 'text/html, application/json, text/plain', 'joins accept header values');
+    is($req->header('x-custom'), 'first, second, third', 'joins x-custom header values');
 };
 
 subtest 'content-type parameter stripping' => sub {
@@ -438,8 +440,8 @@ subtest 'headers is a PAGI::Headers' => sub {
     my $headers = $req->headers;
     isa_ok $headers, ['PAGI::Headers'], 'headers() is a PAGI::Headers';
 
-    # Single value access (last value - case-insensitive)
-    is($headers->get('accept'), 'application/json', 'get returns last value');
+    # Single value access (case-insensitive); D1: a repeated field joins (was: the last value)
+    is($headers->get('accept'), 'text/html, application/json', 'get joins a repeated field');
     is($headers->get('content-type'), 'text/plain', 'access other headers');
 
     # Multi-value access

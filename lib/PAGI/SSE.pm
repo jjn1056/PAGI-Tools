@@ -393,7 +393,7 @@ async sub decline {
     return $self;
 }
 
-# Single header lookup (case-insensitive, returns last value)
+# Single header lookup (case-insensitive, repeated fields joined ", ")
 sub header {
     my ($self, $name) = @_;
     return $self->headers->get($name);
@@ -1063,7 +1063,9 @@ found: an encoded C</> straddles the mount boundary, or C<path> was rewritten.
     my @cookies = $sse->header_all('cookie');
     my $headers = $sse->headers;        # PAGI::Headers
 
-Case-insensitive header access through L<PAGI::Headers>.
+Case-insensitive header access through L<PAGI::Headers>. C<header> reads a
+repeated field as every value joined with C<", "> in order; C<header_all>
+returns them separately (needed for C<Set-Cookie>).
 
 =head2 last_event_id
 

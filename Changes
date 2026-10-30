@@ -496,6 +496,14 @@
     Tutorial link to one statement of each rule instead of restating it.
 
   [Breaking -- see UPGRADING.md]
+  - PAGI::Headers->get, PAGI::Request->header, PAGI::WebSocket->header,
+    PAGI::SSE->header and PAGI::Response->header join a repeated field
+    ", " in order (RFC 9110 5.3; as Mojo::Headers, PSGI and Plack::Request
+    do) where they returned the last value; to_hash's flat form joins too.
+    Set-Cookie cannot be joined: read it with get_all / header_all. A
+    repeated If-Modified-Since now reads "date1, date2", which
+    PAGI::Middleware::ConditionalGet cannot parse, so the client gets the
+    full response where the last date alone could produce a 304.
   - PAGI::Test::Client's form and query values are characters, sent UTF-8
     percent-encoded, as its path and json already were: each character
     was sent as one byte, so "caf\x{e9}" reached the application as

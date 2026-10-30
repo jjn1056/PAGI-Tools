@@ -94,7 +94,8 @@ subtest 'constructor and metadata setters validate and preserve ordered semantic
 
     $res->header('X-Value' => 'first')->header('x-value' => 'second');
     is $res->header_all('X-Value'), ['first', 'second'], 'header appends in order';
-    is $res->header('x-value'), 'second', 'header returns last value';
+    # D1: a repeated field reads joined ", " in order (was: the last value).
+    is $res->header('x-value'), 'first, second', 'header joins a repeated field';
     ok $res->has_header('X-VALUE'), 'has_header folds case';
     $res->header_try('X-Value' => 'ignored');
     is $res->header_all('x-value'), ['first', 'second'],

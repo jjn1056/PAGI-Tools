@@ -65,6 +65,7 @@ in [UPGRADING-REFERENCE.md](UPGRADING-REFERENCE.md).
 | `$request->text` decoded every body as UTF-8 | it decodes with the Content-Type charset, UTF-8 when none is declared; an unknown charset is a 415 |
 | `each_json` died (a 1011 server error) on a message that is not JSON | it closes 1007 and returns; pass `on_invalid_json`, or override `handle_invalid_json`, to answer otherwise |
 | `MyEndpoint->to_app` (an Endpoint class name) | `endpoint('MyEndpoint')->to_app`, or `MyEndpoint->new->to_app`; on a class name it now dies |
+| `$request->header`, `PAGI::Headers->get`, `PAGI::Response->header` returned the last value of a repeated field | every value joined `", "` in order, as Mojo::Headers, PSGI and Plack::Request do; read `Set-Cookie` with `header_all` / `get_all`; `get_single` still rejects duplicates |
 
 Behaviour that changes without a code change: stock refusals and error
 responses are plain text, each replaceable by one option ([details](UPGRADING-REFERENCE.md#audit-changed-first-party-defaults));
