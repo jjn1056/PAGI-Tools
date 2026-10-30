@@ -34,7 +34,16 @@ like dies { PAGI::Response->new('x')->cookie('a b' => 'v') },
     qr/\Acookie name contains ' ' which is not allowed in a cookie name at \Q$0\E line \d+/,
     'a bad name croaks at the caller';
 
-is(PAGI::Response->new('x')->cookie('a', 'v', samesite => 'Laxity')->header('set-cookie'),
-    'a=v; path=/', 'an unknown samesite value is omitted');
+for my $bad ('Laxity', 'bogus', '') {
+    like dies { PAGI::Response->new('x')->cookie('a', 'v', samesite => $bad) },
+        qr/\Asamesite must be Lax, Strict or None at \Q$0\E line \d+/,
+        "samesite '$bad' croaks at the caller";
+}
+for my $case (['lax', 'Lax'], ['STRICT', 'Strict'], ['None', 'None; secure']) {
+    is(PAGI::Response->new('x')->cookie('a', 'v', samesite => $case->[0])->header('set-cookie'),
+        "a=v; path=/; SameSite=$case->[1]", "samesite $case->[0] is written");
+}
+is(PAGI::Response->new('x')->cookie('a', 'v')->header('set-cookie'),
+    'a=v; path=/', 'no samesite writes none');
 
 done_testing;

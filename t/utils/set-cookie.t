@@ -20,7 +20,6 @@ my @attribute_cases = (
     [ 'samesite lax',      { samesite => 'lax' },           'sid=plain123; SameSite=Lax' ],
     [ 'samesite Strict',   { samesite => 'Strict' },        'sid=plain123; SameSite=Strict' ],
     [ 'samesite NONE',     { samesite => 'NONE' },          'sid=plain123; SameSite=None; secure' ],
-    [ 'samesite unknown',  { samesite => 'bogus' },         'sid=plain123' ],
     [ 'secure',            { secure => 1 },                 'sid=plain123; secure' ],
     [ 'httponly',          { httponly => 1 },               'sid=plain123; HttpOnly' ],
     [ 'partitioned',       { partitioned => 1 },            'sid=plain123; SameSite=None; secure; Partitioned' ],
@@ -64,9 +63,13 @@ subtest 'an undefined value croaks, without a warning' => sub {
     is \@warnings, [], 'no warning';
 };
 
-subtest 'an unknown samesite value is omitted, a prefix of a known one is not accepted' => sub {
-    is bake('a', 'v', samesite => 'Laxity'), 'a=v', 'Laxity writes no SameSite';
-    is bake('a', 'v', samesite => 'Strictly'), 'a=v', 'Strictly writes no SameSite';
+subtest 'a given samesite must be Lax, Strict or None, the whole word' => sub {
+    for my $bad ('Laxity', 'Strictly', 'bogus', '') {
+        like dies { bake('a', 'v', samesite => $bad) },
+            qr/\Asamesite must be Lax, Strict or None at \Q$0\E line \d+/,
+            "samesite '$bad' croaks at the caller";
+    }
+    is bake('a', 'v'), 'a=v', 'no samesite writes none';
 };
 
 subtest 'a cookie-octet value is written as is' => sub {

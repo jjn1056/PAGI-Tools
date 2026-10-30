@@ -365,8 +365,9 @@ client. Nothing is percent-encoded; encode a value that needs it before
 passing it, and decode it after reading it back. The name must be a
 non-empty RFC 6265 token (letters, digits and C<!#$%&'*+-.^_`|~>); any other
 character croaks, naming it, as the name is never encoded or decoded. A
-C<samesite> option other than C<Lax>, C<Strict> or C<None> (any case, the
-whole word) writes no SameSite attribute.
+C<samesite> option that is given must be C<Lax>, C<Strict> or C<None> (any
+case, the whole word), else it croaks; without it no SameSite attribute is
+written.
 
 Header names are HTTP tokens (RFC 9110): letters, digits and
 C<!#$%&'*+-.^_`|~>. A name with anything else (a space, a colon, a

@@ -612,8 +612,9 @@
     croaks, and so does an undefined value through the jar (it wrote "a="
     with a warning). The attributes are spelled and ordered as before, but
     SameSite accepts exactly Lax, Strict and None, any case (a prefix such as
-    "Laxity" was written capitalised), and any other value is omitted, as
-    before (PAGI::Utils::_SetCookie, private); Cookie::Baker is no longer a
+    "Laxity" was written capitalised), and any other value croaks
+    ("samesite must be Lax, Strict or None"; it was silently omitted), while
+    no samesite writes none as before (PAGI::Utils::_SetCookie, private); Cookie::Baker is no longer a
     prerequisite.
   - PAGI::Test::Client's form and query values are characters, sent UTF-8
     percent-encoded, as its path and json already were: each character

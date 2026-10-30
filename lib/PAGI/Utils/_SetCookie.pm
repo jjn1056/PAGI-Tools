@@ -33,7 +33,7 @@ The attributes are C<domain>, C<path>, C<expires> (an epoch number, a
 relative time such as C<+1h>, C<now>, or a ready date string), C<max-age>,
 C<samesite> (C<lax>, C<strict> or C<none>, any case; C<none> implies
 C<secure>), C<secure>, C<httponly> and C<partitioned> (which implies
-C<SameSite=None> and C<secure>). They are written in that order. Any other C<samesite> value writes no SameSite attribute.
+C<SameSite=None> and C<secure>). They are written in that order. A C<samesite> that is given must be one of those words, whole; any other value croaks C<samesite must be Lax, Strict or None>. Without C<samesite> no SameSite attribute is written.
 
 =cut
 
@@ -66,7 +66,9 @@ sub set_cookie_string {
     push @parts, "path=$attrs{path}"     if $attrs{path};
     push @parts, 'expires=' . _date($attrs{expires}) if defined $attrs{expires};
     push @parts, "max-age=$attrs{'max-age'}" if exists $attrs{'max-age'};
-    if (defined $attrs{samesite} && $attrs{samesite} =~ /\A(?:lax|strict|none)\z/i) {
+    if (defined $attrs{samesite}) {
+        croak "samesite must be Lax, Strict or None"
+            unless $attrs{samesite} =~ /\A(?:lax|strict|none)\z/i;
         my $samesite = ucfirst lc $attrs{samesite};
         push @parts, "SameSite=$samesite";
         $attrs{secure} = 1 if $samesite eq 'None';

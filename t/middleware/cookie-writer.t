@@ -46,6 +46,16 @@ is run_jar(sub { $_[0]->delete('a', domain => 'example.com') }),
 
 my $name_err;
 run_jar(sub { my ($jar) = @_; $name_err = dies { $jar->set('a b' => 'v') } });
-like $name_err, qr/cookie name contains ' ' which is not allowed in a cookie name/, 'a bad name croaks';
+like $name_err, qr/cookie name contains ' ' which is not allowed in a cookie name at \Q$0\E line \d+/,
+    'a bad name croaks at the caller';
+
+for my $bad ('Laxity', 'bogus', '') {
+    my $err;
+    run_jar(sub { my ($jar) = @_; $err = dies { $jar->set(a => 'v', samesite => $bad) } });
+    like $err, qr/\Asamesite must be Lax, Strict or None at \Q$0\E line \d+/,
+        "samesite '$bad' croaks at the caller";
+}
+is run_jar(sub { $_[0]->set(a => 'v', samesite => 'lax') }), ['a=v; path=/; SameSite=Lax'], 'samesite lax is written';
+is run_jar(sub { $_[0]->set(a => 'v') }), ['a=v; path=/'], 'no samesite writes none';
 
 done_testing;

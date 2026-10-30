@@ -139,6 +139,9 @@ package PAGI::Middleware::Cookie::Jar;
 use strict;
 use warnings;
 
+# A croak from the cookie writer blames the jar's caller, not this hand-off.
+our @CARP_NOT = qw(PAGI::Middleware::Cookie);
+
 sub new {
     my ($class, $cookies_ref, $formatter) = @_;
 
@@ -200,8 +203,9 @@ printable ASCII except space, C<">, C<,>, C<;> and C<\>. Any other
 character croaks, naming it, with "encode it first (Base64, say)"; nothing
 is percent-encoded. The name must be a non-empty RFC 6265 token (letters,
 digits and C<!#$%&'*+-.^_`|~>), else it croaks too, and an undefined value
-croaks. A C<samesite> option other than C<Lax>, C<Strict> or C<None> (any
-case, the whole word) writes no SameSite attribute.
+croaks. A C<samesite> option that is given must be C<Lax>, C<Strict> or
+C<None> (any case, the whole word), else it croaks; without it no SameSite
+attribute is written.
 L<PAGI::Response/cookie> follows the same rules.
 
 =back
