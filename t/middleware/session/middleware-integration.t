@@ -5,7 +5,7 @@ use Test2::V0;
 use Future::AsyncAwait;
 use IO::Async::Loop;
 
-use PAGI::Middleware::Session;
+use PAGI::Middleware::Session qw(session_state session_store);
 use PAGI::Middleware::Session::State::Header;
 use PAGI::Middleware::Session::Store::Memory;
 use PAGI::Session;
@@ -733,6 +733,40 @@ subtest 'a non-http scope with no headers at all (lifespan) is skipped entirely,
 
     ok !exists $captured_scope->{'pagi.session'}, 'lifespan scope gets no pagi.session key at all';
     ok !exists $captured_scope->{'pagi.session_id'}, 'lifespan scope gets no pagi.session_id key at all';
+};
+
+subtest 'an extension scope type passes through with no session, under Cookie and Header state' => sub {
+    for my $case (
+        [ Cookie => [ session_state('Cookie') ] ],
+        [ Header => [ session_state('Header', header_name => 'X-Session-ID') ] ],
+    ) {
+        my ($name, $state) = ($case->[0], $case->[1][0]);
+        PAGI::Middleware::Session::Store::Memory->clear_all;
+        my $session_mw = PAGI::Middleware::Session->new(
+            state => $state,
+            store => session_store('Memory'),
+        );
+
+        my ($ran, $captured_scope);
+        my $app = async sub {
+            my ($scope, $receive, $send) = @_;
+            $ran = 1;
+            $captured_scope = $scope;
+            return;
+        };
+        my $scope = {
+            type    => 'myext.chat',
+            headers => [['Cookie', 'pagi_session=abc'], ['X-Session-ID', 'abc']],
+        };
+        my $future = $session_mw->wrap($app)->($scope, async sub { {} }, async sub { });
+        $loop->await($future);
+        my $error = $future->is_failed ? $future->failure : undef;
+
+        is $error, undef, "$name state: no die";
+        ok $ran, "$name state: the app ran";
+        ok !exists $captured_scope->{'pagi.session'}, "$name state: no pagi.session";
+        ok !exists $captured_scope->{'pagi.session_id'}, "$name state: no pagi.session_id";
+    }
 };
 
 done_testing;

@@ -593,7 +593,10 @@
     it held "x/y"). ContentNegotiation's Accept, Response::File's Range,
     ConditionalGet and CSRF's form Content-Type read as before.
     Session::State::Cookie and ::Header extract take an http, websocket or
-    sse scope: an untyped hash dies. Authentication's backend and
+    sse scope: an untyped hash dies. Session gives no session to scope
+    types other than http, websocket and sse (it gave a read-only one to
+    any type with headers): such a scope passes to the app untouched.
+    Authentication's backend and
     ErrorHandler's handler and catch entries get request_for_scope($scope):
     reading their Request's body dies "this Request was built from the
     scope alone; it has no body", where each had its own message.
