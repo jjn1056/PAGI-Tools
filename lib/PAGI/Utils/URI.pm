@@ -52,7 +52,7 @@ sub parse {
     my ($scheme, $authority, $path, $query, $fragment) = _split_reference($string);
     croak 'not an absolute URI'
         unless defined $scheme && $scheme =~ $SCHEME && defined $authority;
-    croak 'userinfo is not supported' if $authority =~ /\@/;
+    _require_plain_authority($authority);
 
     return $class->_new(
         scheme       => $scheme,
@@ -99,6 +99,17 @@ sub _split_authority {
 sub _host_and_port {
     my ($authority) = @_;
     return $authority =~ /\A(.*?)(?::([0-9]+))?\z/s;
+}
+
+# An authority a value can hold: a host, and no userinfo (a value that
+# carried a password would put it in every string and log line). An empty
+# host would let "http:///x" read as host "x".
+sub _require_plain_authority {
+    my ($authority) = @_;
+    croak 'userinfo is not supported' if $authority =~ /\@/;
+    my ($host) = _host_and_port($authority);
+    croak 'the host is empty' unless length $host;
+    return;
 }
 
 # The authority as it may appear in a URI: every byte outside Mojo::URL's
@@ -181,7 +192,7 @@ sub origin {
 sub path_query {
     my $self = shift;
     _read_only($self, @_);
-    return PAGI::Utils::Scope::_one_leading_slash($self->{raw_path})
+    return (length $self->{raw_path} ? PAGI::Utils::Scope::_one_leading_slash($self->{raw_path}) : '/')
         . (length $self->{query_string} ? "?$self->{query_string}" : '');
 }
 
@@ -245,6 +256,7 @@ sub with_query {
     my @pairs = $self->_raw_query_pairs;
     while (@edits) {
         my ($name, $value) = splice @edits, 0, 2;
+        _require_query_pair('with_query', $name, $value);
         @pairs = (
             _without_names(\@pairs, _utf8($name)),
             _query_bytes($name => $value),
@@ -257,12 +269,17 @@ sub add_query {
     my ($self, @additions) = @_;
     croak 'add_query takes name => value pairs' if @additions % 2;
     my @pairs = $self->_raw_query_pairs;
-    push @pairs, _query_bytes(splice @additions, 0, 2) while @additions;
+    while (@additions) {
+        my ($name, $value) = splice @additions, 0, 2;
+        _require_query_pair('add_query', $name, $value);
+        push @pairs, _query_bytes($name => $value);
+    }
     return $self->_clone(_query_fields(@pairs));
 }
 
 sub without_query {
     my ($self, @names) = @_;
+    _require_query_name('without_query', $_) for @names;
     my @pairs = _without_names([$self->_raw_query_pairs],
         map { _utf8($_) } @names);
     return $self->_clone(_query_fields(@pairs));
@@ -286,6 +303,11 @@ sub replace {
     croak 'replace takes query_params or query_string, not both'
         if exists $parts{query_params} && exists $parts{query_string};
 
+    for my $part (qw(path raw_path query_string fragment)) {
+        croak "replace: $part must be text or undef"
+            if exists $parts{$part} && defined $parts{$part} && ref $parts{$part};
+    }
+
     my %changes;
     if (exists $parts{scheme}) {
         croak 'not a scheme: ' . ($parts{scheme} // 'undef')
@@ -294,10 +316,14 @@ sub replace {
     }
     if (exists $parts{authority}) {
         croak 'authority must be defined' unless defined $parts{authority};
+        croak 'replace: authority must be text' if ref $parts{authority};
+        _require_plain_authority($parts{authority});
         @changes{qw(host port)} = _host_and_port($parts{authority});
     }
     if (exists $parts{host}) {
         croak 'host must be defined' unless defined $parts{host};
+        croak 'replace: host must be text' if ref $parts{host};
+        _require_plain_authority($parts{host});
         $changes{host} = $parts{host};
     }
     if (exists $parts{port}) {
@@ -314,13 +340,18 @@ sub replace {
     }
     if (exists $parts{path_segments}) {
         croak 'path_segments must be an arrayref of text' unless ref $parts{path_segments} eq 'ARRAY';
+        _require_segment('replace', $_) for @{ $parts{path_segments} };
         $changes{raw_path} = _path_from_segments(map { PAGI::Utils::Scope::_encode_component($_) }
             @{ $parts{path_segments} });
     }
     if (exists $parts{query_params}) {
         my @params = _query_param_list($parts{query_params});
         my @pairs;
-        push @pairs, _query_bytes(splice @params, 0, 2) while @params;
+        while (@params) {
+            my ($name, $value) = splice @params, 0, 2;
+            _require_query_pair('replace', $name, $value);
+            push @pairs, _query_bytes($name => $value);
+        }
         %changes = (%changes, _query_fields(@pairs));
     }
     $changes{query_string} = PAGI::Utils::Scope::_escape_unsafe_bytes($parts{query_string} // '')
@@ -360,6 +391,7 @@ sub resolve {
 
 sub join_path {
     my ($self, @segments) = @_;
+    _require_segment('join_path', $_) for @segments;
     my @kept = _raw_segments($self->{raw_path});
     pop @kept if @kept && $kept[-1] eq '';
     return $self->_clone(raw_path => _path_from_segments(@kept,
@@ -437,6 +469,35 @@ sub _without_names {
         push @kept, @$pairs[$i, $i + 1] unless $drop{ $pairs->[$i] };
     }
     return @kept;
+}
+
+# The checks every edit shares. An edit takes plain text, so a ref or an
+# undef is refused rather than written as "HASH(0x...)" or as an empty
+# string. A value may also be an arrayref of text, or undef, which gives no
+# pair (and deletes the name in with_query).
+sub _require_query_name {
+    my ($who, $name) = @_;
+    croak "$who: a query name must be defined text, not a reference"
+        unless defined $name && !ref $name;
+    return;
+}
+
+sub _require_query_pair {
+    my ($who, $name, $value) = @_;
+    _require_query_name($who, $name);
+    return unless defined $value;
+    for my $text (ref $value eq 'ARRAY' ? @$value : $value) {
+        croak "$who: the value of query '$name' must be defined text or an arrayref of it"
+            unless defined $text && !ref $text;
+    }
+    return;
+}
+
+sub _require_segment {
+    my ($who, $segment) = @_;
+    croak "$who: a path segment must be defined text, not a reference"
+        unless defined $segment && !ref $segment;
+    return;
 }
 
 # One name and its value, text, as pairs of UTF-8 bytes: an arrayref gives
@@ -580,7 +641,8 @@ C<Host> and no usable C<server>.
 A URL from its string form, split as RFC 3986 appendix B splits a URI. It
 must have a scheme and an authority (C<scheme://...>), or it dies C<not an
 absolute URI>; an authority with userinfo (C<user:pw@host>) dies
-C<userinfo is not supported>.
+C<userinfo is not supported>, and one with no host (C<http:///x>) dies
+C<the host is empty>.
 
 The string is characters. Every non-ASCII character is UTF-8 encoded and
 then percent-encoded, in the authority, path, query and fragment alike:
@@ -695,15 +757,16 @@ True (1) when the scheme is C<https> or C<wss>, false (0) otherwise.
     my $origin = $uri->origin;   # https://example.com:8443
 
 C<scheme://authority> as a string: the scheme and the escaped authority
-(see L</The host is not validated>), with the port when the URL has one. For
-comparing with an C<Origin> header or building a CORS value.
+(see L</The host is not validated>), with the port when the URL has one, as
+the request named it. It is not an RFC 6454 origin: the scheme and host are
+not lowercased and a default port is kept.
 
 =head2 path_query
 
     my $target = $uri->path_query;   # /app/items?page=2
 
 L</raw_path>, then C<?> and L</query_string> when it is not empty: a
-same-origin reference for a C<Location> header. For a request URL it is
+same-origin reference for a C<Location> header; an empty path is C</>. For a request URL it is
 L<PAGI::HTTPConnection/request_uri>. It never starts with C<//>: a leading
 C<//> (any run of slashes) becomes one C</>, because a C<Location> of
 C<//evil.example/x> is protocol-relative and names another host. The value
@@ -771,7 +834,10 @@ is C</x>.
 
     my $uri = $request->uri->with_query(sort => 'name', tag => [qw(a b)], x => undef);
 
-Takes name => value pairs. For each name, in call order, every pair with
+Takes name => value pairs. A name must be defined text, and a value text, an
+arrayref of text or C<undef>; anything else (a reference, an C<undef> in an
+arrayref) dies, naming the caller, as does every query edit below. For each
+name, in call order, every pair with
 that name is removed and the new value appended at the end: an arrayref gives
 the name once per value, and C<undef> removes the name. Pairs with other
 names keep the client's order. A name given twice in one call keeps only the
@@ -786,8 +852,7 @@ later value. Dies C<with_query takes name =E<gt> value pairs> on an odd list.
 
 Takes name => value pairs and appends each at the end of the query, removing
 nothing, so a name already there keeps its pairs. An arrayref gives the name
-once per value, and C<undef> adds nothing. Dies C<add_query takes name
-=E<gt> value pairs> on an odd list. L</with_query> replaces a name's pairs
+once per value, and C<undef> adds nothing. Dies C<add_query takes name =E<gt> value pairs> on an odd list. L</with_query> replaces a name's pairs
 instead.
 
 =head2 without_query
@@ -817,14 +882,15 @@ C<[A-Za-z][A-Za-z0-9+.-]*>, or it dies C<not a scheme: ...>.
 =item authority
 
 C<host> or C<host:port>, unescaped, as L</authority> reads it: a trailing
-C<:digits> is the port. It is not percent-decoded, so
+C<:digits> is the port. An empty host dies C<the host is empty>, and userinfo
+dies C<userinfo is not supported>, as in L</parse>. It is not percent-decoded, so
 C<< replace(authority => $uri->authority) >> changes nothing. Escaped in the
 string form as a C<Host> is (see L</The host is not validated>).
 
 =item host, port
 
-The host, unescaped and unvalidated, and the port: digits, or C<undef> for
-none. Each keeps the other. They cannot be given with C<authority>.
+The host, unescaped and unvalidated (but not empty, and without userinfo),
+and the port: digits, or C<undef> for none. Each keeps the other. They cannot be given with C<authority>.
 
 =item path
 
@@ -899,7 +965,8 @@ always has one. Userinfo dies as in L</parse>.
     my $uri = $request->uri->join_path(42, 'edit');
 
 The segments, text, appended to the path, each UTF-8 encoded and
-percent-encoded as a whole (a C</> in one is written C<%2F>). A trailing
+percent-encoded as a whole (a C</> in one is written C<%2F>); a segment must
+be defined text, or it dies. A trailing
 slash on the path is not doubled, the query and fragment are kept, and a
 leading C<//> of the path is kept (C<//a> becomes C<//a/42>). The path's own
 segments are kept exactly as they were.

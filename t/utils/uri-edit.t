@@ -377,4 +377,60 @@ subtest 'every edit leaves $conn->uri unchanged' => sub {
     is($conn->uri->authority, 'example.com', 'authority');
 };
 
+# A refused edit croaks in the caller's name and never warns.
+sub refused {
+    my ($code, $pattern, $label) = @_;
+    my $error;
+    my $warnings = warnings { $error = dies { $code->() } };
+    like($error, qr/$pattern.* at \Q${\ __FILE__}\E line /, "$label: croaks, naming the caller");
+    is($warnings, [], "$label: no warnings");
+}
+
+subtest 'query edits refuse names and values that are not plain text' => sub {
+    my $uri = uri('http://h/p?x=1');
+    refused(sub { $uri->with_query(undef, 1) }, 'with_query: a query name', 'with_query undef name');
+    refused(sub { $uri->with_query([] => 1) }, 'with_query: a query name', 'with_query ref name');
+    refused(sub { $uri->with_query(a => [1, undef]) }, "with_query: the value of query 'a'", 'with_query undef in list');
+    refused(sub { $uri->with_query(a => {b => 1}) }, "with_query: the value of query 'a'", 'with_query hash value');
+    refused(sub { $uri->with_query(a => [[1]]) }, "with_query: the value of query 'a'", 'with_query nested ref');
+    refused(sub { $uri->add_query(undef, 1) }, 'add_query: a query name', 'add_query undef name');
+    refused(sub { $uri->add_query(a => [undef]) }, "add_query: the value of query 'a'", 'add_query undef in list');
+    refused(sub { $uri->add_query(a => sub { }) }, "add_query: the value of query 'a'", 'add_query code value');
+    refused(sub { $uri->without_query(undef) }, 'without_query: a query name', 'without_query undef');
+    refused(sub { $uri->without_query({}) }, 'without_query: a query name', 'without_query ref');
+    refused(sub { $uri->replace(query_params => [undef, 1]) }, 'replace: a query name', 'replace undef name');
+    refused(sub { $uri->replace(query_params => { a => {} }) }, "replace: the value of query 'a'", 'replace hash value');
+    is("" . $uri->with_query(x => undef), 'http://h/p', 'with_query still deletes with undef');
+};
+
+subtest 'path edits refuse segments and parts that are not plain text' => sub {
+    my $uri = uri('http://h/p?x=1');
+    refused(sub { $uri->join_path(undef) }, 'join_path: a path segment', 'join_path undef');
+    refused(sub { $uri->join_path('a', []) }, 'join_path: a path segment', 'join_path ref');
+    refused(sub { $uri->replace(path_segments => ['a', undef]) }, 'replace: a path segment', 'path_segments undef');
+    refused(sub { $uri->replace(path_segments => [{}]) }, 'replace: a path segment', 'path_segments ref');
+    refused(sub { $uri->replace(path => []) }, 'replace: path must be', 'path ref');
+    refused(sub { $uri->replace(raw_path => {}) }, 'replace: raw_path must be', 'raw_path ref');
+    refused(sub { $uri->replace(query_string => []) }, 'replace: query_string must be', 'query_string ref');
+    refused(sub { $uri->replace(fragment => {}) }, 'replace: fragment must be', 'fragment ref');
+};
+
+subtest 'an empty host or userinfo is refused by parse and replace' => sub {
+    my $uri = uri('http://h/p');
+    refused(sub { uri('http:///x') }, 'the host is empty', 'parse empty host');
+    refused(sub { uri('http://:80/x') }, 'the host is empty', 'parse empty host with a port');
+    refused(sub { $uri->replace(host => '') }, 'the host is empty', 'replace(host => "")');
+    refused(sub { $uri->replace(authority => '') }, 'the host is empty', 'replace(authority => "")');
+    refused(sub { $uri->replace(authority => ':80') }, 'the host is empty', 'replace(authority => ":80")');
+    refused(sub { $uri->replace(authority => 'u:p@h') }, 'userinfo is not supported', 'replace(authority) with userinfo');
+    refused(sub { $uri->replace(host => 'u:p@h') }, 'userinfo is not supported', 'replace(host) with userinfo');
+    is("" . $uri->replace(host => 'other'), 'http://other/p', 'a real host still replaces');
+};
+
+subtest 'path_query of an empty path is the root' => sub {
+    is(uri('http://h')->path_query, '/', 'no path');
+    is(uri('http://h?q=1')->path_query, '/?q=1', 'no path, with a query');
+    is(uri('http://h/p')->replace(path => '')->path_query, '/', 'replace(path => "")');
+};
+
 done_testing;
