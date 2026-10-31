@@ -42,6 +42,8 @@ a larger framework:
 - [PAGI::Request](https://metacpan.org/pod/PAGI%3A%3ARequest), [PAGI::Response](https://metacpan.org/pod/PAGI%3A%3AResponse), [PAGI::WebSocket](https://metacpan.org/pod/PAGI%3A%3AWebSocket), and [PAGI::SSE](https://metacpan.org/pod/PAGI%3A%3ASSE)
 - [PAGI::HTTPConnection](https://metacpan.org/pod/PAGI%3A%3AHTTPConnection) for reading a request's headers, query and cookies
 from the scope alone, in middleware or across HTTP, WebSocket and SSE
+- [PAGI::Utils::URI](https://metacpan.org/pod/PAGI%3A%3AUtils%3A%3AURI), the request's URL as an immutable value
+(`$request->uri`), for links built from the current URL
 - [PAGI::Routing](https://metacpan.org/pod/PAGI%3A%3ARouting) and [PAGI::Routing::URL](https://metacpan.org/pod/PAGI%3A%3ARouting%3A%3AURL)
 - [PAGI::Routing::OpenAPI](https://metacpan.org/pod/PAGI%3A%3ARouting%3A%3AOpenAPI) for an OpenAPI document from an application's routes
 (early beta: its interface may still change)

@@ -430,7 +430,8 @@ C<this scope has no path> when the scope has neither C<raw_path> nor C<path>.
     my $here = "$uri";
 
 The request's URL as a L<PAGI::Utils::URI>, an immutable value: the scheme,
-the client's C<Host> (else the server address), and L</request_uri>. It is
+the client's C<Host> (else the server address), and the path and query as
+sent, escaped as L</request_uri> escapes them (a leading C<//> is kept). It is
 built on first use and kept on the object, so every call returns the same
 value; nothing is written to the scope. The host is the client's and is not
 validated: put C<middleware('TrustedHosts', ...)> first to accept only the

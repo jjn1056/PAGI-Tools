@@ -1086,6 +1086,57 @@ percent-encoded; C<..> is not rewritten, so do not build C<path> from
 untrusted input. From a handler inside another mount, use the absolute
 name, C</static>. A route and a mount cannot share a name.
 
+=head2 Links from the current URL
+
+C<< $request->uri >> is the URL the client asked for, as a
+L<PAGI::Utils::URI>. It never changes: each edit returns a new URL, so one
+handler can make several links from it without building any of them by hand.
+The next page replaces C<page> and keeps the other parameters; a canonical
+link drops the tracking parameters; the same URL over https changes only the
+scheme; and C<resolve> turns C<path_for>'s path into an absolute URL, as an
+OAuth callback or an email link needs:
+
+  use v5.40;
+  use PAGI::Tools qw(compose path_for response route);
+  use PAGI::Test::Client;
+
+  my $app = compose(routes => [
+      route('/articles' => sub ($request) {
+          my $uri = $request->uri;
+          response('JSON', {
+              next      => $uri->with_query(page => 2)->to_string,
+              canonical => $uri->without_query(qw(utm_source utm_medium))->to_string,
+              callback  => $uri->resolve(path_for($request, 'oauth_return'))->to_string,
+          });
+      }),
+      route('/account' => sub ($request) {
+          my $uri = $request->uri;
+          return response('Redirect', $uri->replace(scheme => 'https'), status => 301)
+              unless $uri->is_secure;
+          response('Text', 'Your account');
+      }),
+      route('/oauth/return' => sub ($request) {
+          response('Text', 'Signed in');
+      }, name => 'oauth_return'),
+  ]);
+
+  my $client = PAGI::Test::Client->new(app => $app);
+  my $links  = $client->get('/articles?page=1&utm_source=mail&utm_medium=email')->json;
+  # next:      http://testserver/articles?utm_source=mail&utm_medium=email&page=2
+  # canonical: http://testserver/articles?page=1
+  # callback:  http://testserver/oauth/return
+  my $moved  = $client->get('/account?tab=billing');
+  # 301, Location: https://testserver/account?tab=billing
+
+C<with_query> puts the keys it sets after the ones it keeps, and writes a
+space in a value as C<+>. Under a root path the URL and C<path_for>'s path
+both carry the prefix, so the links stay right behind a proxy. The host is
+the client's C<Host> header and is not validated: put
+C<middleware('TrustedHosts', ...)> first before handing these URLs to
+anyone (see L<PAGI::Utils::URI/The host is not validated>). To send every
+plain-http request to https, use L<PAGI::Middleware::HTTPSRedirect> rather
+than a check in each handler.
+
 =head2 Matched-Route Metadata
 
 Each compiled Router records the route it selected in the request scope,

@@ -1331,7 +1331,8 @@ Query string parameters. Supports multiple formats:
 Keys and values are characters, sent UTF-8 percent-encoded, as a browser
 sends them and as the path is: C<< query => { q => "caf\x{e9}" } >> sends
 C<q=caf%C3%A9>, and the application reads C<"caf\x{e9}">. Pass characters, not
-encoded bytes: a byte string is encoded again.
+encoded bytes: a byte string is encoded again. A space is sent C<+> and a
+literal C<+> C<%2B>, as form encoding writes them.
 
 B<Note:> Query params are B<appended> to any existing query string in the path.
 To avoid duplicates, put all params either in the path or in the query option,
@@ -1345,8 +1346,9 @@ JSON request body. Automatically sets Content-Type to application/json.
 
 Form-encoded request body. Sets Content-Type to application/x-www-form-urlencoded.
 Keys and values are characters, sent UTF-8 percent-encoded as a browser sends
-a form (and as C<json> is UTF-8); for bytes of your own, pass C<body> and a
-Content-Type. Supports multiple formats:
+a form (and as C<json> is UTF-8), a space as C<+> and a literal C<+> as
+C<%2B>; for bytes of your own, pass C<body> and a Content-Type. Supports
+multiple formats:
 
     # Simple hash
     form => { user => 'admin', pass => 'secret' }

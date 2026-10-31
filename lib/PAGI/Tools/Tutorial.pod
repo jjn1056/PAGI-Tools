@@ -354,6 +354,12 @@ events.
   $req->query_string   # Query string (raw bytes)
   $req->scheme         # 'http'/'https' or WebSocket 'ws'/'wss'
   $req->host           # Host without its port
+  $req->uri            # The URL, a PAGI::Utils::URI: https://example.com/a?page=2
+
+Build a link from the current URL by editing C<< $req->uri >>, not by joining
+the scheme, host and path yourself: each edit returns a new URL, and
+L<PAGI::Tools::Cookbook/Links from the current URL> has the next page, a
+canonical link, the same URL over https and an absolute callback.
 
 =head3 Headers
 
