@@ -503,4 +503,18 @@ subtest 'headers returns the exact cached object used by Request lookups' => sub
     is $req->header('host'), 'mutated.example', 'explicit clone remains isolated';
 };
 
+subtest 'is_xhr' => sub {
+    my $xhr = sub {
+        my (@headers) = @_;
+        return PAGI::Request->new({ type => 'http', method => 'GET', headers => [@headers] })->is_xhr;
+    };
+    ok $xhr->(['X-Requested-With', 'XMLHttpRequest']), 'true for XMLHttpRequest';
+    ok $xhr->(['x-requested-with', 'xmlhttprequest']), 'true in lower case';
+    ok $xhr->(['X-REQUESTED-WITH', 'XMLHTTPREQUEST']), 'true in upper case';
+    ok !$xhr->(), 'false when the header is absent';
+    ok !$xhr->(['X-Requested-With', 'Fetch']), 'false for another value';
+    ok !$xhr->(['X-Requested-With', 'XMLHttpRequest'], ['X-Requested-With', 'XMLHttpRequest']),
+        'false when the field is repeated';
+};
+
 done_testing;

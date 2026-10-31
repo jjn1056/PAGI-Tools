@@ -167,9 +167,9 @@ my $require_json = sub {
         # Only check POST requests. PAGI::HTTPConnection reads the request's
         # headers without its body, so the endpoint still gets the whole body.
         # content_type is the parsed media type: lowercased, parameters
-        # dropped, and undef for a missing or repeated Content-Type field.
+        # dropped, and '' for a missing or repeated Content-Type field.
         if (($scope->{method} // '') eq 'POST') {
-            my $type = PAGI::HTTPConnection->new($scope)->headers->content_type // '';
+            my $type = PAGI::HTTPConnection->new($scope)->content_type;
             unless ($type eq 'application/json') {
                 my $response = PAGI::Pages->unsupported_media_type(
                     as     => 'json',

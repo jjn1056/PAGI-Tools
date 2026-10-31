@@ -3,6 +3,7 @@ use strict;
 use warnings;
 use Carp qw(croak);
 use Hash::MultiValue;
+use PAGI::Exception::HTTP ();
 use PAGI::Headers ();
 use PAGI::Utils::Scope ();
 use PAGI::Utils::URI ();
@@ -80,6 +81,51 @@ sub header     { return $_[0]->headers->get($_[1]) }
 
 # All values for a header
 sub header_all { return $_[0]->headers->get_all($_[1]) }
+
+# Content-Type shortcut
+sub content_type {
+    my ($self, @opts) = @_;
+    return $self->_client_header('content_type', 'Content-Type', @opts) // '';
+}
+
+# The Content-Type charset parameter, as sent (undef when there is none)
+sub charset {
+    my $self = shift;
+    my $parameters = $self->headers->content_type_parameters or return undef;
+    return $parameters->{charset};
+}
+
+# Content-Length shortcut
+sub content_length {
+    my $self = shift;
+    return $self->headers->get_single('content-length');
+}
+
+# Extract Bearer token from Authorization header
+sub bearer_token {
+    my ($self, @opts) = @_;
+    return $self->_client_header('authorization_bearer', 'Authorization', @opts);
+}
+
+# Extract Basic auth credentials
+sub basic_auth {
+    my ($self, @opts) = @_;
+    return $self->_client_header('authorization_basic', 'Authorization', @opts);
+}
+
+# Reads one of the client's header fields through PAGI::Headers' $method.
+# What raise_on_error refuses -- a duplicate or malformed field -- is the
+# client's error, so it is an HTTP 400, as a body the client got wrong is.
+# The options are checked first, so an option error stays a croak.
+sub _client_header {
+    my ($self, $method, $field, @opts) = @_;
+    my $raise = PAGI::Headers::_read_options($method, @opts);
+    return $self->headers->$method(@opts) unless $raise;
+    my @value;
+    return wantarray ? @value : $value[0]
+        if eval { @value = $self->headers->$method(@opts); 1 };
+    PAGI::Exception::HTTP->throw(400, "The $field header could not be parsed.");
+}
 
 # Query params as Hash::MultiValue (cached on the object)
 # Options: strict => 1 (croak on invalid UTF-8), raw => 1 (skip UTF-8 decoding)
@@ -432,6 +478,65 @@ field.
     my @values = $conn->header_all('Accept');
 
 Every value of a header, in order; an empty list when absent.
+
+=head2 content_type
+
+    my $type = $conn->content_type;   # 'application/json', or ''
+
+The normalized media type from one valid Content-Type field, without
+parameters. Returns C<''> when the field is absent, duplicated, or malformed
+(and always on a WebSocket, which carries none). With C<raise_on_error =E<gt> 1> a
+duplicate or malformed field throws a L<PAGI::Exception::HTTP> 400, C<The
+Content-Type header could not be parsed.>: the client sent it, so it is the
+client's error, which a Compose application answers by itself. Use
+L</header> with C<'Content-Type'> for the raw joined lookup; parsing does not
+alter the stored field. SSE has no body reader yet; on an SSE scope this reads
+the header only.
+
+=head2 charset
+
+    my $charset = $conn->charset;    # 'ISO-8859-1', or undef
+
+The C<charset> parameter of the Content-Type field, exactly as the client
+sent it (unquoted), or C<undef> when the field has none or is absent,
+duplicated or malformed. Nothing is decoded because of it. C<undef> on a
+WebSocket.
+
+=head2 content_length
+
+The Content-Length header value, or C<undef> when absent. A Content-Length
+sent twice reads as absent (C<undef>). C<undef> on a WebSocket.
+
+=head2 bearer_token
+
+    my $token = $conn->bearer_token(raise_on_error => 1);
+
+Returns an RFC 6750 Bearer token only when exactly one Authorization field is
+present. Missing fields and another identifiable scheme return C<undef>.
+Malformed Bearer credentials, including permissive whitespace and
+partial-token forms, and duplicate fields, return C<undef> by default; with
+C<raise_on_error =E<gt> 1> they throw a L<PAGI::Exception::HTTP> 400, C<The
+Authorization header could not be parsed.> Unknown options are errors (a
+croak, not a 400).
+
+=head2 basic_auth
+
+    my ($user, $pass) = $conn->basic_auth(raise_on_error => 1);
+
+Returns Basic C<(username, password)> bytes in list context only when exactly
+one Authorization field contains a valid conventional padded Base64 credential.
+It splits at the first colon and does not decode character encodings or verify
+credentials. Missing, another scheme, duplicates, and malformed input return
+C<(undef, undef)> by default; with C<raise_on_error =E<gt> 1> duplicates and
+malformed Basic credentials throw a L<PAGI::Exception::HTTP> 400, C<The
+Authorization header could not be parsed.> Unknown options are errors (a
+croak, not a 400).
+
+The 400 is the client's error, not the application's: a Compose application
+answers it by itself, at a route or in an authentication backend (see
+L<PAGI::Middleware::Authentication>), and does not log it. Its message never
+carries the credential. The L<PAGI::Headers> readers these call raise plain
+errors instead, since they parse any header list, not only a request's.
 
 =head1 QUERY PARAMETERS
 

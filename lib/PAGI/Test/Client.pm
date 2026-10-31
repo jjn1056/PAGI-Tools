@@ -766,7 +766,7 @@ sub _request_target {
     }
     my $path = $raw_path;
     if ($path =~ /%/) {
-        (my $bytes = $path) =~ s/%([0-9A-Fa-f]{2})/chr hex $1/eg;
+        my $bytes = PAGI::Utils::Scope::_unescape($path);
         $path = eval { Encode::decode('UTF-8', $bytes, Encode::FB_CROAK) } // $bytes;
     }
     return ($raw_path, $query_string, $path);

@@ -74,7 +74,7 @@ sub legacy_api_key ($app) {
 sub tenant ($app) {
     return async sub ($scope, $receive, $send) {
         my $conn = PAGI::HTTPConnection->new($scope);
-        my ($key) = ($conn->header('authorization') // '') =~ /\ABearer (\S+)\z/;
+        my $key = $conn->bearer_token;
         my $tenant = defined $key ? $TENANT_FOR_KEY{$key} : undef;
         return await invoke_app(response('JSON', { error => 'unknown API key' }, status => 401,
             headers => ['WWW-Authenticate' => 'Bearer']), $scope, $receive, $send)

@@ -339,7 +339,7 @@ sub wrap {
         # application or the refusal -- is handed the replay of the whole
         # body.
         my $downstream = $receive;
-        my $content_type = $connection->headers->content_type // '';
+        my $content_type = $connection->content_type;
         if (defined($failure) && $failure eq 'missing_token' && defined($self->{form_field})
                 && ($content_type eq 'application/x-www-form-urlencoded' || $content_type eq 'multipart/form-data')) {
             my ($reading, $replaying) = record_receive($receive);
@@ -385,11 +385,9 @@ async sub _form_token {
         die $error;
     }
     # The first occurrence decides, parsed as form_params parses it.
-    for my $pair (split /[&;]/, $body) {
-        my ($name, $value) = split /=/, $pair, 2;
-        next unless defined($name) && length($name)
-            && PAGI::Utils::Scope::_url_decode($name) eq $self->{form_field};
-        return ('token', PAGI::Utils::Scope::_url_decode($value // ''));
+    my @pairs = PAGI::Utils::Scope::_query_pairs($body, raw => 1);
+    while (my ($name, $value) = splice @pairs, 0, 2) {
+        return ('token', $value) if length($name) && $name eq $self->{form_field};
     }
     return ('missing');
 }

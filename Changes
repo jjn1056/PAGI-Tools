@@ -16,6 +16,12 @@
     every parse on the object. A scope with no path dies where the path is
     read; cookies come from every Cookie field, split on ';' only, quotes
     removed, never percent-decoded, the last of a repeated name winning.
+  - PAGI::HTTPConnection reads the header facts, so WebSocket and SSE get
+    them too: content_type, charset, content_length, bearer_token and
+    basic_auth moved up from PAGI::Request with their behaviour unchanged,
+    and raise_on_error still throws the HTTP 400. Calling code needs no change.
+  - PAGI::Request::is_xhr, true when X-Requested-With is XMLHttpRequest (any
+    case). fetch() does not send the header.
   - PAGI::Utils::URI, the request's URL as an immutable value, on every
     connection as $conn->uri (and $conn->base_uri, the application's root
     URL), kept on the connection, never in the scope: scheme, authority,

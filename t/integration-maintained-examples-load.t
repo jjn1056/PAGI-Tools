@@ -140,7 +140,7 @@ subtest 'endpoint demo names endpoint classes at routes' => sub {
         qr/route\('\/\*path'\s*=>\s*PAGI::App::File->from_app_path\('public'\)\)/,
         'static files are the final HTTP-only catch-all route');
     like($source,
-        qr/PAGI::HTTPConnection->new\(\$scope\)->headers->content_type \/\/ ''/,
+        qr/PAGI::HTTPConnection->new\(\$scope\)->content_type;/,
         'the JSON check reads the parsed media type through PAGI::HTTPConnection');
     unlike($source, qr/\$scope->\{headers\}/,
         'no middleware reads the raw scope headers by hand');
@@ -151,7 +151,7 @@ subtest 'example middleware reads the request through PAGI::HTTPConnection' => s
         'endpoint-class-demo/lib/MyApp/API.pm' =>
             qr/PAGI::HTTPConnection->new\(\$scope\)->header\('x-demo-token'\)/,
         'tenant-orders/app.pl' =>
-            qr/PAGI::HTTPConnection->new\(\$scope\)->headers->get_single\('x-api-key'\).*?my \$conn = PAGI::HTTPConnection->new\(\$scope\);.*?\$conn->header\('authorization'\).*?\$conn->query_param\('region'\)/s,
+            qr/PAGI::HTTPConnection->new\(\$scope\)->headers->get_single\('x-api-key'\).*?my \$conn = PAGI::HTTPConnection->new\(\$scope\);.*?\$conn->bearer_token.*?\$conn->query_param\('region'\)/s,
         'signed-requests/app.pl' =>
             qr/PAGI::HTTPConnection->new\(\$scope\)->header\('x-signature'\)/,
         'state-lifetimes/lib/MyApp/Middleware/AccessLog.pm' =>
