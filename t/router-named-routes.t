@@ -93,7 +93,7 @@ subtest 'path_for renders sorted query and one escaped fragment' => sub {
         route('/search/{term}' => handler(), name => 'search'),
     ]);
 
-    # Ruled by John 2026-10-31 ('I think switch would make it more as perl programmers expect, based on the most common systems'): a query writes a space as '+'.
+    # A query writes a space as '+', as a browser's form encoding does.
     is(
         $routing->path_for(
             '/search',

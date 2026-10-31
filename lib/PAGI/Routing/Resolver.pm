@@ -734,8 +734,8 @@ C<url_for_scope> additionally reads one request scope, takes the authority from
 L<PAGI::Utils::URI>, applies the compiled-router C<root_path> boundary, and
 returns an absolute string. It resolves the target once and maps the indexed
 route kind to the URL scheme; for example, suffix ordering is
-C<https://example.test/items/7?q=two%20words#details> for HTTP/SSE and
-C<wss://example.test/socket/7?q=two%20words#details> for WebSocket. Neither
+C<https://example.test/items/7?q=two+words#details> for HTTP/SSE and
+C<wss://example.test/socket/7?q=two+words#details> for WebSocket. Neither
 reverse method invokes receive/send callbacks or emits protocol events. The decoded Unicode boundary
 is escaped component-wise before it is joined to the already escaped generated
 path. Both return a string or croak; neither redirects or mutates a response.

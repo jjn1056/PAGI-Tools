@@ -152,7 +152,7 @@ sub run_cli {
 subtest 'the grammar' => sub {
     my $app = Local::Echo->new;
     is [(PAGI::App::_parse_request('/echo'))[0, 1]], ['GET', '/echo'], 'the method defaults to GET';
-    # Ruled by John 2026-10-31 ('I think switch would make it more as perl programmers expect, based on the most common systems'): a query or form body writes a space as '+'.
+    # A query or form body writes a space as '+', as a browser's form encoding does.
     my ($m, $p, %o) = PAGI::App::_parse_request(GET => '/echo?a=1', 'X-Thing:', 'v', 'b=2 3');
     is [$m, $p, $o{headers}], ['GET', '/echo?a=1&b=2+3', [['X-Thing', 'v']]], 'a header; a field joins the query';
     (undef, undef, %o) = PAGI::App::_parse_request(POST => '/echo', 'b=2 3');

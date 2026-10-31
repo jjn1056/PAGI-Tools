@@ -63,7 +63,7 @@ subtest 'every form a value can take' => sub {
 };
 
 subtest 'a space is + in a query and a form body' => sub {
-    # Ruled by John 2026-10-31 ('I think switch would make it more as perl programmers expect, based on the most common systems'): a space is '+', a literal '+' is %2B.
+    # Form encoding writes a space as '+' and a literal '+' as %2B.
     %seen = ();
     $client->get('/', query => [[q => 'red shoes']]);
     is $seen{raw_query}, 'q=red+shoes', 'query: a space is +';

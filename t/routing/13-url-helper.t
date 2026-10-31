@@ -455,7 +455,7 @@ subtest 'compact and named params-query-fragment forms are equivalent' => sub {
     );
     my $scope = _scope('http', $resolver, scheme => 'https', root_path => '/edge');
     my $urls = url($scope);
-    # Ruled by John 2026-10-31 ('I think switch would make it more as perl programmers expect, based on the most common systems'): a query writes a space as '+'.
+    # A query writes a space as '+', as a browser's form encoding does.
     my @cases = (
         ['defaults', ['/index'], '/items'],
         ['compact params', ['/show', { id => 7 }], '/items/7'],
@@ -557,7 +557,7 @@ subtest 'root_path and nested Mount boundaries are applied exactly once' => sub 
         },
     ));
 
-    # Ruled by John 2026-10-31 ('I think switch would make it more as perl programmers expect, based on the most common systems'): a query writes a space as '+'.
+    # A query writes a space as '+', as a browser's form encoding does.
     is($urls->path_for('item', { id => 9 }, { q => 'two words' }),
         '/proxy/service/spaces/blue/items/9?q=two+words',
         'relative nested path uses the compiled frame boundary once');
@@ -592,7 +592,7 @@ subtest 'decoded boundaries and generated suffixes encode exactly once' => sub {
         scheme => 'https',
         headers => [['host', 'public.example']],
     ));
-    # # Ruled by John 2026-10-31 ('I think switch would make it more as perl programmers expect, based on the most common systems'): a space in a query is '+'.
+    # A space in a query is '+', as a browser's form encoding does.
     my $path = '/proxy%20space/50%25/caf%C3%A9/items/a%20b%25'
         . '?q=caf%C3%A9+%25#two%20words';
     is($urls->path_for('/item', { id => 'a b%' },

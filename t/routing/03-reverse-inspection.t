@@ -175,7 +175,7 @@ subtest 'mounted Router applications publish placement-specific reverse paths' =
     is($unnamed->path_for('/show', { id => 9 }), '/people/9',
         'an unnamed placement retains the current namespace');
     is(
-        # Ruled by John 2026-10-31 ('I think switch would make it more as perl programmers expect, based on the most common systems'): a query writes a space as '+'.
+        # A query writes a space as '+', as a browser's form encoding does.
         $root->path_for('/left/show', { id => 7 },
             { q => 'two words' }, 'details'),
         '/left/7?q=two+words#details',
@@ -404,7 +404,7 @@ subtest 'Router path_for accepts equivalent compact and named reverse arguments'
         route('/items' => sub { }, name => 'index'),
     ]);
 
-    # Ruled by John 2026-10-31 ('I think switch would make it more as perl programmers expect, based on the most common systems'): a query writes a space as '+'.
+    # A query writes a space as '+', as a browser's form encoding does.
     my @cases = (
         ['defaults', ['/index'], '/items'],
         ['compact params', ['/show', { id => 7 }], '/items/7'],
@@ -697,7 +697,7 @@ subtest 'reverse rendering validates complete ancestry and escapes values' => su
     ]);
 
     is(
-        # Ruled by John 2026-10-31 ('I think switch would make it more as perl programmers expect, based on the most common systems'): a query writes a space as '+'.
+        # A query writes a space as '+', as a browser's form encoding does.
         $routing->path_for(
             '/account/show',
             { account => "caf\x{e9} space", item => 'right' },

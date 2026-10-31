@@ -149,10 +149,10 @@ sub _encode_path {
     return $bytes;
 }
 
-# Percent-encode one URL component -- a path parameter, a query key or
-# value, a form field -- as UTF-8, keeping only unreserved characters
-# literal. The routing Pattern, the Resolver and PAGI::Test::Client share
-# it, so a value encodes the same wherever Tools puts it in a URL.
+# Percent-encode one path segment or fragment as UTF-8, keeping only
+# unreserved characters literal. The routing Pattern, the Resolver and the
+# URI edits share it, so a segment encodes the same wherever Tools puts it
+# in a URL. Query and form text goes through _encode_form_component.
 sub _encode_component {
     my ($value) = @_;
     my $bytes = Encode::encode('UTF-8', $value, Encode::FB_CROAK);

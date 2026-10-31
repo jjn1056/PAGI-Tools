@@ -528,7 +528,7 @@ subtest 'mounted application runtime boundaries retain root frames and decoded p
         raw_path => '/tenants/caf%C3%A9%2050%25/items/one',
         root_path => '/edge root')), 'tenant',
         'a decoded dynamic Mount prefix reaches its child');
-    # Ruled by John 2026-10-31 ('I think switch would make it more as perl programmers expect, based on the most common systems'): a query writes a space as '+'.
+    # A query writes a space as '+', as a browser's form encoding does.
     is(\@tenant_seen, [{
         scope_root => "/edge root/tenants/$tenant_value",
         frame_root => '/edge root',
