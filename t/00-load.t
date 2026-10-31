@@ -77,6 +77,7 @@ my @load_modules = qw(
     PAGI::Utils::AppObject
     PAGI::Utils::Scope
     PAGI::Utils::TextDecoder
+    PAGI::Utils::URI
     PAGI::Utils::_SendValidation
     PAGI::Test::Client
     PAGI::Test::Response

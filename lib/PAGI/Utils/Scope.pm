@@ -27,6 +27,22 @@ sub scope_from_source {
     return $scope;
 }
 
+# The scope's scheme; without one, ws for a WebSocket scope and http for an
+# HTTP or SSE scope.
+sub scheme {
+    my ($scope) = @_;
+    return $scope->{scheme} // ($scope->{type} eq 'websocket' ? 'ws' : 'http');
+}
+
+# raw_path is rebuilt from path when the scope has no raw_path; with
+# neither there is nothing to answer from.
+sub _require_path_source {
+    my ($scope) = @_;
+    croak 'this scope has no path'
+        unless defined $scope->{raw_path} || defined $scope->{path};
+    return;
+}
+
 # The full path the client requested, percent-encoded: raw_path is that at
 # every mount level (mounts leave it; a server root path is prepended). A
 # scope without raw_path rebuilds it from root_path and path, which cannot
@@ -127,6 +143,51 @@ sub _unescape {
     my ($value) = @_;
     $value =~ s/%([0-9A-Fa-f]{2})/chr hex $1/eg;
     return $value;
+}
+
+# An escaped path as text, decoded as the server decodes the scope path:
+# percent-decoded, then UTF-8 decoded, or left as bytes when not UTF-8.
+sub _decode_path {
+    my ($raw_path) = @_;
+    my $bytes = _unescape($raw_path);
+    my $text = eval { Encode::decode('UTF-8', $bytes, Encode::FB_CROAK | Encode::LEAVE_SRC) };
+    return defined $text ? $text : $bytes;
+}
+
+# URL decode a query or form component: "+" is a space.
+sub _url_decode {
+    my ($str) = @_;
+    return '' unless defined $str;
+    $str =~ s/\+/ /g;
+    return _unescape($str);
+}
+
+# Decode UTF-8 with replacement, or croak in strict mode.
+sub _decode_utf8 {
+    my ($str, $strict) = @_;
+    return '' unless defined $str;
+    my $flag = $strict ? Encode::FB_CROAK : Encode::FB_DEFAULT;
+    $flag |= Encode::LEAVE_SRC;
+    return Encode::decode('UTF-8', $str, $flag);
+}
+
+# A query string's key/value pairs as a flat list, in order: split on "&"
+# or ";", each piece at its first "=" (a bare key has the value ''),
+# percent-decoded with "+" as a space, then UTF-8 decoded unless raw
+# (strict croaks on invalid UTF-8; otherwise it is replaced).
+sub _query_pairs {
+    my ($query_string, %opts) = @_;
+    my @pairs;
+    for my $part (split /[&;]/, $query_string // '') {
+        next unless length $part;
+        my ($key, $val) = split /=/, $part, 2;
+        for my $component ($key, $val) {
+            $component = _url_decode($component);
+            $component = _decode_utf8($component, $opts{strict}) unless $opts{raw};
+            push @pairs, $component;
+        }
+    }
+    return @pairs;
 }
 
 # Percent-encode what RFC 3986 does not allow in a query (and so in a

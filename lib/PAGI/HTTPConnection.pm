@@ -2,11 +2,14 @@ package PAGI::HTTPConnection;
 use strict;
 use warnings;
 use Carp qw(croak);
-use Encode qw(decode FB_CROAK FB_DEFAULT LEAVE_SRC);
 use Hash::MultiValue;
 use PAGI::Headers ();
 use PAGI::Utils::Scope ();
+use PAGI::Utils::URI ();
 use Scalar::Util qw(blessed);
+
+# A croak from a helper a reader calls names the caller's line.
+our @CARP_NOT = qw(PAGI::Utils::Scope PAGI::Utils::URI);
 
 sub new {
     my ($class, $scope, @extra) = @_;
@@ -28,10 +31,7 @@ sub server       { shift->{scope}{server} }
 sub http_version { shift->{scope}{http_version} // '1.1' }
 sub query_string { shift->{scope}{query_string} // '' }
 
-sub scheme {
-    my $scope = shift->{scope};
-    return $scope->{scheme} // ($scope->{type} eq 'websocket' ? 'ws' : 'http');
-}
+sub scheme { PAGI::Utils::Scope::scheme(shift->{scope}) }
 
 # A scope without a path is a bug (the PAGI spec requires one), so reading
 # it fails where it is used rather than answering a made-up '/'.
@@ -43,43 +43,34 @@ sub path {
 
 sub raw_path {
     my $scope = shift->{scope};
-    _require_path_source($scope);
+    PAGI::Utils::Scope::_require_path_source($scope);
     return PAGI::Utils::Scope::raw_path($scope);
 }
 
 sub request_uri {
     my $scope = shift->{scope};
-    _require_path_source($scope);
+    PAGI::Utils::Scope::_require_path_source($scope);
     return PAGI::Utils::Scope::request_uri($scope);
 }
 
 sub raw_path_info { PAGI::Utils::Scope::raw_path_info(shift->{scope}) }
 
-# raw_path is rebuilt from path when the scope has no raw_path; with
-# neither there is nothing to answer from.
-sub _require_path_source {
-    my ($scope) = @_;
-    croak 'this scope has no path'
-        unless defined $scope->{raw_path} || defined $scope->{path};
-    return;
+# The request's URL as an immutable PAGI::Utils::URI, built once and kept on
+# the object (never in the scope).
+sub uri {
+    my $self = shift;
+    return $self->{_uri} //= PAGI::Utils::URI->from_scope($self->{scope});
 }
 
-# Internal: URL decode a string (handles + as space)
-sub _url_decode {
-    my ($str) = @_;
-    return '' unless defined $str;
-    $str =~ s/\+/ /g;
-    $str =~ s/%([0-9A-Fa-f]{2})/chr(hex($1))/ge;
-    return $str;
-}
-
-# Internal: Decode UTF-8 with replacement or croak in strict mode
-sub _decode_utf8 {
-    my ($str, $strict) = @_;
-    return '' unless defined $str;
-    my $flag = $strict ? FB_CROAK : FB_DEFAULT;
-    $flag |= LEAVE_SRC;
-    return decode('UTF-8', $str, $flag);
+# The application's root URL: the request's scheme and authority, the
+# encoded root path and a trailing "/".
+sub base_uri {
+    my $self = shift;
+    return $self->{_base_uri} if $self->{_base_uri};
+    my $root = PAGI::Utils::Scope::_encode_path($self->{scope}{root_path} // '');
+    $root .= '/' unless $root =~ m{/\z};
+    return $self->{_base_uri} = $self->uri->_clone(
+        raw_path => $root, query_string => '', fragment => '');
 }
 
 # The scope's headers as a PAGI::Headers, parsed once per object.
@@ -105,27 +96,8 @@ sub query_params {
     my $cache_key = $raw ? '_query_raw' : ($strict ? '_query_strict' : '_query');
     return $self->{$cache_key} if $self->{$cache_key};
 
-    my $qs = $self->query_string;
-    my @pairs;
-
-    for my $part (split /[&;]/, $qs) {
-        next unless length $part;
-        my ($key, $val) = split /=/, $part, 2;
-        $key //= '';
-        $val //= '';
-
-        # URL decode (handles + as space)
-        my $key_decoded = _url_decode($key);
-        my $val_decoded = _url_decode($val);
-
-        # UTF-8 decode unless raw mode
-        my $key_final = $raw ? $key_decoded : _decode_utf8($key_decoded, $strict);
-        my $val_final = $raw ? $val_decoded : _decode_utf8($val_decoded, $strict);
-
-        push @pairs, $key_final, $val_final;
-    }
-
-    $self->{$cache_key} = Hash::MultiValue->new(@pairs);
+    $self->{$cache_key} = Hash::MultiValue->new(PAGI::Utils::Scope::_query_pairs(
+        $self->query_string, raw => $raw, strict => $strict));
     return $self->{$cache_key};
 }
 
@@ -406,6 +378,31 @@ percent-encoded and a leading C<//> reduced to C</>. It is the URL to
 redirect back to, at any mount depth and behind a server root path. Dies
 C<this scope has no path> when the scope has neither C<raw_path> nor C<path>.
 
+=head2 uri
+
+    my $uri = $conn->uri;          # https://example.com/app/items/42?page=2
+    my $page = $uri->query_params->get('page');
+    my $here = "$uri";
+
+The request's URL as a L<PAGI::Utils::URI>, an immutable value: the scheme,
+the client's C<Host> (else the server address), and L</request_uri>. It is
+built on first use and kept on the object, so every call returns the same
+value; nothing is written to the scope. The host is the client's and is not
+validated: put C<middleware('TrustedHosts', ...)> first to accept only the
+hosts the application serves (see L<PAGI::Utils::URI/The host is not
+validated>). Dies as L</request_uri> does when the scope has no path, and
+C<scope server cannot provide an authority> when it has neither a C<Host>
+nor a usable C<server>.
+
+=head2 base_uri
+
+    my $base = $conn->base_uri;    # https://example.com/app/
+
+The application's root URL as a L<PAGI::Utils::URI>: L</uri>'s scheme and
+authority, then C<root_path> percent-encoded and a trailing C</> (one only),
+with no query and no fragment. Built on first use and kept on the object,
+like L</uri>; it dies when L</uri> does.
+
 =head2 query_string
 
 The raw query string, without the leading C<?>; C<''> when absent.
@@ -565,14 +562,14 @@ Croaks when a present state value is not a hashref.
 
 The object is a blessed hash. PAGI-Tools uses the field C<scope> and fields
 whose names start with C<_> (the parse caches C<_headers>, C<_query>,
-C<_query_raw>, C<_query_strict> and C<_cookies>); a subclass adds fields under
-any other name. One object reads one scope: a scope copy (a middleware's
-rewrite, say) needs a new object, since an object answers from the scope it
-was built over and the parses it kept.
+C<_query_raw>, C<_query_strict>, C<_cookies>, C<_uri> and C<_base_uri>); a
+subclass adds fields under any other name. One object reads one scope: a
+scope copy (a middleware's rewrite, say) needs a new object, since an object
+answers from the scope it was built over and the parses it kept.
 
 =head1 SEE ALSO
 
 L<PAGI::Request>, L<PAGI::WebSocket>, L<PAGI::SSE>, L<PAGI::Headers>,
-L<PAGI::State>, L<Hash::MultiValue>
+L<PAGI::State>, L<PAGI::Utils::URI>, L<Hash::MultiValue>
 
 =cut

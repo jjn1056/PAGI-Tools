@@ -16,6 +16,15 @@
     every parse on the object. A scope with no path dies where the path is
     read; cookies come from every Cookie field, split on ';' only, quotes
     removed, never percent-decoded, the last of a repeated name winning.
+  - PAGI::Utils::URI, the request's URL as an immutable value, on every
+    connection as $conn->uri (and $conn->base_uri, the application's root
+    URL), kept on the connection, never in the scope: scheme, authority,
+    host, port (only an explicit one), path (decoded, with the root path),
+    raw_path, query_string, query_params and raw_query_params. The host is
+    the client's Host as sent, unvalidated, and percent-encoded in the
+    string form, so a hostile Host cannot change the path or query; an
+    unedited URL is scheme://authority followed by request_uri. eq compares
+    the string forms byte for byte.
   - PAGI::Middleware::Stash (middleware('Stash')) gives every layer below
     it one shared stash, so a middleware sees what a handler stored, after
     the handler returns, through any scope copies between them.

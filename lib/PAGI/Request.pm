@@ -5,6 +5,7 @@ use parent 'PAGI::HTTPConnection';
 use Hash::MultiValue;
 use PAGI::Headers ();
 use PAGI::Authority ();
+use PAGI::Utils::Scope ();
 use Encode qw(find_encoding FB_CROAK FB_DEFAULT LEAVE_SRC);
 use Future::AsyncAwait;
 use JSON::MaybeXS qw(decode_json);
@@ -37,7 +38,7 @@ sub raw          { shift->{scope} }
 # client's error, a PAGI::Exception::RequestBody (400) rather than a croak.
 sub _decode_body_utf8 {
     my ($str, $strict) = @_;
-    my $text = eval { PAGI::HTTPConnection::_decode_utf8($str, $strict) };
+    my $text = eval { PAGI::Utils::Scope::_decode_utf8($str, $strict) };
     return $text unless $@;
     PAGI::Exception::RequestBody->throw(
         reason => 'invalid_encoding',
@@ -364,8 +365,8 @@ async sub form_params {
         $val //= '';
 
         # URL decode (handles + as space)
-        my $key_decoded = PAGI::HTTPConnection::_url_decode($key);
-        my $val_decoded = PAGI::HTTPConnection::_url_decode($val);
+        my $key_decoded = PAGI::Utils::Scope::_url_decode($key);
+        my $val_decoded = PAGI::Utils::Scope::_url_decode($val);
 
         # UTF-8 decode unless raw mode
         my $key_final = $raw ? $key_decoded : _decode_body_utf8($key_decoded, $strict);

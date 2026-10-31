@@ -16,6 +16,7 @@ use PAGI::Request::MultipartStream ();
 use PAGI::Response::Text ();
 use PAGI::Utils ();
 use PAGI::Utils::Middleware qw(record_receive);
+use PAGI::Utils::Scope ();
 
 =head1 NAME
 
@@ -387,8 +388,8 @@ async sub _form_token {
     for my $pair (split /[&;]/, $body) {
         my ($name, $value) = split /=/, $pair, 2;
         next unless defined($name) && length($name)
-            && PAGI::HTTPConnection::_url_decode($name) eq $self->{form_field};
-        return ('token', PAGI::HTTPConnection::_url_decode($value // ''));
+            && PAGI::Utils::Scope::_url_decode($name) eq $self->{form_field};
+        return ('token', PAGI::Utils::Scope::_url_decode($value // ''));
     }
     return ('missing');
 }
