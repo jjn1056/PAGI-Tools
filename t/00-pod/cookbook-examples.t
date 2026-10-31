@@ -298,7 +298,11 @@ subtest 'Links from the current URL recipe executes as published' => sub {
             . "die 'canonical: ' . \$links->{canonical} unless \$links->{canonical} eq 'http://testserver/articles?page=1';\n"
             . "die 'callback: ' . \$links->{callback} unless \$links->{callback} eq 'http://testserver/oauth/return';\n"
             . "die 'https: ' . \$moved->status unless \$moved->status == 301;\n"
-            . "die 'location: ' . \$moved->header('Location') unless \$moved->header('Location') eq 'https://testserver/account?tab=billing';\n",
+            . "die 'location: ' . \$moved->header('Location') unless \$moved->header('Location') eq 'https://testserver/account?tab=billing';\n"
+            . "my \@sent;\n"
+            . "\$app->to_app->({ type => 'http', method => 'GET', scheme => 'http', path => '/account', raw_path => '/account', query_string => 'tab=billing', root_path => '', headers => [['host', 'testserver:5000']], server => ['testserver', 5000] }, sub { Future->done({ type => 'http.request', body => '', more => 0 }) }, sub { push \@sent, \$_[0]; Future->done })->get;\n"
+            . "my (\$location) = map { \$_->[1] } grep { lc(\$_->[0]) eq 'location' } \@{ \$sent[0]{headers} };\n"
+            . "die 'port: ' . (\$location // 'undef') unless (\$location // '') eq 'https://testserver/account?tab=billing';\n",
     );
 };
 

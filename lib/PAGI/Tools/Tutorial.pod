@@ -1269,12 +1269,11 @@ Create reusable middleware by extending L<PAGI::Middleware>:
           return await $app->($scope, $receive, $send)
               if $scope->{type} eq 'lifespan';
 
-          # Check auth header. PAGI::HTTPConnection reads the scope without
-          # touching the body, which stays the application's to read.
-          my $auth = PAGI::HTTPConnection->new($scope)->header('Authorization');
+          # Check the bearer token. PAGI::HTTPConnection reads the scope
+          # without touching the body, which stays the application's to read.
+          my $token = PAGI::HTTPConnection->new($scope)->bearer_token;
 
-          if ($auth && $auth =~ /^Bearer (.+)/) {
-              my $token = $1;
+          if (defined $token) {
               my $user = verify_token($token, $self->{secret});
               PAGI::Stash->new($scope)->set(user => $user) if $user;
           }
