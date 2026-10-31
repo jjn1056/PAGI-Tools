@@ -489,7 +489,7 @@ sub _render_resolved_reverse {
         my $value = $arguments->{query}{$key};
         croak "query parameter '$key' must be a scalar" if ref($value);
         $value = '' unless defined $value;
-        push @pairs, _encode_component($key) . '=' . _encode_component($value);
+        push @pairs, _encode_form_component($key) . '=' . _encode_form_component($value);
     }
     $path .= '?' . join('&', @pairs) if @pairs;
     $path .= '#' . _encode_component($arguments->{fragment})
@@ -632,6 +632,7 @@ sub _join_root_path {
 }
 
 sub _encode_component { return PAGI::Utils::Scope::_encode_component(@_) }
+sub _encode_form_component { return PAGI::Utils::Scope::_encode_form_component(@_) }
 
 sub named_routes {
     my ($self) = @_;

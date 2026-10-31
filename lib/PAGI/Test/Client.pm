@@ -773,8 +773,8 @@ sub _request_target {
 }
 
 # A form or query value is characters, sent UTF-8 percent-encoded as a
-# browser sends it, like the path and json =>.
-sub _url_encode { return PAGI::Utils::Scope::_encode_component(@_) }
+# browser sends it, a space as "+", like the path and json =>.
+sub _url_encode { return PAGI::Utils::Scope::_encode_form_component(@_) }
 
 # HTTP/1.1 connection-specific header stripping (PAGI spec: "Over HTTP/1.1
 # the server must ignore or strip application-supplied Transfer-Encoding and

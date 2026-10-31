@@ -107,6 +107,16 @@ sub _encode_component {
     return $bytes;
 }
 
+# Percent-encode a query key or value, or a form field, as an
+# application/x-www-form-urlencoded component: _encode_component, except a
+# space is "+", as a browser writes a form. A literal "+" is still "%2B".
+sub _encode_form_component {
+    my ($value) = @_;
+    my $encoded = _encode_component($value);
+    $encoded =~ s/%20/+/g;
+    return $encoded;
+}
+
 sub _unescape {
     my ($value) = @_;
     $value =~ s/%([0-9A-Fa-f]{2})/chr hex $1/eg;

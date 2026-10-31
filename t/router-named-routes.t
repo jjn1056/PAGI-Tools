@@ -93,6 +93,7 @@ subtest 'path_for renders sorted query and one escaped fragment' => sub {
         route('/search/{term}' => handler(), name => 'search'),
     ]);
 
+    # Ruled by John 2026-10-31 ('I think switch would make it more as perl programmers expect, based on the most common systems'): a query writes a space as '+'.
     is(
         $routing->path_for(
             '/search',
@@ -100,7 +101,7 @@ subtest 'path_for renders sorted query and one escaped fragment' => sub {
             { page => 2, 'a key' => 'A&B' },
             'result details',
         ),
-        '/search/two%20words?a%20key=A%26B&page=2#result%20details',
+        '/search/two%20words?a+key=A%26B&page=2#result%20details',
         'path, query, and fragment use shared component encoding',
     );
     is(

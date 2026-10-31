@@ -432,6 +432,22 @@ subtest 'capture inheritance selects target keys only' => sub {
         '/target/explicit', 'explicit values replace inherited values');
 };
 
+subtest 'a query writes a space as +; paths and fragments keep %20' => sub {
+    my $resolver = _resolver(route('/items/{id}' => sub { }, name => 'item'));
+    my $urls = url(_scope('http', $resolver, scheme => 'https',
+        headers => [['host', 'public.example']]));
+    like($urls->url_for('/item', { id => 7 }, { q => 'red shoes' }),
+        qr/\?q=red\+shoes\z/, 'a space in a query value is +');
+    like($urls->url_for('/item', { id => 7 }, { 'a key' => 'v' }),
+        qr/\?a\+key=v\z/, 'a space in a query key is +');
+    like($urls->url_for('/item', { id => 7 }, { q => 'c++' }),
+        qr/\?q=c%2B%2B\z/, 'a literal + is %2B');
+    like($urls->url_for('/item', { id => 'a b' }),
+        qr{/items/a%20b\z}, 'a path parameter keeps %20');
+    like($urls->url_for('/item', { id => 7 }, {}, 'a b'),
+        qr/#a%20b\z/, 'a fragment keeps %20');
+};
+
 subtest 'compact and named params-query-fragment forms are equivalent' => sub {
     my $resolver = _resolver(
         route('/items/{id}' => sub { }, name => 'show'),
@@ -439,23 +455,24 @@ subtest 'compact and named params-query-fragment forms are equivalent' => sub {
     );
     my $scope = _scope('http', $resolver, scheme => 'https', root_path => '/edge');
     my $urls = url($scope);
+    # Ruled by John 2026-10-31 ('I think switch would make it more as perl programmers expect, based on the most common systems'): a query writes a space as '+'.
     my @cases = (
         ['defaults', ['/index'], '/items'],
         ['compact params', ['/show', { id => 7 }], '/items/7'],
         ['compact query', ['/show', { id => 7 }, { q => 'two words' }],
-            '/items/7?q=two%20words'],
+            '/items/7?q=two+words'],
         ['compact fragment', ['/show', { id => 7 }, { q => 'two words' },
-            'details'], '/items/7?q=two%20words#details'],
+            'details'], '/items/7?q=two+words#details'],
         ['named full', ['/show', params => { id => 7 },
             query => { q => 'two words' }, fragment => 'details'],
-            '/items/7?q=two%20words#details'],
+            '/items/7?q=two+words#details'],
         ['compact query only', ['/index', {}, { q => 'two words' }],
-            '/items?q=two%20words'],
+            '/items?q=two+words'],
         ['compact fragment only', ['/index', {}, {}, 'two words'],
             '/items#two%20words'],
         ['named reordered', ['/show', fragment => 'details',
             query => { q => 'two words' }, params => { id => 7 }],
-            '/items/7?q=two%20words#details'],
+            '/items/7?q=two+words#details'],
         ['compact undef fragment', ['/show', { id => 7 }, {}, undef], '/items/7'],
         ['named undef fragment', ['/show', fragment => undef,
             params => { id => 7 }], '/items/7'],
@@ -540,8 +557,9 @@ subtest 'root_path and nested Mount boundaries are applied exactly once' => sub 
         },
     ));
 
+    # Ruled by John 2026-10-31 ('I think switch would make it more as perl programmers expect, based on the most common systems'): a query writes a space as '+'.
     is($urls->path_for('item', { id => 9 }, { q => 'two words' }),
-        '/proxy/service/spaces/blue/items/9?q=two%20words',
+        '/proxy/service/spaces/blue/items/9?q=two+words',
         'relative nested path uses the compiled frame boundary once');
     is($urls->url_for('/service/space/sibling',
         { space => 'blue', id => 10 }),
@@ -574,8 +592,9 @@ subtest 'decoded boundaries and generated suffixes encode exactly once' => sub {
         scheme => 'https',
         headers => [['host', 'public.example']],
     ));
+    # # Ruled by John 2026-10-31 ('I think switch would make it more as perl programmers expect, based on the most common systems'): a space in a query is '+'.
     my $path = '/proxy%20space/50%25/caf%C3%A9/items/a%20b%25'
-        . '?q=caf%C3%A9%20%25#two%20words';
+        . '?q=caf%C3%A9+%25#two%20words';
     is($urls->path_for('/item', { id => 'a b%' },
         { q => "caf\x{e9} %" }, 'two words'), $path,
         'path_for encodes root, params, query, and fragment once');

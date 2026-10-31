@@ -304,6 +304,9 @@
     SameSite=None and secure.
 
   [Changed]
+  - url_for and path_for write a space in a query as "+" (path segments and
+    the fragment keep "%20"). PAGI::Test::Client's query => and form =>
+    (shipped in 0.002002) do the same, a literal "+" being "%2B".
   - PAGI::WebSocket and PAGI::SSE hand each send to the server at once and
     rely on it to keep a connection's sends in call order, as
     PAGI::Spec::Www 0.7 requires. A handler with several producers needs no

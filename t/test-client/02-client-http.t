@@ -424,7 +424,8 @@ subtest 'query parameter encoding' => sub {
 
     # Test special characters are encoded
     my $res = $client->get('/test', query => { 'key with spaces' => 'value&with=special' });
-    like $res->text, qr/key%20with%20spaces/, 'key is URL encoded';
+    # Ruled by John 2026-10-31 ('I think switch would make it more as perl programmers expect, based on the most common systems'): a query writes a space as '+'.
+    like $res->text, qr/key\+with\+spaces/, 'key is URL encoded';
     like $res->text, qr/value%26with%3Dspecial/, 'value is URL encoded';
 
     # Test query params merge with path query

@@ -62,4 +62,19 @@ subtest 'every form a value can take' => sub {
     is $seen{raw_query}, 'cl%C3%A9=v', 'a key is encoded too';
 };
 
+subtest 'a space is + in a query and a form body' => sub {
+    # Ruled by John 2026-10-31 ('I think switch would make it more as perl programmers expect, based on the most common systems'): a space is '+', a literal '+' is %2B.
+    %seen = ();
+    $client->get('/', query => [[q => 'red shoes']]);
+    is $seen{raw_query}, 'q=red+shoes', 'query: a space is +';
+    is $seen{query}, ['red shoes'], 'query: the route reads the space';
+    %seen = ();
+    $client->post('/', form => [[f => 'red shoes']]);
+    is $seen{body}, 'f=red+shoes', 'form: a space is +';
+    is $seen{form}, ['red shoes'], 'form: the route reads the space';
+    %seen = ();
+    $client->get('/', query => [[q => 'c++']]);
+    is $seen{raw_query}, 'q=c%2B%2B', 'a literal + is %2B';
+};
+
 done_testing;
