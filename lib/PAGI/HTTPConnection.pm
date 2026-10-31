@@ -391,8 +391,8 @@ value; nothing is written to the scope. The host is the client's and is not
 validated: put C<middleware('TrustedHosts', ...)> first to accept only the
 hosts the application serves (see L<PAGI::Utils::URI/The host is not
 validated>). Dies as L</request_uri> does when the scope has no path, and
-C<scope server cannot provide an authority> when it has neither a C<Host>
-nor a usable C<server>.
+C<no Host header, and the scope server cannot provide an authority> when it
+has neither a C<Host> nor a usable C<server>.
 
 =head2 base_uri
 

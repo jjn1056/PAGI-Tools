@@ -21,8 +21,9 @@
     URL), kept on the connection, never in the scope: scheme, authority,
     host, port (only an explicit one), path (decoded, with the root path),
     raw_path, query_string, query_params and raw_query_params. The host is
-    the client's Host as sent, unvalidated, and percent-encoded in the
-    string form, so a hostile Host cannot change the path or query; an
+    the client's Host read as Mojolicious reads it (percent-decoded),
+    unvalidated, and percent-encoded again in the string form, so a hostile
+    Host cannot change the path or query; an
     unedited URL is scheme://authority followed by request_uri. eq compares
     the string forms byte for byte.
   - PAGI::Middleware::Stash (middleware('Stash')) gives every layer below

@@ -36,8 +36,8 @@ subtest 'a hostile Host cannot change the path or query' => sub {
     );
     is("$uri", 'http://evil.com%2Fx%3F/items?page=1', 'the string form escapes the Host');
     is($uri->to_string, "$uri", 'to_string is the string form');
-    is($uri->host, 'evil.com/x?', 'host is the Host as sent');
-    is($uri->authority, 'evil.com/x?', 'authority is the Host as sent');
+    is($uri->host, 'evil.com/x?', 'host is the Host, unvalidated');
+    is($uri->authority, 'evil.com/x?', 'authority is the Host, unvalidated');
     is($uri->raw_path, '/items', 'the path is the request path');
     is($uri->query_string, 'page=1', 'the query is the request query');
 
@@ -45,8 +45,14 @@ subtest 'a hostile Host cannot change the path or query' => sub {
         'a space, @ and # in a Host are escaped');
     is("" . uri_for(headers => [['host', "x-._~!\$&'()*+,;=y"]]), "http://x-._~!\$&'()*+,;=y/",
         'what Mojo::URL allows in an authority stays');
-    is("" . uri_for(headers => [['host', 'caf%C3%A9.example']]), 'http://caf%25C3%25A9.example/',
-        'a % in a Host is escaped too, since the Host is taken as sent');
+    my $escaped = uri_for(headers => [['host', 'a%41']]);
+    is($escaped->host, 'aA', 'a %XX in a Host is unescaped, as Mojolicious reads a Host');
+    is("$escaped", 'http://aA/', 'and written as the character when it is allowed');
+    $escaped = uri_for(headers => [['host', 'evil.com%2Fx']], path => '/items', raw_path => '/items');
+    is($escaped->host, 'evil.com/x', 'an escaped / in a Host reads as /');
+    is("$escaped", 'http://evil.com%2Fx/items', 'and is escaped again on output, so it stays in the authority');
+    is("" . uri_for(headers => [['host', 'caf%C3%A9.example']]), 'http://caf%C3%A9.example/',
+        'an escaped non-ASCII byte is escaped again');
     is("" . uri_for(headers => [['host', "caf\xC3\xA9.example"]]), 'http://caf%C3%A9.example/',
         'a non-ASCII Host byte is escaped');
 };
@@ -103,7 +109,7 @@ subtest 'without a Host, the server address, the default port dropped' => sub {
     is("" . PAGI::Utils::URI->from_scope({ type => 'websocket', path => '/', server => ['10.0.0.5', 80] }),
         'ws://10.0.0.5/', 'ws (the websocket default) on 80');
 
-    like(dies { uri_for(server => undef) }, qr/\Ascope server cannot provide an authority at .*uri\.t line /,
+    like(dies { uri_for(server => undef) }, qr/\Ano Host header, and the scope server cannot provide an authority at .*uri\.t line /,
         'neither a Host nor a server address dies, naming the caller');
     like(dies { PAGI::Utils::URI->from_scope({ type => 'http' }) }, qr/\Athis scope has no path at .*uri\.t line /,
         'nor a path');
@@ -220,8 +226,9 @@ subtest 'parse' => sub {
     is("$uri", 'https://example.com:8443/a%2Fb/caf%C3%A9?x=1&y=caf%C3%A9#top', 'string');
 
     my $hostile = uri_for(headers => [['host', 'evil.com/x? %41']], path => '/items', raw_path => '/items');
+    is($hostile->host, 'evil.com/x? A', 'a Host as unescaped');
     my $again = PAGI::Utils::URI->parse("$hostile");
-    is($again->host, 'evil.com/x? %41', 'the string form parses back to the Host as sent');
+    is($again->host, 'evil.com/x? A', 'the string form parses back to the same host');
     ok($again eq $hostile, 'and stringifies the same');
 
     is(PAGI::Utils::URI->parse('http://example.com/%FF')->path, "/\xFF", 'a path that is not UTF-8 stays bytes');

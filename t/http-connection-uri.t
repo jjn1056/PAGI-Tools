@@ -90,7 +90,7 @@ subtest 'a scope with no path' => sub {
         'and so does base_uri');
 
     $conn = PAGI::HTTPConnection->new({ type => 'http', path => '/' });
-    like(dies { $conn->uri }, qr/\Ascope server cannot provide an authority at .*http-connection-uri\.t line /,
+    like(dies { $conn->uri }, qr/\Ano Host header, and the scope server cannot provide an authority at .*http-connection-uri\.t line /,
         'neither a Host nor a server address: uri dies naming the caller');
 };
 

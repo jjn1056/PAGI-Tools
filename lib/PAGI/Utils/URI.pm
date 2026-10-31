@@ -12,7 +12,7 @@ use PAGI::Utils::Scope ();
 use overload '""' => 'to_string', fallback => 1;
 
 # A croak from a helper the constructors call names the caller's line.
-our @CARP_NOT = qw(PAGI::Utils::Scope PAGI::Authority PAGI::Headers);
+our @CARP_NOT = qw(PAGI::Utils::Scope PAGI::Headers);
 
 # A value holds scheme, host, port (undef unless explicit), raw_path,
 # query_string and fragment, all set when it is built and never changed.
@@ -29,7 +29,8 @@ sub from_scope {
     my $host = PAGI::Headers->new($scope->{headers})->get('host');
     my $authority = defined $host && length $host
         ? $host
-        : PAGI::Authority::_format_server($scope->{server}, lc $scheme);
+        : eval { PAGI::Authority::_format_server($scope->{server}, lc $scheme) }
+            // croak 'no Host header, and the scope server cannot provide an authority';
     my ($raw_path, $query_string) = split /\?/, PAGI::Utils::Scope::request_uri($scope), 2;
 
     return $class->_new(
@@ -51,11 +52,9 @@ sub parse {
         unless defined $scheme && $scheme =~ /\A[A-Za-z][A-Za-z0-9+.\-]*\z/
             && defined $authority;
 
-    my %authority = _split_authority($authority);
-    $authority{host} = PAGI::Utils::Scope::_unescape($authority{host});
     return $class->_new(
         scheme       => $scheme,
-        %authority,
+        _split_authority($authority),
         raw_path     => PAGI::Utils::Scope::_escape_path_bytes($path),
         query_string => PAGI::Utils::Scope::_escape_unsafe_bytes($query // ''),
         fragment     => PAGI::Utils::Scope::_escape_unsafe_bytes($fragment // ''),
@@ -76,12 +75,12 @@ sub _clone {
     return ref($self)->_new(%fields, %changes);
 }
 
-# An authority as host and port: a trailing ":digits" is the port, as
-# Mojo::URL reads a Host.
+# An authority as host and port, as Mojo::URL reads a Host: a trailing
+# ":digits" is the port, and the rest is percent-decoded.
 sub _split_authority {
     my ($authority) = @_;
     my ($host, $port) = $authority =~ /\A(.*?)(?::([0-9]+))?\z/s;
-    return (host => $host, port => $port);
+    return (host => PAGI::Utils::Scope::_unescape($host), port => $port);
 }
 
 # The authority as it may appear in a URI: every byte outside Mojo::URL's
@@ -195,10 +194,11 @@ L<PAGI::HTTPConnection/request_uri>, exactly.
 
 =head2 The host is not validated
 
-The authority of a request URL is the client's C<Host> header as sent, as
-Mojolicious takes it: nothing checks that it is a host name. A trailing
-C<:digits> is the port, and a C<Host> sent more than once reads as every
-value joined with C<", ">, as L<PAGI::HTTPConnection/header> does. Without a
+The authority of a request URL is the client's C<Host> header, read as
+Mojolicious reads it: nothing checks that it is a host name. A trailing
+C<:digits> is the port, the rest is percent-decoded (C<Host: a%41> has the
+host C<aA>), and a C<Host> sent more than once reads as every value joined
+with C<", ">, as L<PAGI::HTTPConnection/header> does. Without a
 C<Host> (HTTP/1.0), or with an empty one, the authority is the server's
 address from the scope, without the port when it is the scheme's default
 (80 for C<http> and C<ws>, 443 for C<https> and C<wss>).
@@ -206,8 +206,9 @@ address from the scope, without the port when it is the scheme's default
 In the string form the authority is percent-encoded: every byte outside
 C<A-Za-z0-9-._~!$&'()*+,;=:[]> (Mojo::URL's list) becomes C<%XX>, so a
 hostile C<Host> cannot change the path or query. C<Host: evil.com/x?> on
-C<GET /items?page=1> gives C<http://evil.com%2Fx%3F/items?page=1>. A C<%> in a
-C<Host> is escaped too (C<%25>), since the C<Host> is taken as sent.
+C<GET /items?page=1> gives C<http://evil.com%2Fx%3F/items?page=1>, and
+C<Host: evil.com%2Fx>, whose host reads C<evil.com/x>, is written
+C<evil.com%2Fx> again.
 
 To accept only the hosts an application serves, put
 C<middleware('TrustedHosts', hosts =E<gt> [...])> (L<PAGI::Middleware::TrustedHosts>)
@@ -235,8 +236,8 @@ later change to the scope does not reach it, and it writes nothing to the
 scope.
 
 Dies C<this scope has no path> when the scope has neither C<raw_path> nor
-C<path>, and C<scope server cannot provide an authority> when it has no
-C<Host> and no usable C<server>.
+C<path>, and C<no Host header, and the scope server cannot provide an
+authority> when it has no C<Host> and no usable C<server>.
 
 =head2 parse
 
@@ -244,8 +245,8 @@ C<Host> and no usable C<server>.
 
 A URL from its string form, split as RFC 3986 appendix B splits a URI. It
 must have a scheme and an authority (C<scheme://...>), or it dies C<not an
-absolute URI>. The authority is percent-decoded, so the string form of a
-request URL parses back to its C<Host> as sent; anything a URI cannot hold
+absolute URI>. The authority is read as L</from_scope> reads a C<Host>, so
+the string form of a request URL parses back to the same host; anything a URI cannot hold
 in the path, query or fragment is percent-encoded, as the string form
 would show it. The string form of a value that came from L</from_scope> or
 L</parse> parses back to an equal value.
@@ -265,7 +266,8 @@ The scheme, as the scope or the string gave it.
     my $authority = $uri->authority;   # example.com:8080
 
 The host, then C<:> and the port when the URL has one; unescaped. For a
-request, the C<Host> as sent (see L</The host is not validated>).
+request, the C<Host> header percent-decoded (see L</The host is not
+validated>).
 
 =head2 host
 
