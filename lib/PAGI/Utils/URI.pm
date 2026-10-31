@@ -164,6 +164,79 @@ sub to_string {
         (length $self->{fragment} ? ('#', $self->{fragment}) : ());
 }
 
+sub is_secure {
+    my $self = shift;
+    _read_only($self, @_);
+    return $self->{scheme} =~ /\A(?:https|wss)\z/i ? 1 : 0;
+}
+
+sub origin {
+    my $self = shift;
+    _read_only($self, @_);
+    return join '', $self->{scheme}, '://', _escape_authority($self->authority);
+}
+
+# The path and query as a same-origin reference. The path is held to one
+# leading slash so the result cannot read as a protocol-relative URL.
+sub path_query {
+    my $self = shift;
+    _read_only($self, @_);
+    return _one_leading_slash($self->{raw_path})
+        . (length $self->{query_string} ? "?$self->{query_string}" : '');
+}
+
+sub path_segments {
+    my $self = shift;
+    _read_only($self, @_);
+    return map { PAGI::Utils::Scope::_decode_path($_) } _raw_segments($self->{raw_path});
+}
+
+# Two values are equivalent when RFC 3986 6.2.2 normalisation makes their
+# scheme, authority, path and fragment equal and their decoded query
+# parameters are the same, in the same order.
+sub is_equivalent {
+    my ($self, $other) = @_;
+    croak 'is_equivalent requires a PAGI::Utils::URI'
+        unless blessed($other) && $other->isa(__PACKAGE__);
+    return _list_equal([$self->_equivalence_parts], [$other->_equivalence_parts]);
+}
+
+sub _equivalence_parts {
+    my ($self) = @_;
+    my $scheme = lc $self->{scheme};
+    my $port = $self->{port};
+    if (defined $port) {
+        $port = PAGI::Authority::_is_default_server_port($scheme, $port) ? undef : $port =~ s/\A0+(?=.)//r;
+    }
+    return (
+        $scheme,
+        lc $self->{host},
+        $port // '',
+        _normalize_escapes($self->{raw_path}),
+        _normalize_escapes($self->{fragment}),
+        $self->query_params->flatten,
+    );
+}
+
+# Escapes in uppercase, and the escapes of unreserved characters decoded.
+sub _normalize_escapes {
+    my ($escaped) = @_;
+    $escaped =~ s{%([0-9A-Fa-f]{2})}{
+        my $char = chr hex $1;
+        $char =~ /[A-Za-z0-9\-._~]/ ? $char : sprintf('%%%02X', ord $char);
+    }ge;
+    return $escaped;
+}
+
+sub _list_equal {
+    my ($left, $right) = @_;
+    return 0 unless @$left == @$right;
+    for my $i (0 .. $#$left) {
+        return 0 unless $left->[$i] eq $right->[$i];
+    }
+    return 1;
+}
+
 # Edits. Each returns a new value and leaves this one as it was.
 
 sub with_query {
@@ -180,6 +253,14 @@ sub with_query {
     return $self->_clone(_query_fields(@pairs));
 }
 
+sub add_query {
+    my ($self, @additions) = @_;
+    croak 'add_query takes name => value pairs' if @additions % 2;
+    my @pairs = $self->_raw_query_pairs;
+    push @pairs, _query_bytes(splice @additions, 0, 2) while @additions;
+    return $self->_clone(_query_fields(@pairs));
+}
+
 sub without_query {
     my ($self, @names) = @_;
     my @pairs = _without_names([$self->_raw_query_pairs],
@@ -188,7 +269,7 @@ sub without_query {
 }
 
 my %REPLACEABLE = map { $_ => 1 }
-    qw(scheme authority host port path raw_path query_params query_string fragment);
+    qw(scheme authority host port path raw_path path_segments query_params query_string fragment);
 
 sub replace {
     my ($self, @parts) = @_;
@@ -200,6 +281,8 @@ sub replace {
         if exists $parts{authority} && (exists $parts{host} || exists $parts{port});
     croak 'replace takes path or raw_path, not both'
         if exists $parts{path} && exists $parts{raw_path};
+    croak 'replace takes path_segments, or path or raw_path, not both'
+        if exists $parts{path_segments} && (exists $parts{path} || exists $parts{raw_path});
     croak 'replace takes query_params or query_string, not both'
         if exists $parts{query_params} && exists $parts{query_string};
 
@@ -228,6 +311,11 @@ sub replace {
             : PAGI::Utils::Scope::_escape_path_bytes($parts{raw_path} // '');
         croak 'a path must be empty or start with /' if $raw_path =~ m{\A[^/]};
         $changes{raw_path} = _one_leading_slash($raw_path);
+    }
+    if (exists $parts{path_segments}) {
+        croak 'path_segments must be an arrayref of text' unless ref $parts{path_segments} eq 'ARRAY';
+        $changes{raw_path} = _path_from_segments(map { PAGI::Utils::Scope::_encode_component($_) }
+            @{ $parts{path_segments} });
     }
     if (exists $parts{query_params}) {
         my @params = _query_param_list($parts{query_params});
@@ -268,6 +356,28 @@ sub resolve {
         $changes{query_string} = PAGI::Utils::Scope::_escape_unsafe_bytes($query);
     }
     return $self->_clone(%changes);
+}
+
+sub join_path {
+    my ($self, @segments) = @_;
+    my @kept = _raw_segments($self->{raw_path});
+    pop @kept if @kept && $kept[-1] eq '';
+    return $self->_clone(raw_path => _path_from_segments(@kept,
+        map { PAGI::Utils::Scope::_encode_component($_) } @segments));
+}
+
+# The segments of an escaped path, still escaped. A trailing slash is a
+# final empty segment; the root has none.
+sub _raw_segments {
+    my ($raw_path) = @_;
+    $raw_path = _one_leading_slash($raw_path);
+    $raw_path =~ s{\A/}{};
+    return length $raw_path ? split(m{/}, $raw_path, -1) : ();
+}
+
+# Escaped segments as a path, never starting with //.
+sub _path_from_segments {
+    return _one_leading_slash('/' . join '/', @_);
 }
 
 # A path parse or an edit sets starts with at most one "/", as request_uri's
@@ -578,6 +688,56 @@ As L</query_params>, with the names and values left as bytes.
 The fragment without its C<#>; C<''> when there is none, and always for a
 request URL.
 
+=head2 is_secure
+
+    redirect_to_https($uri) unless $uri->is_secure;
+
+True (1) when the scheme is C<https> or C<wss>, false (0) otherwise.
+
+=head2 origin
+
+    my $origin = $uri->origin;   # https://example.com:8443
+
+C<scheme://authority> as a string: the scheme and the escaped authority
+(see L</The host is not validated>), with the port when the URL has one. For
+comparing with an C<Origin> header or building a CORS value.
+
+=head2 path_query
+
+    my $target = $uri->path_query;   # /app/items?page=2
+
+L</raw_path>, then C<?> and L</query_string> when it is not empty: a
+same-origin reference for a C<Location> header. For a request URL it is
+L<PAGI::HTTPConnection/request_uri>. It never starts with C<//>.
+
+=head2 path_segments
+
+    my @segments = $uri->path_segments;   # '/a%2Fb/c' gives ('a/b', 'c')
+
+The path's segments as decoded text, each decoded as L</path> decodes the
+path, so an encoded C</> stays inside its segment. The root has none, and a
+trailing slash is a final empty segment (C</a/> gives C<('a', '')>).
+
+=head2 is_equivalent
+
+    if ($uri->is_equivalent($other)) { ... }
+
+True (1) when the two values name the same resource under RFC 3986 section
+6.2.2 syntax-based normalisation, false (0) otherwise; C<$other> must be a
+PAGI::Utils::URI. The scheme and host are compared in lowercase, a port that
+is the scheme's default (80 for C<http> and C<ws>, 443 for C<https> and
+C<wss>, leading zeros ignored: C<:0080>) is the same as none, the escapes in
+the path and fragment are compared in uppercase, and an escaped unreserved
+character is the same as the character (C<%7Ea> and C<~a>). An encoded C</>
+is not a C</>. The path is case sensitive.
+
+The query is compared by its decoded L</query_params>, so C<q=red+shoes> and
+C<q=red%20shoes> are equivalent, as are C<flag> and C<flag=> and the
+separators C<&> and C<;>. Their order is not normalised: C<a=1&b=2> and
+C<b=2&a=1> are not equivalent, nor are C<a=1&a=2> and C<a=2&a=1>.
+
+C<eq> stays strict (see L</Equality>).
+
 =head2 to_string
 
     my $string = $uri->to_string;
@@ -617,6 +777,19 @@ that name is removed and the new value appended at the end: an arrayref gives
 the name once per value, and C<undef> removes the name. Pairs with other
 names keep the client's order. A name given twice in one call keeps only the
 later value. Dies C<with_query takes name =E<gt> value pairs> on an odd list.
+
+=head2 add_query
+
+    # Multi-select filters: ?tag=a becomes ?tag=a&tag=b
+    my $uri = $request->uri->add_query(tag => 'b');
+
+    my $uri = $request->uri->add_query(tag => [qw(b c)]);
+
+Takes name => value pairs and appends each at the end of the query, removing
+nothing, so a name already there keeps its pairs. An arrayref gives the name
+once per value, and C<undef> adds nothing. Dies C<add_query takes name
+=E<gt> value pairs> on an odd list. L</with_query> replaces a name's pairs
+instead.
 
 =head2 without_query
 
@@ -658,6 +831,14 @@ none. Each keeps the other. They cannot be given with C<authority>.
 
 Text, UTF-8 encoded and percent-encoded (C</caf\x{e9}/a b> is written
 C</caf%C3%A9/a%20b>). It must be empty or start with C</>.
+
+=item path_segments
+
+An arrayref of text segments, each UTF-8 encoded and percent-encoded as a
+whole, so a C</> inside a segment is written C<%2F>:
+C<< replace(path_segments =E<gt> ['a/b', 'c']) >> gives C</a%2Fb/c>. This is
+the way to set a path with a literal C</> in a segment. It cannot be given
+with C<path> or C<raw_path>.
 
 =item raw_path
 
@@ -710,6 +891,17 @@ percent-encoded. A reference with a scheme but no authority (C<g:h>, or
 C<http:g>, which RFC 3986 resolves to C<http:g> for a strict parser) dies
 C<a reference with a scheme must have an authority>: a PAGI::Utils::URI
 always has one. Userinfo dies as in L</parse>.
+
+=head2 join_path
+
+    # A callback under the current path: /app/items becomes /app/items/42/edit
+    my $uri = $request->uri->join_path(42, 'edit');
+
+The segments, text, appended to the path, each UTF-8 encoded and
+percent-encoded as a whole (a C</> in one is written C<%2F>). A trailing
+slash on the path is not doubled, the query and fragment are kept, and the
+path the segments make never starts with C<//>. The path's own segments are
+kept exactly as they were.
 
 =head1 SEE ALSO
 

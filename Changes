@@ -32,7 +32,12 @@
     query_string, fragment; a new path keeps the query) and
     resolve($reference) (RFC 3986 5.2), the way to make an absolute URL
     from path_for's path. A query edit writes every pair form-encoded (a
-    space is +); a parsed or edited path never starts with //.
+    space is +); a parsed or edited path never starts with //. Also
+    add_query(@pairs) (appends, removes nothing), join_path(@segments),
+    replace(path_segments => \@text) (a / inside a segment stays %2F),
+    path_query, path_segments, is_secure, origin, and is_equivalent($other):
+    RFC 3986 6.2.2 on scheme, authority and path, then the decoded
+    query_params compared in order (eq stays byte for byte).
   - PAGI::Middleware::Stash (middleware('Stash')) gives every layer below
     it one shared stash, so a middleware sees what a handler stored, after
     the handler returns, through any scope copies between them.
