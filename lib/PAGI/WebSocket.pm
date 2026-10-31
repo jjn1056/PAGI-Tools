@@ -3,6 +3,7 @@ use strict;
 use warnings;
 use parent 'PAGI::HTTPConnection';
 use Carp qw(croak);
+use Scalar::Util ();
 use PAGI::Utils ();
 use Future::AsyncAwait;
 use Future;
@@ -338,7 +339,11 @@ async sub accept {
 
     # The helper owns the connection from the moment its accept is issued.
     $self->{_claim} = 'answering';
-    await PAGI::Utils::_ProtocolHelpers::forward_send($self, $event);
+    $self->{_accept_pending} = 1;
+    my $sent = PAGI::Utils::_ProtocolHelpers::forward_send($self, $event);
+    Scalar::Util::weaken(my $weak_self = $self);
+    $sent->on_ready(sub { delete $weak_self->{_accept_pending} if $weak_self });
+    await $sent;
     # A close made while the accept was pending stands.
     $self->_set_state('connected') if $self->connection_state eq 'connecting';
 
@@ -409,12 +414,16 @@ async sub deny {
 
 # End the socket however its state allows: refuse the handshake before
 # accept, close an accepted socket, and do nothing once the connection is
-# gone -- a client that hung up is not the application's error.
+# gone -- a client that hung up is not the application's error. A close
+# follows this helper's own accept while that is pending (the server keeps
+# call order); an accept the server rejected before the connection started
+# left the handshake unanswered, so it is refused.
 async sub close_or_deny {
     my ($self, $code, $reason, $response) = @_;
     return $self if $self->_refusing;
     $self->_require_ownership;
-    if (!$self->_answered && $self->connection_state eq 'connecting') {
+    if ($self->connection_state eq 'connecting' && !$self->{_accept_pending}
+        && !$self->{scope}{'pagi.connection'}->response_started) {
         require PAGI::Response::Text;
         await $self->deny($response // PAGI::Response::Text->new(
             (defined($reason) && length($reason) ? $reason : 'Forbidden'), status => 403,
@@ -1078,8 +1087,10 @@ whether the handshake was accepted -- an error handler, a framework's
 dispatch. Before L</accept> it refuses with L</deny>: the given Response,
 or a C<403 text/plain> whose body is C<$reason> (C<Forbidden> when there
 is none), as ASGI answers a close before accept. After accept, or once this
-helper's accept is issued, it calls L</close> with C<$code> and C<$reason>.
-Once the connection is closed --
+helper's accept is issued and still pending, it calls L</close> with
+C<$code> and C<$reason>. An accept the server rejected before the
+connection started left the handshake unanswered, so it refuses with
+L</deny> as it does before accept. Once the connection is closed --
 the client hung up, or the socket was already ended -- it sends nothing and
 does not die, so a client that left is not reported as an application
 error.
@@ -1636,7 +1647,7 @@ A framework may subclass PAGI::WebSocket (Thunderhorse does). The contract:
 
 =item * B<State.> The object holds C<scope>, C<receive> and C<send>, and its
 private connection state, every field of which starts with C<_> (C<_state>,
-C<_claim>, and the C<_close_*> fields and the callbacks among them). A subclass adds fields under any other name.
+C<_claim>, C<_accept_pending>, and the C<_close_*> fields and the callbacks among them). A subclass adds fields under any other name.
 
 =item * B<One object per scope.> Build it once the scope is final, after
 the route match and inside the innermost middleware, from the channels the

@@ -567,8 +567,9 @@
     close_or_deny and keepalive returned quietly. A helper whose own
     accept or start the server rejected raises at that await and stays the
     connection's answerer, as Starlette's WebSocket does: its later sends,
-    try_send*, keepalive, close and close_or_deny go to the server, and
-    SSE never issues a second sse.start, where WebSocket sends croaked
+    try_send*, keepalive and close go to the server, as does close_or_deny
+    once the connection has started (before that it refuses, as for a
+    helper that never accepted), and SSE never issues a second sse.start, where WebSocket sends croaked
     "Cannot send on closed WebSocket", SSE sends returned without sending,
     try_send* returned 0, and keepalive and close sent nothing.
   - The middleware reads requests through PAGI::HTTPConnection, each

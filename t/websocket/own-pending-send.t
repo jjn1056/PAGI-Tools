@@ -145,12 +145,38 @@ for my $case (
         my ($other, $other_sent) = helper_with_send($reply);
         like dies { $other->accept->get }, qr/^accept rejected$/, 'another rejected accept';
         $other->close_or_deny(1011, 'bye')->get;
-        is $other_sent, [
-            { type => 'websocket.accept' },
-            { type => 'websocket.close', code => 1011, reason => 'bye' },
-        ], 'close_or_deny closes rather than denying';
+        if ($how eq 'fails') {
+            is $other_sent, [
+                { type => 'websocket.accept' },
+                { type => 'websocket.close', code => 1011, reason => 'bye' },
+            ], 'close_or_deny closes: the connection started';
+        } else {
+            is [map { $_->{type} } @$other_sent],
+                ['websocket.accept', 'http.response.start', 'http.response.body'],
+                'close_or_deny refuses: the server rejected the accept and nothing started';
+            is $other_sent->[1]{status}, 403, 'a 403 refusal';
+        }
     };
 }
+
+# A server may not have marked the response started while it holds the
+# accept; close_or_deny still follows the pending accept with a close.
+subtest 'a pending accept the server has not started: close_or_deny closes' => sub {
+    my $hold = Future->new;
+    my @sent;
+    my $ws = PAGI::WebSocket->new(ws_scope(path => '/ws'), sub { Future->new },
+        sub { push @sent, $_[0]; $_[0]{type} eq 'websocket.accept' ? $hold : Future->done });
+
+    my $accept = $ws->accept;
+    ok !$ws->scope->{'pagi.connection'}->response_started, 'the response has not started';
+    my $close = $ws->close_or_deny(4000, 'bye');
+    is [map { $_->{type} } @sent], ['websocket.accept', 'websocket.close'],
+        'the close follows the accept in call order';
+
+    $hold->done;
+    $accept->get;
+    $close->get;
+};
 
 # The "connection ended" row holds during a pending accept too.
 subtest 'a pending accept on a connection that then ends: try_send_* return 0' => sub {
