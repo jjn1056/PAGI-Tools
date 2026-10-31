@@ -271,6 +271,19 @@ subtest 'parse takes characters: every non-ASCII character is UTF-8 encoded' => 
     is($uri->query_params->get('q'), 'café', 'so does the query');
 };
 
+subtest 'parse starts the path with at most one /, as from_scope does' => sub {
+    for my $string ('http://h//evil.example/x?q=1', 'http://h///evil.example/x?q=1') {
+        my $uri = PAGI::Utils::URI->parse($string);
+        is($uri->raw_path, '/evil.example/x', "$string: raw_path");
+        is($uri->path, '/evil.example/x', "$string: path");
+        is("$uri", 'http://h/evil.example/x?q=1', "$string: the string form");
+    }
+    my $scope_uri = uri_for(path => '//evil.example/x', raw_path => '//evil.example/x');
+    is(PAGI::Utils::URI->parse('http://127.0.0.1:5000//evil.example/x')->raw_path, $scope_uri->raw_path,
+        'the same path as from_scope gives for that request');
+    is(PAGI::Utils::URI->parse('http://h/a//b')->raw_path, '/a//b', 'a // later in the path is kept');
+};
+
 subtest 'parse refuses userinfo' => sub {
     like(dies { PAGI::Utils::URI->parse('http://user:pw@host.example/x') }, qr/\Auserinfo is not supported at .*uri\.t line /,
         'user and password');

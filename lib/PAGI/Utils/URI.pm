@@ -57,7 +57,7 @@ sub parse {
     return $class->_new(
         scheme       => $scheme,
         _split_authority($authority),
-        raw_path     => PAGI::Utils::Scope::_escape_path_bytes($path),
+        raw_path     => _one_leading_slash(PAGI::Utils::Scope::_escape_path_bytes($path)),
         query_string => PAGI::Utils::Scope::_escape_unsafe_bytes($query // ''),
         fragment     => PAGI::Utils::Scope::_escape_unsafe_bytes($fragment // ''),
     );
@@ -270,8 +270,9 @@ sub resolve {
     return $self->_clone(%changes);
 }
 
-# A path an edit sets starts with at most one "/", as request_uri's does: a
-# path read on its own must never name another host ("//evil.example/").
+# A path parse or an edit sets starts with at most one "/", as request_uri's
+# does: a path read on its own must never name another host
+# ("//evil.example/").
 sub _one_leading_slash {
     my ($raw_path) = @_;
     $raw_path =~ s{\A/{2,}}{/};
@@ -483,6 +484,10 @@ so C<caf%C3%A9> stays C<caf%C3%A9>. Pass a URL as a string of characters,
 not as UTF-8 bytes, which would be encoded a second time. Anything else a
 URI cannot hold in the path, query or fragment is percent-encoded too, as
 the string form would show it.
+
+A path starting with C<//> is read with one C</>, as L</from_scope> reads
+the same request: C<http://h//evil.example/x> has the path
+C</evil.example/x>, so the path alone cannot name another host.
 
 The authority is read as L</from_scope> reads a C<Host>: a trailing
 C<:digits> is the port, and the rest is percent-decoded. The string form of

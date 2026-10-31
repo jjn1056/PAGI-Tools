@@ -177,6 +177,17 @@ subtest 'a path edit never starts the path with //' => sub {
     }
     is($uri->resolve('//other.example//evil.example/x')->raw_path, '/evil.example/x',
         'resolve with an authority: one leading /');
+
+    my $parsed = uri('http://example.com//evil.example/x?x=1');
+    for my $case (
+        [with_query    => $parsed->with_query(y => 2)],
+        [without_query => $parsed->without_query('x')],
+        [replace       => $parsed->replace(fragment => 'f', scheme => 'https')],
+        [resolve       => $parsed->resolve('?z=1')],
+    ) {
+        my ($how, $edited) = @$case;
+        is($edited->raw_path, '/evil.example/x', "$how, leaving a parsed path alone: one leading /");
+    }
 };
 
 subtest 'replace(query_params), replace(query_string), replace(fragment)' => sub {
