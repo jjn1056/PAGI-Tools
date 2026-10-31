@@ -157,8 +157,9 @@ subtest 'from_scope: a request for //evil/x keeps the // in the value' => sub {
         '/evil/x?a=1', 'request_uri stays collapsed');
     ok(!$uri->is_equivalent(uri_for(headers => [['host', 'h']], path => '/evil/x', raw_path => '/evil/x', query_string => 'a=1')),
         'not equivalent to the single-slash path');
-    is(uri_for(headers => [['host', 'h']], root_path => '/', path => '/x', raw_path => undef)->raw_path, '//x',
-        'a root path rebuilt without raw_path is not collapsed either');
+    my $rooted = uri_for(headers => [['host', 'h']], root_path => '/', path => '/x', raw_path => undef);
+    is($rooted->raw_path, '/x', 'a slash-terminated root path does not double the slash');
+    is($rooted->path, '/x', 'nor does path');
 };
 
 subtest 'an unedited value stringifies to scheme://authority + the exact request_uri' => sub {

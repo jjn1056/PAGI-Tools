@@ -191,6 +191,7 @@ subtest 'a path edit keeps a leading // as given' => sub {
     ) {
         my ($how, $edited) = @$case;
         is($edited->raw_path, '//evil.example/x', "$how, leaving a parsed path alone: the // stays");
+        like($edited->path_query, qr{\A/evil\.example/x(?:\?|\z)}, "$how: path_query has one leading /");
     }
 };
 

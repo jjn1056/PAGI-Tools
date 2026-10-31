@@ -39,7 +39,8 @@ subtest 'path_segments reads decoded segments from raw_path' => sub {
     is([uri('http://h/a%2Fb/c')->path_segments], ['a/b', 'c'], 'an encoded / stays inside its segment');
     is([uri('http://h/')->path_segments], [], 'the root has none');
     is([uri('http://h/a/')->path_segments], ['a', ''], 'a trailing slash is a final empty segment');
-    is([uri('http://h//a')->path_segments], ['a'], 'a leading // gives no empty first segment');
+    is([uri('http://h//a')->path_segments], ['', 'a'], 'a leading // gives an empty first segment');
+    is(uri('http://h//a')->path_query, '/a', 'whose path_query has one /');
     is([uri('http://h/caf%C3%A9/a%20b')->path_segments], ["caf\x{e9}", 'a b'], 'decoded text');
 };
 
@@ -49,8 +50,10 @@ subtest 'replace(path_segments => ...) encodes each segment' => sub {
         'a / inside a segment stays %2F; the query is kept');
     is("" . $uri->replace(path_segments => ["caf\x{e9}", 'a b']), 'http://h/caf%C3%A9/a%20b?x=1', 'text encoded');
     is("" . $uri->replace(path_segments => []), 'http://h/?x=1', 'no segments is the root');
-    is("" . $uri->replace(path_segments => ['', 'evil.example', 'x']), 'http://h/evil.example/x?x=1',
-        'an empty first segment cannot start the path with //');
+    is("" . $uri->replace(path_segments => ['', 'evil.example', 'x']), 'http://h//evil.example/x?x=1',
+        'an empty first segment is kept');
+    is($uri->replace(path_segments => ['', 'a'])->raw_path, '//a', 'so //a round trips');
+    is($uri->replace(path_segments => ['', 'a'])->path_query, '/a?x=1', 'and path_query has one /');
     like(dies { $uri->replace(path_segments => 'a', path => '/b') }, qr/replace takes path_segments, or path or raw_path, not both/,
         'not with path');
     like(dies { $uri->replace(path_segments => 'a') }, qr/path_segments must be an arrayref/, 'an arrayref is required');
@@ -62,10 +65,13 @@ subtest 'join_path appends encoded segments' => sub {
     is("" . uri('http://h/app/')->join_path('x'), 'http://h/app/x', 'a trailing slash is not doubled');
     is("" . uri('http://h/')->join_path('x'), 'http://h/x', 'from the root');
     is("" . uri('http://h/%FF')->join_path('x'), 'http://h/%FF/x', 'existing bytes are kept as they were');
+    is("" . uri('http://h//a?x=1')->join_path('x'), 'http://h//a/x?x=1', 'a leading // of the path is kept');
+    is(uri('http://h//a')->join_path('x')->path_query, '/a/x', 'and path_query has one /');
+    is("" . uri('http://h//a/')->join_path('x'), 'http://h//a/x', 'with a trailing slash too');
     is("" . uri('http://h/a')->join_path('', 'evil.example'), 'http://h/a//evil.example',
         'an empty segment is an empty segment, after the first');
-    is("" . uri('http://h/')->join_path('', 'evil.example'), 'http://h/evil.example',
-        'but the path never starts with //');
+    is("" . uri('http://h/')->join_path('', 'evil.example'), 'http://h//evil.example',
+        'an empty first segment after the root is kept');
     is("$uri", 'http://h/app/items?x=1', 'the original is unchanged');
 };
 

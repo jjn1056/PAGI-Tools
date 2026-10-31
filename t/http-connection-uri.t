@@ -61,6 +61,9 @@ subtest 'uri keeps a leading // in the request path' => sub {
     is($uri->raw_path, '//evil/x', 'raw_path agrees');
     is($uri->path_query, '/evil/x?a=1', 'path_query is held to one /');
     is($conn->request_uri, '/evil/x?a=1', 'request_uri is too');
+    is("" . $conn->base_uri, 'http://h/', 'base_uri is the root, whatever the path');
+    is("" . $uri->join_path('y'), 'http://h//evil/x/y?a=1', 'join_path keeps the //');
+    is($uri->join_path('y')->path_query, '/evil/x/y?a=1', 'and path_query has one /');
 };
 
 subtest 'base_uri' => sub {

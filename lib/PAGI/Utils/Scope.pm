@@ -63,7 +63,16 @@ sub _require_path_source {
 sub raw_path {
     my ($scope) = @_;
     return $scope->{raw_path} if defined $scope->{raw_path};
-    return _encode_path(($scope->{root_path} // '') . ($scope->{path} // '/'));
+    return _encode_path(_full_path($scope));
+}
+
+# The scope's root_path followed by its path (or "/"), joined without
+# doubling the slash when root_path ends in one.
+sub _full_path {
+    my ($scope) = @_;
+    my $root_path = $scope->{root_path} // '';
+    $root_path =~ s{/+\z}{};
+    return $root_path . ($scope->{path} // '/');
 }
 
 # The path and query the client requested, as a URI-reference safe for a

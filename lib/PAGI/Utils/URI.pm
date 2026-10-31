@@ -41,7 +41,7 @@ sub from_scope {
         raw_path     => $raw_path,
         query_string => $query_string,
         fragment     => '',
-        (defined $scope->{path} ? (path => ($scope->{root_path} // '') . $scope->{path}) : ()),
+        (defined $scope->{path} ? (path => PAGI::Utils::Scope::_full_path($scope)) : ()),
     );
 }
 
@@ -367,18 +367,16 @@ sub join_path {
 }
 
 # The segments of an escaped path, still escaped. A trailing slash is a
-# final empty segment; the root has none.
+# final empty segment, a leading // an empty first one; the root has none.
 sub _raw_segments {
     my ($raw_path) = @_;
-    $raw_path = PAGI::Utils::Scope::_one_leading_slash($raw_path);
     $raw_path =~ s{\A/}{};
     return length $raw_path ? split(m{/}, $raw_path, -1) : ();
 }
 
-# Escaped segments as a path, never starting with //: the segments build the
-# path, so an empty first one is dropped.
+# Escaped segments as a path.
 sub _path_from_segments {
-    return PAGI::Utils::Scope::_one_leading_slash('/' . join '/', @_);
+    return '/' . join '/', @_;
 }
 
 # RFC 3986 5.2.4: the "." and ".." segments of a path removed, each ".."
@@ -717,7 +715,8 @@ itself keeps the path as sent (see L</raw_path>).
 
 The path's segments as decoded text, each decoded as L</path> decodes the
 path, so an encoded C</> stays inside its segment. The root has none, and a
-trailing slash is a final empty segment (C</a/> gives C<('a', '')>).
+trailing slash is a final empty segment (C</a/> gives C<('a', '')>) and a
+leading C<//> an empty first one (C<//a> gives C<('', 'a')>).
 
 =head2 is_equivalent
 
@@ -763,9 +762,7 @@ they were, UTF-8 or not.
 
 An edit keeps the path as given, a leading C<//> included:
 C<replace(path =E<gt> '//x')> gives the path C<//x>, and its L</path_query>
-is C</x>. Only L</path_segments>, L</join_path> and
-C<replace(path_segments =E<gt> ...)>, which build a path from segments, drop
-an empty first segment.
+is C</x>.
 
 =head2 with_query
 
@@ -839,7 +836,8 @@ C</caf%C3%A9/a%20b>). It must be empty or start with C</>.
 An arrayref of text segments, each UTF-8 encoded and percent-encoded as a
 whole, so a C</> inside a segment is written C<%2F>:
 C<< replace(path_segments =E<gt> ['a/b', 'c']) >> gives C</a%2Fb/c>. This is
-the way to set a path with a literal C</> in a segment. It cannot be given
+the way to set a path with a literal C</> in a segment, and an empty first
+segment gives a leading C<//> (C<['', 'a']> gives C<//a>). It cannot be given
 with C<path> or C<raw_path>.
 
 =item raw_path
@@ -902,9 +900,9 @@ always has one. Userinfo dies as in L</parse>.
 
 The segments, text, appended to the path, each UTF-8 encoded and
 percent-encoded as a whole (a C</> in one is written C<%2F>). A trailing
-slash on the path is not doubled, the query and fragment are kept, and the
-path the segments make never starts with C<//>. The path's own segments are
-kept exactly as they were.
+slash on the path is not doubled, the query and fragment are kept, and a
+leading C<//> of the path is kept (C<//a> becomes C<//a/42>). The path's own
+segments are kept exactly as they were.
 
 =head1 SEE ALSO
 
