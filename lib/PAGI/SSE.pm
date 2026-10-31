@@ -290,7 +290,7 @@ async sub decline {
 # Get Last-Event-ID header from client (for reconnection)
 sub last_event_id {
     my ($self) = @_;
-    return $self->header('last-event-id');
+    return $self->headers->get_single('last-event-id');
 }
 
 # Send data-only event
@@ -930,7 +930,8 @@ C<path> dies C<this scope has no path> on a scope without one.
     my $id = $sse->last_event_id;       # From Last-Event-ID header
 
 Returns the Last-Event-ID header sent by reconnecting clients.
-Use this to replay missed events.
+Use this to replay missed events. A Last-Event-ID sent twice reads as absent
+(C<undef>).
 
 =head2 Per-Connection Shared State
 

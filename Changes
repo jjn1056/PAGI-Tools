@@ -576,9 +576,12 @@
     X-Real-IP, X-Forwarded-Proto and X-Forwarded-Port (the socket's own
     client, scheme and port stand, where the first field was used),
     Session::State::Header's session header (no session id), RequestId's
-    incoming id under trust_incoming (a new id is generated) and
+    incoming id under trust_incoming (a new id is generated),
     MethodOverride's override header (its _method query parameter is
-    checked). MethodOverride's _method gives the last of a repeated
+    checked), PAGI::Request's content_length (undef; body_stream sets no
+    limit from it, where it read the first field) and PAGI::SSE's
+    last_event_id (undef, where it read the first field).
+    MethodOverride's _method gives the last of a repeated
     parameter and splits on ';' as well as '&', where the first counted.
     GZip compresses when any Accept-Encoding field names gzip (only the
     first counted). App::Directory sends its JSON listing when any Accept

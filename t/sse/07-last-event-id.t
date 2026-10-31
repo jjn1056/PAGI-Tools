@@ -60,4 +60,12 @@ subtest 'query helpers preserve decoded raw values and HTTP metadata' => sub {
     is($sse->http_version, '2', 'http_version reads direct scope metadata');
 };
 
+subtest 'a repeated Last-Event-ID reads as absent' => sub {
+    my $sse = PAGI::SSE->new(sse_scope(
+        headers => [['last-event-id', '41'], ['Last-Event-ID', '42']],
+    ), sub {}, sub {});
+
+    is($sse->last_event_id, undef, 'two fields are not one id');
+};
+
 done_testing;

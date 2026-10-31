@@ -95,7 +95,7 @@ sub charset {
 # Content-Length shortcut
 sub content_length {
     my $self = shift;
-    return $self->header('content-length');
+    return $self->headers->get_single('content-length');
 }
 
 # Method predicates
@@ -607,7 +607,8 @@ L</body_stream>).
 
 =head2 content_length
 
-Content-Length header value.
+Content-Length header value. A Content-Length sent twice reads as absent
+(C<undef>).
 
 =head2 raw
 
