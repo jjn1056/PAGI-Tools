@@ -286,14 +286,14 @@ X-Forwarded headers. Reverse helpers return strings or croak. They perform no
 receive/send calls, emit no protocol events, do not redirect, and do not mutate
 a response.
 
-For HTTP behind a trusted proxy, use this outer-to-inner order:
+Behind a trusted proxy, use this outer-to-inner order:
 
     ReverseProxy -> TrustedHosts -> PAGI::Routing
 
-The shipped ReverseProxy and TrustedHosts middleware are currently HTTP-only
-and pass WebSocket/SSE scopes through. Those protocols must arrive with
-already normalized and validated scheme/authority data. Cross-protocol support
-is planned separately; routing does not supply it.
+ReverseProxy restores the scheme, client and Host of HTTP, WebSocket and SSE
+scopes alike. TrustedHosts is HTTP-only and passes WebSocket/SSE scopes
+through, so those arrive with the Host ReverseProxy restored but unchecked
+against an allow-list; routing does not supply that check.
 
 =head1 CAPTURES ARE NOT PERMISSION
 

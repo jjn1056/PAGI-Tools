@@ -47,8 +47,10 @@ once and be a single valid authority; repeated fields, comma-containing values,
 and malformed authorities are refused with a plain-text 400,
 C<Invalid X-Forwarded-Host header>, which does not echo the rejected value;
 C<refuse> replaces the refusal. Authority trust and normalization decisions
-remain in this middleware. Non-HTTP and untrusted scopes continue to pass
-through unchanged.
+remain in this middleware. It covers C<http>, C<websocket> and C<sse> scopes
+alike, so a WebSocket or SSE request behind a proxy reads the proxied client,
+scheme and host. Other scope types (C<lifespan>) and untrusted scopes continue
+to pass through unchanged.
 
 =head1 CONFIGURATION
 
@@ -93,7 +95,8 @@ given to middleware outside PAGI-Tools.
 field read in order (one field C<1.1.1.1, 2.2.2.2> and the same split over
 two fields both give C<1.1.1.1>)
 
-=item * X-Forwarded-Proto - Original protocol (http/https)
+=item * X-Forwarded-Proto - Original protocol (http/https); a WebSocket
+scope's scheme becomes C<ws> or C<wss>
 
 =item * X-Forwarded-Host - Original Host header. The trusted field must occur
 exactly once and contain one valid authority, not a comma-separated list.
@@ -128,7 +131,7 @@ sub wrap {
 
     return async sub  {
         my ($scope, $receive, $send) = @_;
-        if ($scope->{type} ne 'http') {
+        if ($scope->{type} !~ /\A(?:http|websocket|sse)\z/) {
             await $app->($scope, $receive, $send);
             return;
         }
@@ -198,7 +201,11 @@ sub wrap {
         my $forwarded_proto = $headers->get_single('x-forwarded-proto');
         if ($forwarded_proto) {
             $forwarded_proto = lc($forwarded_proto);
-            $new_scope{scheme} = $forwarded_proto if $forwarded_proto =~ /^https?$/;
+            if ($forwarded_proto =~ /^(https?)$/) {
+                $new_scope{scheme} = $scope->{type} eq 'websocket'
+                    ? ($1 eq 'https' ? 'wss' : 'ws')
+                    : $1;
+            }
         }
 
         # X-Forwarded-Host
@@ -291,7 +298,8 @@ When headers are processed from a trusted proxy:
 
 =item * pagi.original_client - The proxy's [IP, port]
 
-=item * scheme - Updated to 'https' if X-Forwarded-Proto indicates
+=item * scheme - Updated to 'https' if X-Forwarded-Proto indicates ('wss'
+for a WebSocket scope)
 
 =item * headers - A valid trusted X-Forwarded-Host atomically removes every
 existing Host pair and appends exactly one lowercase C<host> pair. The input
@@ -307,8 +315,8 @@ Only trust X-Forwarded headers from known reverse proxies. Forwarded Host
 validation happens after this trust decision, so untrusted requests retain
 their existing pass-through behavior. A trusted forwarded Host is accepted
 only as one field containing one validated authority; duplicate fields and
-comma-separated values fail closed. HTTP-only and trusted-proxy gates otherwise
-retain their existing behavior.
+comma-separated values fail closed. The trusted-proxy gate is the same for
+HTTP, WebSocket and SSE scopes.
 
 Never enable C<trust_all> in production unless you fully understand the
 security implications.

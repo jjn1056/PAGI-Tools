@@ -13,6 +13,7 @@ use PAGI::Middleware::HTTPSRedirect;
 use PAGI::Middleware::ReverseProxy;
 use PAGI::Middleware::Healthcheck;
 use PAGI::Request;
+use PAGI::HTTPConnection;
 use PAGI::Response qw(response);
 use PAGI::Response::Text ();
 
@@ -1073,34 +1074,112 @@ subtest 'ReverseProxy - untrusted malformed forwarded Host passes through unchan
     is \@events, [], 'ReverseProxy sends no local rejection';
 };
 
-subtest 'ReverseProxy - non-HTTP scopes pass through outside Pages' => sub {
-    my $proxy = PAGI::Middleware::ReverseProxy->new(trust_all => 1);
-    my $captured_scope;
-    my $app_calls = 0;
-    my $scope = {
-        type    => 'websocket',
-        path    => '/socket',
-        client  => ['127.0.0.1', 12345],
-        headers => [['X-Forwarded-Host', 'public.example/path']],
-    };
-    my $wrapped = $proxy->wrap(async sub {
-        ($captured_scope) = @_;
-        $app_calls++;
-    });
-    my @events;
+subtest 'ReverseProxy - an untrusted WebSocket or SSE peer passes through unchanged' => sub {
+    for my $type (qw(websocket sse)) {
+        my $proxy = PAGI::Middleware::ReverseProxy->new(trusted_proxies => ['10.0.0.1']);
+        my $captured_scope;
+        my $app_calls = 0;
+        my $scope = {
+            type    => $type,
+            path    => '/socket',
+            client  => ['127.0.0.1', 12345],
+            headers => [
+                ['Host', 'internal.example'],
+                ['X-Forwarded-Proto', 'https'],
+                ['X-Forwarded-For', '203.0.113.9'],
+                ['X-Forwarded-Host', 'public.example/path'],
+            ],
+        };
+        my $json = JSON::MaybeXS->new(canonical => 1);
+        my $scope_bytes = $json->encode($scope);
+        my $wrapped = $proxy->wrap(async sub {
+            ($captured_scope) = @_;
+            $app_calls++;
+        });
+        my @events;
 
+        run_async {
+            $wrapped->(
+                $scope,
+                async sub { {} },
+                async sub { my ($event) = @_; push @events, $event },
+            )
+        };
+
+        is $app_calls, 1, "$type scope reaches downstream once";
+        is refaddr($captured_scope), refaddr($scope),
+            "$type pass-through preserves the original scope";
+        is $json->encode($scope), $scope_bytes, "$type scope is byte-for-byte unchanged";
+        is \@events, [], "$type pass-through emits no response";
+    }
+};
+
+subtest 'ReverseProxy - a trusted WebSocket or SSE peer is rewritten like HTTP' => sub {
+    my %expected_uri = (
+        websocket => 'wss://chat.example.com/ws',
+        sse       => 'https://chat.example.com/ws',
+    );
+    for my $type (qw(websocket sse)) {
+        my $proxy = PAGI::Middleware::ReverseProxy->new(trusted_proxies => ['127.0.0.1']);
+        my ($seen_scope, $uri, $client);
+        my $wrapped = $proxy->wrap(async sub {
+            my ($scope) = @_;
+            $seen_scope = $scope;
+            my $connection = PAGI::HTTPConnection->new($scope);
+            $uri    = $connection->uri->to_string;
+            $client = $connection->client;
+        });
+        my $scope = {
+            type    => $type,
+            path    => '/ws',
+            scheme  => $type eq 'websocket' ? 'ws' : 'http',
+            client  => ['127.0.0.1', 4444],
+            server  => ['127.0.0.1', 5000],
+            headers => [
+                ['Host', 'internal.example'],
+                ['X-Forwarded-Proto', 'https'],
+                ['X-Forwarded-For', '203.0.113.9'],
+                ['X-Forwarded-Host', 'chat.example.com'],
+            ],
+        };
+
+        run_async { $wrapped->($scope, async sub { {} }, async sub { }) };
+
+        is $uri, $expected_uri{$type}, "$type uri reads the proxied scheme and host";
+        is $client->[0], '203.0.113.9', "$type client is the forwarded address";
+        is $seen_scope->{'pagi.original_client'}, ['127.0.0.1', 4444],
+            "$type keeps the proxy's own address";
+        is $scope->{scheme}, $type eq 'websocket' ? 'ws' : 'http',
+            "$type input scope is not mutated";
+    }
+};
+
+subtest 'ReverseProxy - X-Forwarded-Proto http keeps a WebSocket on ws' => sub {
+    my $proxy = PAGI::Middleware::ReverseProxy->new(trusted_proxies => ['127.0.0.1']);
+    my $seen;
+    my $wrapped = $proxy->wrap(async sub { ($seen) = @_ });
     run_async {
-        $wrapped->(
-            $scope,
-            async sub { {} },
-            async sub { my ($event) = @_; push @events, $event },
-        )
+        $wrapped->({
+            type => 'websocket', path => '/ws', scheme => 'wss',
+            client => ['127.0.0.1', 1], headers => [['X-Forwarded-Proto', 'http']],
+        }, async sub { {} }, async sub { })
     };
+    is $seen->{scheme}, 'ws', 'http maps to ws';
+};
 
-    is $app_calls, 1, 'non-HTTP scope reaches downstream once';
-    is refaddr($captured_scope), refaddr($scope),
-        'non-HTTP pass-through preserves the original scope';
-    is \@events, [], 'non-HTTP pass-through emits no Pages response';
+subtest 'ReverseProxy - a trusted WebSocket with an ambiguous forwarded Host is refused' => sub {
+    my $proxy = PAGI::Middleware::ReverseProxy->new(trusted_proxies => ['127.0.0.1']);
+    my $app_calls = 0;
+    my $wrapped = $proxy->wrap(async sub { $app_calls++ });
+    my @events;
+    run_async {
+        $wrapped->({
+            type => 'websocket', path => '/ws', client => ['127.0.0.1', 1],
+            headers => [['X-Forwarded-Host', 'a.example'], ['X-Forwarded-Host', 'b.example']],
+        }, async sub { {} }, async sub { my ($event) = @_; push @events, $event })
+    };
+    is $app_calls, 0, 'the application is not reached';
+    is $events[0]{status}, 400, 'the refusal is the HTTP 400 as for http';
 };
 
 subtest 'ReverseProxy - a Request below sees the rewritten headers' => sub {
