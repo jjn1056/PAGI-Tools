@@ -298,6 +298,10 @@
     Starlette's StreamingResponse iterates its content (NDJSON takes a
     source of items). Stream calls nothing else on a source; the on_close
     option is its cleanup, for a source or a producer.
+  - PAGI::Response cookie and the Cookie middleware jar's set take a
+    partitioned option: the Partitioned attribute (CHIPS), which keeps a
+    cookie set inside a cross-site embed per top-level site. It forces
+    SameSite=None and secure.
 
   [Changed]
   - PAGI::WebSocket and PAGI::SSE hand each send to the server at once and

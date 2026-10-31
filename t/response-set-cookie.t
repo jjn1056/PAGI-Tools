@@ -46,4 +46,10 @@ for my $case (['lax', 'Lax'], ['STRICT', 'Strict'], ['None', 'None; secure']) {
 is(PAGI::Response->new('x')->cookie('a', 'v')->header('set-cookie'),
     'a=v; path=/', 'no samesite writes none');
 
+is(PAGI::Response->new('x')->cookie('widget', 'v', partitioned => 1)->header('set-cookie'),
+    'widget=v; path=/; SameSite=None; secure; Partitioned',
+    'partitioned forces SameSite=None and secure');
+unlike(PAGI::Response->new('x')->cookie('widget', 'v', secure => 1)->header('set-cookie'),
+    qr/Partitioned/, 'without partitioned there is no Partitioned attribute');
+
 done_testing;

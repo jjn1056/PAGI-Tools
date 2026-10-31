@@ -129,6 +129,7 @@ sub _format_set_cookie {
     $cookie_opts{'max-age'} = $opts{max_age}  if defined $opts{max_age};
     $cookie_opts{secure}    = $opts{secure}   if $opts{secure};
     $cookie_opts{httponly}  = $opts{httponly} if $opts{httponly};
+    $cookie_opts{partitioned} = $opts{partitioned} if $opts{partitioned};
     $cookie_opts{samesite}  = $opts{samesite} if defined $opts{samesite};
     return PAGI::Utils::_SetCookie::set_cookie_string($name, $value, %cookie_opts);
 }
@@ -205,7 +206,10 @@ is percent-encoded. The name must be a non-empty RFC 6265 token (letters,
 digits and C<!#$%&'*+-.^_`|~>), else it croaks too, and an undefined value
 croaks. A C<samesite> option that is given must be C<Lax>, C<Strict> or
 C<None> (any case, the whole word), else it croaks; without it no SameSite
-attribute is written.
+attribute is written. A true C<partitioned> option adds the C<Partitioned>
+attribute (CHIPS), which keeps the cookie per top-level site for a cookie
+set inside a cross-site embed; it forces C<SameSite=None> and C<secure>, as
+browsers require.
 L<PAGI::Response/cookie> follows the same rules.
 
 =back

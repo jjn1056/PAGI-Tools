@@ -58,4 +58,10 @@ for my $bad ('Laxity', 'bogus', '') {
 is run_jar(sub { $_[0]->set(a => 'v', samesite => 'lax') }), ['a=v; path=/; SameSite=Lax'], 'samesite lax is written';
 is run_jar(sub { $_[0]->set(a => 'v') }), ['a=v; path=/'], 'no samesite writes none';
 
+is run_jar(sub { $_[0]->set(widget => 'v', partitioned => 1) }),
+    ['widget=v; path=/; SameSite=None; secure; Partitioned'],
+    'partitioned forces SameSite=None and secure';
+is run_jar(sub { $_[0]->set(widget => 'v', secure => 1) }),
+    ['widget=v; path=/; secure'], 'without partitioned there is no Partitioned attribute';
+
 done_testing;

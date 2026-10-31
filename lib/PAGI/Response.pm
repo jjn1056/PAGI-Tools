@@ -367,7 +367,10 @@ non-empty RFC 6265 token (letters, digits and C<!#$%&'*+-.^_`|~>); any other
 character croaks, naming it, as the name is never encoded or decoded. A
 C<samesite> option that is given must be C<Lax>, C<Strict> or C<None> (any
 case, the whole word), else it croaks; without it no SameSite attribute is
-written.
+written. A true C<partitioned> option adds the C<Partitioned> attribute
+(CHIPS), which keeps the cookie per top-level site for a cookie set inside
+a cross-site embed; it forces C<SameSite=None> and C<secure>, as browsers
+require.
 
 Header names are HTTP tokens (RFC 9110): letters, digits and
 C<!#$%&'*+-.^_`|~>. A name with anything else (a space, a colon, a
@@ -697,6 +700,7 @@ sub cookie {
     $cookie{'max-age'} = $options{max_age} if defined $options{max_age};
     $cookie{secure}    = $options{secure} if $options{secure};
     $cookie{httponly}  = $options{httponly} if $options{httponly};
+    $cookie{partitioned} = $options{partitioned} if $options{partitioned};
     $cookie{samesite}  = $options{samesite} if defined $options{samesite};
     return $self->header('Set-Cookie', PAGI::Utils::_SetCookie::set_cookie_string($name, $value, %cookie));
 }
