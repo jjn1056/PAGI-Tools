@@ -136,8 +136,10 @@ sub _path_for {
 
 Uses the same reference and reverse-argument rules as C<path_for>, then
 returns an absolute URL. HTTP and SSE targets map the scope scheme to C<http>
-or C<https>; WebSocket targets map it to C<ws> or C<wss>. Authority selection
-and validation are performed by L<PAGI::Authority> inside the Resolver.
+or C<https>; WebSocket targets map it to C<ws> or C<wss>. The authority is
+that of the request's L<PAGI::Utils::URI>: the client's C<Host> as sent (else the
+server address), percent-encoded, and not validated; use TrustedHosts to
+accept only the hosts the application serves.
 
 Both operations accept compact C<(\%params, \%query, $fragment)> and named
 C<(params =E<gt> ..., query =E<gt> ..., fragment =E<gt> ...)> forms. Query
@@ -280,8 +282,9 @@ values.
 =head1 AUTHORITY AND PROXIES
 
 C<url_for> selects HTTP(S) or WS(S) from the route kind and uses
-L<PAGI::Authority> for a validated Host or server fallback. Duplicate or
-malformed Host fields never fall back. Routing does not parse Forwarded or
+the L<PAGI::Utils::URI> authority of the scope: the Host as sent, else the
+server address. A malformed or repeated Host is escaped into the URL, never
+validated, and does not fall back. Routing does not parse Forwarded or
 X-Forwarded headers. Reverse helpers return strings or croak. They perform no
 receive/send calls, emit no protocol events, do not redirect, and do not mutate
 a response.

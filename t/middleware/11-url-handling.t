@@ -1205,7 +1205,7 @@ subtest 'ReverseProxy - a Request below sees the rewritten headers' => sub {
             $rewritten_scope,
             async sub { {} },
         );
-        is $downstream_request->host, 'public.example:8443',
+        is $downstream_request->host, 'public.example',
             'downstream host reads the forwarded value from raw headers';
         is $downstream_request->header('host'), 'public.example:8443',
             'downstream header lookup builds a fresh forwarded Host snapshot';

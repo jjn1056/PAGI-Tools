@@ -353,7 +353,7 @@ events.
   $req->path           # URL path (decoded UTF-8)
   $req->query_string   # Query string (raw bytes)
   $req->scheme         # 'http'/'https' or WebSocket 'ws'/'wss'
-  $req->host           # Host header value
+  $req->host           # Host without its port
 
 =head3 Headers
 

@@ -4,7 +4,6 @@ use warnings;
 use parent 'PAGI::HTTPConnection';
 use Hash::MultiValue;
 use PAGI::Headers ();
-use PAGI::Authority ();
 use PAGI::Utils::Scope ();
 use Encode qw(find_encoding FB_CROAK FB_DEFAULT LEAVE_SRC);
 use Future::AsyncAwait;
@@ -73,11 +72,6 @@ sub _decode_body_text {
         message => "The request body is not valid $charset.",
         cause => $@,
     );
-}
-
-sub host {
-    my ($self) = @_;
-    return PAGI::Authority->host_from_scope($self->{scope});
 }
 
 # Method predicates
@@ -433,7 +427,7 @@ PAGI::Request - Convenience wrapper for PAGI request scope
         # Basic properties
         my $method = $req->method;        # GET, POST, etc.
         my $path   = $req->path;          # /users/42
-        my $host   = $req->host;          # example.com
+        my $host   = $req->host;          # example.com (no port)
 
         # Query parameters (Hash::MultiValue)
         my $page = $req->query_param('page');
@@ -482,7 +476,7 @@ A PAGI::Request is a L<PAGI::HTTPConnection>: what can be read from the scope
 alone -- path, headers, query and path parameters, cookies, client,
 application state -- comes from the methods it inherits (see
 L</INHERITED FROM PAGI::HTTPConnection>). This class adds the method, the
-Host reader, the body, forms and uploads.
+body, forms and uploads.
 
 HTTP, WebSocket, and SSE scopes are supported for metadata access. Request
 body input is available for HTTP and SSE scopes using each protocol's native
@@ -521,14 +515,6 @@ Request method (GET, POST, PUT, etc.). A WebSocket scope may omit this value,
 in which case C<method> returns C<undef>; it does not guess GET for an extended
 CONNECT request.
 
-=head2 host
-
-Returns the complete validated Host field, including an explicit port. Returns
-C<undef> only when Host is absent, and croaks when Host is malformed or occurs
-more than once. To read the field without validation, use
-L<PAGI::HTTPConnection/header> with C<'host'>: the raw value, or every value
-joined C<", "> when Host is repeated.
-
 =head2 raw
 
 Deferred alias for L<PAGI::HTTPConnection/scope>; returns the raw scope hashref without interpreting
@@ -542,7 +528,7 @@ These methods read the scope and are documented in L<PAGI::HTTPConnection>:
 
 =item * Scope properties: C<scope>, C<connection>, C<client>, C<server>,
 C<scheme>, C<http_version>, C<path>, C<raw_path>, C<raw_path_info>,
-C<request_uri>, C<query_string>
+C<request_uri>, C<host>, C<query_string>
 
 =item * Headers: C<headers>, C<header>, C<header_all>, C<content_type>,
 C<charset>, C<content_length>, C<bearer_token>, C<basic_auth>

@@ -512,6 +512,7 @@ subtest 'TrustedHosts refuses with plain text by default' => sub {
         ['missing Host',                  [],                                                'Missing Host header'],
         ['duplicate Host',                [['Host', 'example.com'], ['host', 'example.com']], 'Invalid Host header'],
         ['structurally malformed Host',   [['Host', 'example.com/path']],                    'Invalid Host header'],
+        ['Host with a space',             [['Host', 'exa mple.com']],                        'Invalid Host header'],
         ['allowlist-rejected valid Host', [['Host', 'other.example']],                       'Invalid Host header'],
     );
     for my $case (@cases) {

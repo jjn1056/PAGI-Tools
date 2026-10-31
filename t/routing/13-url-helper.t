@@ -667,18 +667,17 @@ subtest 'authority validation and target kinds preserve HTTP HTTPS WS WSS mappin
         scheme => 'https', headers => [], server => ['fallback.example', 9443]),
         '/page'), 'https://fallback.example:9443/page',
         'server supplies authority only when Host is absent');
-    like(dies { url_for(_scope('http', $resolver,
-        headers => [['host', 'bad host']],
-        server => ['fallback.example', 80]), '/page') },
-        qr/\Ainvalid authority/, 'malformed Host does not fall back to server');
-    like(dies { url_for(_scope('http', $resolver,
+    is(url_for(_scope('http', $resolver,
+        headers => [['host', 'exa mple.com']],
+        server => ['fallback.example', 80]), '/page'),
+        'http://exa%20mple.com/page', 'a malformed Host is escaped into the URL');
+    is(url_for(_scope('http', $resolver,
         headers => [['host', 'one.example'], ['Host', 'two.example']],
-        server => ['fallback.example', 80]), '/page') },
-        qr/\AHost header must occur at most once/,
-        'duplicate Host does not fall back to server');
+        server => ['fallback.example', 80]), '/page'),
+        'http://one.example,%20two.example/page', 'a repeated Host is joined and escaped');
     like(dies { url_for(_scope('http', $resolver,
         headers => [], server => undef), '/page') },
-        qr/\Ascope server cannot provide an authority/,
+        qr/\Ano Host header, and the scope server cannot provide an authority/,
         'missing authority remains an error');
     like(dies { url_for(_scope('http', $resolver, scheme => 'ftp'), '/page') },
         qr/\Aunsupported URL scheme/, 'unsupported scheme remains an error');

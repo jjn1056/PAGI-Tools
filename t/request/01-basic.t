@@ -40,56 +40,17 @@ subtest 'constructor and basic properties' => sub {
     is($req->client, ['127.0.0.1', 54321], 'client');
 };
 
-subtest 'host validates the raw Host field instead of using a last-value lookup' => sub {
-    is(
-        PAGI::Request->new({
-            type    => 'http',
-            headers => [['Host', 'example.com:8443']],
-        }, $receive)->host,
-        'example.com:8443',
-        'preserves an explicit Host port',
-    );
+subtest 'host is the Host as sent, without the port' => sub {
+    my $host_of = sub {
+        PAGI::Request->new({ type => 'http', path => '/', headers => $_[0], server => ['10.0.0.5', 80] }, $receive)->host;
+    };
 
-    is(
-        PAGI::Request->new({ type => 'http', headers => [] }, $receive)->host,
-        undef,
-        'returns undef when Host is absent',
-    );
-
-    like(
-        dies {
-            PAGI::Request->new({
-                type    => 'http',
-                headers => [['Host', 'bad.example:65536']],
-            }, $receive)->host;
-        },
-        qr/invalid authority/,
-        'rejects a malformed Host field',
-    );
-
-    for my $case (
-        [['Host', 'same.example'], ['host', 'same.example'], 'identical duplicates'],
-        [['Host', 'one.example'], ['host', 'two.example'], 'conflicting duplicates'],
-        [['hOsT', 'one.example'], ['HOST', 'two.example'], 'mixed-case duplicates'],
-    ) {
-        my ($first, $second, $description) = @$case;
-        my $request = PAGI::Request->new({
-            type    => 'http',
-            headers => [$first, $second],
-        }, $receive);
-
-        # D1: the raw lookup joins a repeated field (was: the last value).
-        is(
-            $request->header('host'),
-            "$first->[1], $second->[1]",
-            "raw lookup joins $description",
-        );
-        like(
-            dies { $request->host },
-            qr/Host header must occur at most once/,
-            "host rejects $description",
-        );
-    }
+    is($host_of->([['Host', 'example.com:8443']]), 'example.com', 'an explicit port is left off');
+    is($host_of->([['Host', '[::1]:8080']]), '[::1]', 'a bracketed IPv6 host keeps its brackets');
+    is($host_of->([]), '10.0.0.5', 'the server address answers when Host is absent');
+    is($host_of->([['Host', 'exa mple.com']]), 'exa mple.com', 'a malformed Host is read as sent');
+    is($host_of->([['Host', 'one.example'], ['host', 'two.example']]), 'one.example, two.example',
+        'a repeated Host is read joined, as header() does');
 };
 
 subtest 'predicate methods' => sub {

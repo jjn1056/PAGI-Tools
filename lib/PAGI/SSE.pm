@@ -904,7 +904,7 @@ scope.
 
 =item * Scope properties: C<scope>, C<connection>, C<client>, C<server>,
 C<scheme> (C<http> unless the scope says otherwise), C<http_version>, C<path>,
-C<raw_path>, C<raw_path_info>, C<request_uri>, C<query_string>
+C<raw_path>, C<raw_path_info>, C<request_uri>, C<host>, C<query_string>
 
 =item * Headers: C<headers>, C<header>, C<header_all>
 

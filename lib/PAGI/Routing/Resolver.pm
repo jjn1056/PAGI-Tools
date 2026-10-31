@@ -4,7 +4,7 @@ use strict;
 use warnings;
 use Carp qw(croak);
 use Scalar::Util qw(blessed refaddr);
-use PAGI::Authority ();
+use PAGI::Utils::URI ();
 use PAGI::Routing::Mount ();
 use PAGI::Routing::Pattern ();
 use PAGI::Utils::Scope ();
@@ -417,9 +417,9 @@ sub _url_for_rendered_scope {
         $url_scheme = $scheme_for{$scope_scheme};
     }
 
-    my $authority = PAGI::Authority->from_scope($scope);
+    my $origin = PAGI::Utils::URI->from_scope($scope)->replace(scheme => $url_scheme)->origin;
     my $path = _join_root_path($root_path, $rendered->{path});
-    return "$url_scheme://$authority$path";
+    return "$origin$path";
 }
 
 sub _render_reverse {
@@ -727,8 +727,8 @@ and query components are UTF-8 percent-encoded; the fragment is UTF-8 encoded
 as one component after the query.
 
 C<path_for> validates values and returns an application-relative string.
-C<url_for_scope> additionally reads one request scope, delegates authority to
-L<PAGI::Authority>, applies the compiled-router C<root_path> boundary, and
+C<url_for_scope> additionally reads one request scope, takes the authority from
+L<PAGI::Utils::URI>, applies the compiled-router C<root_path> boundary, and
 returns an absolute string. It resolves the target once and maps the indexed
 route kind to the URL scheme; for example, suffix ordering is
 C<https://example.test/items/7?q=two%20words#details> for HTTP/SSE and
@@ -759,7 +759,7 @@ snapshot before explicit params are overlaid. Absolute scope-bound references
 and all public Router calls remain inheritance-free. Query and fragment values
 are never read from captures. The existing Pattern renderer remains
 responsible for missing, extra, scalar, and constraint validation. URL mode
-adds the request scheme and L<PAGI::Authority> only after target resolution;
+adds the request scheme and L<PAGI::Utils::URI> authority only after target resolution;
 neither mode performs protocol I/O.
 
 Relative capture inheritance is a URL-construction convenience. It does not

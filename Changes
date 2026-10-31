@@ -488,9 +488,17 @@
   - GZip compresses streaming responses.
   - Cascade advances only on a status in catch; a child that sends
     nothing is an error, not a miss.
-  - Host data is validated strictly: Request authority, TrustedHosts and
-    HTTPSRedirect answer 400 for malformed or duplicate Host; ReverseProxy
-    accepts one trusted X-Forwarded-Host.
+  - Host data is validated strictly by TrustedHosts and HTTPSRedirect, which
+    answer 400 for malformed or duplicate Host; ReverseProxy accepts one
+    trusted X-Forwarded-Host.
+  - host is on PAGI::HTTPConnection, so $ws->host and $sse->host exist, and
+    it is the uri's host: the Host as sent, without its port ("example.com"
+    for "Host: example.com:8080"; use $request->uri->authority for host:port
+    or $request->uri->port), never validated, and the server address when
+    there is no Host. url_for takes its scheme://authority from the same
+    URL, percent-encoding the authority, so a malformed Host no longer
+    croaks and cannot change the URL's path or query. Use TrustedHosts to
+    accept only the hosts the application serves.
   - Accept matching uses the most specific quality (an exact q=0 wins).
   - XSendfile mappings match path components, most specific first.
   - The Session middleware re-sends the cookie on a read once half of

@@ -59,6 +59,9 @@ sub uri {
     return $self->{_uri} //= PAGI::Utils::URI->from_scope($self->{scope});
 }
 
+# The client's Host without its port, as the uri reads it; never validated.
+sub host { shift->uri->host }
+
 # The application's root URL: the request's scheme and authority, the
 # encoded root path and a trailing "/".
 sub base_uri {
@@ -435,6 +438,18 @@ hosts the application serves (see L<PAGI::Utils::URI/The host is not
 validated>). Dies as L</request_uri> does when the scope has no path, and
 C<no Host header, and the scope server cannot provide an authority> when it
 has neither a C<Host> nor a usable C<server>.
+
+=head2 host
+
+    my $host = $conn->host;        # example.com
+
+The host of L</uri>: the client's C<Host> as sent, without a trailing
+C<:port> (C<example.com> for C<example.com:8080>, C<[::1]> for
+C<[::1]:8080>) and percent-decoded, or the server address when there is no
+C<Host>. It is the client's and is not validated: put
+C<middleware('TrustedHosts', ...)> first to accept only the hosts the
+application serves. For host and port use C<< $conn->uri->authority >>, for
+the explicit port C<< $conn->uri->port >>. Dies as L</uri> does.
 
 =head2 base_uri
 
