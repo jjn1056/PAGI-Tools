@@ -4,6 +4,7 @@ use strict;
 use warnings;
 use Carp qw(croak);
 use PAGI::Utils ();
+use PAGI::Utils::Scope ();
 
 our @METHODS = qw(GET HEAD POST PUT PATCH DELETE OPTIONS QUERY);
 my %IS_METHOD = map { $_ => 1 } @METHODS;
@@ -120,7 +121,10 @@ sub _parse_request {
     my %options = (headers => \@headers);
     # The fields are bytes, so they are encoded here, as the path is, rather
     # than handed to the test client, which takes characters.
-    my $encoded = join '&', map { _escape($_->[0]) . '=' . _escape($_->[1]) } @fields;
+    my $encoded = join '&', map {
+        PAGI::Utils::Scope::_escape_form_bytes($_->[0]) . '='
+            . PAGI::Utils::Scope::_escape_form_bytes($_->[1])
+    } @fields;
     if (@fields && $HAS_BODY{$method}) {
         push @headers, ['Content-Type' => 'application/x-www-form-urlencoded'];
         $options{body} = $encoded;
@@ -148,12 +152,6 @@ sub _request {
     my $shutdown_error = eval { $client->stop; 1 } ? undef : $@;
     die $error unless $response;
     return ($response, $shutdown_error);
-}
-
-sub _escape {
-    my ($text) = @_;
-    $text =~ s/([^A-Za-z0-9\-._~])/sprintf('%%%02X', ord $1)/ge;
-    return $text;
 }
 
 sub _usage {

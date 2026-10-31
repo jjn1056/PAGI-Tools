@@ -107,14 +107,20 @@ sub _encode_component {
     return $bytes;
 }
 
-# Percent-encode a query key or value, or a form field, as an
-# application/x-www-form-urlencoded component: _encode_component, except a
-# space is "+", as a browser writes a form. A literal "+" is still "%2B".
+# Percent-encode bytes as an application/x-www-form-urlencoded component:
+# every byte outside the unreserved characters is %XX, except a space,
+# which is "+", as a browser writes a form. A literal "+" is still "%2B".
+sub _escape_form_bytes {
+    my ($bytes) = @_;
+    $bytes =~ s/([^A-Za-z0-9\-._~ ])/sprintf('%%%02X', ord($1))/ge;
+    $bytes =~ tr/ /+/;
+    return $bytes;
+}
+
+# A query key or value, or a form field, given as characters.
 sub _encode_form_component {
     my ($value) = @_;
-    my $encoded = _encode_component($value);
-    $encoded =~ s/%20/+/g;
-    return $encoded;
+    return _escape_form_bytes(Encode::encode('UTF-8', $value, Encode::FB_CROAK));
 }
 
 sub _unescape {
