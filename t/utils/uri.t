@@ -142,7 +142,23 @@ subtest 'paths: path is decoded text, raw_path escaped bytes, both with the root
     is($uri->raw_path, '/app/caf%C3%A9', 'the client bytes, escaped');
 
     $uri = uri_for(path => '//evil.example/x', raw_path => '//evil.example/x');
-    is($uri->raw_path, '/evil.example/x', 'a leading // is reduced, as request_uri does');
+    is($uri->raw_path, '//evil.example/x', 'a leading // is kept, as sent');
+    is($uri->path, '//evil.example/x', 'path agrees with raw_path');
+    is($uri->path_query, '/evil.example/x', 'path_query alone is held to one leading /');
+};
+
+subtest 'from_scope: a request for //evil/x keeps the // in the value' => sub {
+    my $uri = uri_for(headers => [['host', 'h']], path => '//evil/x', raw_path => '//evil/x', query_string => 'a=1');
+    is("$uri", 'http://h//evil/x?a=1', 'the string form');
+    is($uri->path, '//evil/x', 'path');
+    is($uri->raw_path, '//evil/x', 'raw_path');
+    is($uri->path_query, '/evil/x?a=1', 'path_query');
+    is(PAGI::Utils::Scope::request_uri(http_scope(path => '//evil/x', raw_path => '//evil/x', query_string => 'a=1')),
+        '/evil/x?a=1', 'request_uri stays collapsed');
+    ok(!$uri->is_equivalent(uri_for(headers => [['host', 'h']], path => '/evil/x', raw_path => '/evil/x', query_string => 'a=1')),
+        'not equivalent to the single-slash path');
+    is(uri_for(headers => [['host', 'h']], root_path => '/', path => '/x', raw_path => undef)->raw_path, '//x',
+        'a root path rebuilt without raw_path is not collapsed either');
 };
 
 subtest 'an unedited value stringifies to scheme://authority + the exact request_uri' => sub {
@@ -271,13 +287,18 @@ subtest 'parse takes characters: every non-ASCII character is UTF-8 encoded' => 
     is($uri->query_params->get('q'), 'café', 'so does the query');
 };
 
-subtest 'parse starts the path with at most one /, as from_scope does' => sub {
+subtest 'parse keeps the path as sent, a leading // included' => sub {
     for my $string ('http://h//evil.example/x?q=1', 'http://h///evil.example/x?q=1') {
         my $uri = PAGI::Utils::URI->parse($string);
-        is($uri->raw_path, '/evil.example/x', "$string: raw_path");
-        is($uri->path, '/evil.example/x', "$string: path");
-        is("$uri", 'http://h/evil.example/x?q=1', "$string: the string form");
+        my ($path) = $string =~ m{\Ahttp://h(/[^?]*)};
+        is($uri->raw_path, $path, "$string: raw_path");
+        is($uri->path, $path, "$string: path");
+        is("$uri", $string, "$string: the string form");
+        like($uri->path_query, qr{\A/[^/]}, "$string: path_query starts with one /");
     }
+    my $uri = PAGI::Utils::URI->parse('http://h//evil/x?a=1');
+    is("$uri", 'http://h//evil/x?a=1', 'the string form parses back');
+    is($uri->path_query, '/evil/x?a=1', 'path_query');
     my $scope_uri = uri_for(path => '//evil.example/x', raw_path => '//evil.example/x');
     is(PAGI::Utils::URI->parse('http://127.0.0.1:5000//evil.example/x')->raw_path, $scope_uri->raw_path,
         'the same path as from_scope gives for that request');

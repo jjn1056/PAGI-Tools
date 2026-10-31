@@ -37,7 +37,8 @@
     the client's Host read as Mojolicious reads it (percent-decoded),
     unvalidated, and percent-encoded again in the string form, so a hostile
     Host cannot change the path or query; an
-    unedited URL is scheme://authority followed by request_uri. eq compares
+    unedited URL is scheme://authority followed by the path and query,
+    escaped as request_uri escapes them. eq compares
     the string forms byte for byte. Edits return a new value:
     with_query(@pairs) (each named key's pairs replaced at the end, undef
     deletes, an arrayref repeats), without_query(@keys), replace(%parts)
@@ -45,7 +46,8 @@
     query_string, fragment; a new path keeps the query) and
     resolve($reference) (RFC 3986 5.2), the way to make an absolute URL
     from path_for's path. A query edit writes every pair form-encoded (a
-    space is +); a parsed or edited path never starts with //. Also
+    space is +); the path is kept as sent, a leading // included, and
+    only path_query holds it to one /. Also
     add_query(@pairs) (appends, removes nothing), join_path(@segments),
     replace(path_segments => \@text) (a / inside a segment stays %2F),
     path_query, path_segments, is_secure, origin, and is_equivalent($other):

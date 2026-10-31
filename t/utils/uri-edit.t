@@ -163,30 +163,34 @@ subtest 'replace(path), replace(raw_path)' => sub {
         'path with raw_path dies');
 };
 
-subtest 'a path edit never starts the path with //' => sub {
+subtest 'a path edit keeps a leading // as given' => sub {
     my $uri = uri('http://example.com/p?x=1');
     for my $case (
-        [path     => $uri->replace(path => '//evil.example/x')],
-        [raw_path => $uri->replace(raw_path => '//evil.example/x')],
-        [path     => $uri->replace(path => '///evil.example/x')],
-        [resolve  => $uri->resolve('/.//evil.example/x')],
+        [path     => $uri->replace(path => '//x'),     '//x'],
+        [raw_path => $uri->replace(raw_path => '//x'), '//x'],
+        [path_3   => $uri->replace(path => '///x'),    '///x'],
     ) {
-        my ($how, $edited) = @$case;
-        is($edited->raw_path, '/evil.example/x', "$how: raw_path has one leading /");
-        like("$edited", qr{\Ahttp://example\.com/evil\.example/x}, "$how: the string form keeps the host");
+        my ($how, $edited, $raw_path) = @$case;
+        is($edited->raw_path, $raw_path, "$how: raw_path");
+        is("$edited", "http://example.com$raw_path?x=1", "$how: the string form");
+        is($edited->path_query, '/x?x=1', "$how: path_query has one leading /");
     }
-    is($uri->resolve('//other.example//evil.example/x')->raw_path, '/evil.example/x',
-        'resolve with an authority: one leading /');
+    my $resolved = $uri->resolve('/.//x');
+    is($resolved->raw_path, '//x', 'resolve follows RFC 3986: /.//x is //x');
+    is("$resolved", 'http://example.com//x', 'resolve: the string form');
+    is($resolved->path_query, '/x', 'resolve: path_query has one leading /');
+    is($uri->resolve('//other.example//x')->raw_path, '//x', 'resolve with an authority: RFC 3986 only');
 
     my $parsed = uri('http://example.com//evil.example/x?x=1');
     for my $case (
         [with_query    => $parsed->with_query(y => 2)],
         [without_query => $parsed->without_query('x')],
+        [add_query     => $parsed->add_query(y => 2)],
         [replace       => $parsed->replace(fragment => 'f', scheme => 'https')],
         [resolve       => $parsed->resolve('?z=1')],
     ) {
         my ($how, $edited) = @$case;
-        is($edited->raw_path, '/evil.example/x', "$how, leaving a parsed path alone: one leading /");
+        is($edited->raw_path, '//evil.example/x', "$how, leaving a parsed path alone: the // stays");
     }
 };
 

@@ -33,13 +33,13 @@ sub from_scope {
         ? $host
         : eval { PAGI::Authority::_format_server($scope->{server}, lc $scheme) }
             // croak 'no Host header, and the scope server cannot provide an authority';
-    my ($raw_path, $query_string) = split /\?/, PAGI::Utils::Scope::request_uri($scope), 2;
+    my ($raw_path, $query_string) = PAGI::Utils::Scope::_request_path_and_query($scope);
 
     return $class->_new(
         scheme       => $scheme,
         _split_authority($authority),
         raw_path     => $raw_path,
-        query_string => $query_string // '',
+        query_string => $query_string,
         fragment     => '',
         (defined $scope->{path} ? (path => ($scope->{root_path} // '') . $scope->{path}) : ()),
     );
@@ -57,7 +57,7 @@ sub parse {
     return $class->_new(
         scheme       => $scheme,
         _split_authority($authority),
-        raw_path     => _one_leading_slash(PAGI::Utils::Scope::_escape_path_bytes($path)),
+        raw_path     => PAGI::Utils::Scope::_escape_path_bytes($path),
         query_string => PAGI::Utils::Scope::_escape_unsafe_bytes($query // ''),
         fragment     => PAGI::Utils::Scope::_escape_unsafe_bytes($fragment // ''),
     );
@@ -181,7 +181,7 @@ sub origin {
 sub path_query {
     my $self = shift;
     _read_only($self, @_);
-    return _one_leading_slash($self->{raw_path})
+    return PAGI::Utils::Scope::_one_leading_slash($self->{raw_path})
         . (length $self->{query_string} ? "?$self->{query_string}" : '');
 }
 
@@ -310,7 +310,7 @@ sub replace {
             ? PAGI::Utils::Scope::_encode_path($parts{path} // '')
             : PAGI::Utils::Scope::_escape_path_bytes($parts{raw_path} // '');
         croak 'a path must be empty or start with /' if $raw_path =~ m{\A[^/]};
-        $changes{raw_path} = _one_leading_slash($raw_path);
+        $changes{raw_path} = $raw_path;
     }
     if (exists $parts{path_segments}) {
         croak 'path_segments must be an arrayref of text' unless ref $parts{path_segments} eq 'ARRAY';
@@ -340,7 +340,7 @@ sub resolve {
     if (defined $scheme || defined $authority) {
         croak 'a reference with a scheme must have an authority' unless defined $authority;
         my $target = ref($self)->parse(defined $scheme ? $reference : "$self->{scheme}:$reference");
-        return $target->_clone(raw_path => _one_leading_slash(_remove_dot_segments($target->{raw_path})));
+        return $target->_clone(raw_path => _remove_dot_segments($target->{raw_path}));
     }
 
     my %changes = (fragment => PAGI::Utils::Scope::_escape_unsafe_bytes($fragment // ''));
@@ -349,7 +349,7 @@ sub resolve {
         my $merged = $path =~ m{\A/}      ? $path
             : length $self->{raw_path}    ? ($self->{raw_path} =~ s{[^/]*\z}{}r) . $path
             :                               "/$path";
-        $changes{raw_path} = _one_leading_slash(_remove_dot_segments($merged));
+        $changes{raw_path} = _remove_dot_segments($merged);
         $changes{query_string} = PAGI::Utils::Scope::_escape_unsafe_bytes($query // '');
     }
     elsif (defined $query) {
@@ -370,23 +370,15 @@ sub join_path {
 # final empty segment; the root has none.
 sub _raw_segments {
     my ($raw_path) = @_;
-    $raw_path = _one_leading_slash($raw_path);
+    $raw_path = PAGI::Utils::Scope::_one_leading_slash($raw_path);
     $raw_path =~ s{\A/}{};
     return length $raw_path ? split(m{/}, $raw_path, -1) : ();
 }
 
-# Escaped segments as a path, never starting with //.
+# Escaped segments as a path, never starting with //: the segments build the
+# path, so an empty first one is dropped.
 sub _path_from_segments {
-    return _one_leading_slash('/' . join '/', @_);
-}
-
-# A path parse or an edit sets starts with at most one "/", as request_uri's
-# does: a path read on its own must never name another host
-# ("//evil.example/").
-sub _one_leading_slash {
-    my ($raw_path) = @_;
-    $raw_path =~ s{\A/{2,}}{/};
-    return $raw_path;
+    return PAGI::Utils::Scope::_one_leading_slash('/' . join '/', @_);
 }
 
 # RFC 3986 5.2.4: the "." and ".." segments of a path removed, each ".."
@@ -526,8 +518,11 @@ percent-encoded; text read from it (L</path>, L</query_params>) is decoded;
 bytes go through the C<raw_> forms (L</raw_path>, L</raw_query_params>).
 
 The string form is safe to put in a C<Location> header, a page or a log
-line: an unedited request URL is C<scheme://authority> followed by
-L<PAGI::HTTPConnection/request_uri>, exactly.
+line: an unedited request URL is C<scheme://authority> followed by the path
+and query as the client sent them, escaped as
+L<PAGI::HTTPConnection/request_uri> escapes them. The value keeps the path
+as sent, a leading C<//> included; only L</path_query>, which hands out a
+path on its own, holds it to one C</>.
 
 =head2 The host is not validated
 
@@ -567,7 +562,9 @@ C<http://example.com/> differ, as the C<Host> spelling differs.
 The URL of the request in an C<http>, C<websocket> or C<sse> scope: its
 scheme (without one, C<ws> for a WebSocket scope and C<http> otherwise), its
 authority as described in L</The host is not validated>, and its path and
-query as L<PAGI::HTTPConnection/request_uri> gives them. The fragment is
+query escaped as L<PAGI::HTTPConnection/request_uri> escapes them, with a
+leading C<//> in the path kept: a request for C<//evil/x> has the path
+C<//evil/x>. The fragment is
 C<''>: a client does not send one. The value copies what it reads, so a
 later change to the scope does not reach it, and it writes nothing to the
 scope.
@@ -595,9 +592,10 @@ not as UTF-8 bytes, which would be encoded a second time. Anything else a
 URI cannot hold in the path, query or fragment is percent-encoded too, as
 the string form would show it.
 
-A path starting with C<//> is read with one C</>, as L</from_scope> reads
-the same request: C<http://h//evil.example/x> has the path
-C</evil.example/x>, so the path alone cannot name another host.
+The path is kept as sent, a leading C<//> included, as L</from_scope> keeps
+it: C<http://h//evil.example/x> has the path C<//evil.example/x> and stringifies
+back to the same URL. L</path_query> is the one reader that holds it to a
+single C</>.
 
 The authority is read as L</from_scope> reads a C<Host>: a trailing
 C<:digits> is the port, and the rest is percent-decoded. The string form of
@@ -655,7 +653,7 @@ L</raw_path> to tell them apart.
     my $raw_path = $uri->raw_path;   # /app/caf%C3%A9
 
 The path as escaped bytes, with the root path, exactly as the string form
-shows it.
+shows it and as the client sent it: a leading C<//> is kept.
 
 =head2 query_string
 
@@ -708,7 +706,10 @@ comparing with an C<Origin> header or building a CORS value.
 
 L</raw_path>, then C<?> and L</query_string> when it is not empty: a
 same-origin reference for a C<Location> header. For a request URL it is
-L<PAGI::HTTPConnection/request_uri>. It never starts with C<//>.
+L<PAGI::HTTPConnection/request_uri>. It never starts with C<//>: a leading
+C<//> (any run of slashes) becomes one C</>, because a C<Location> of
+C<//evil.example/x> is protocol-relative and names another host. The value
+itself keeps the path as sent (see L</raw_path>).
 
 =head2 path_segments
 
@@ -760,10 +761,11 @@ C<q=red%20shoes;flag> is written C<q=red+shoes&flag=>. Names and values
 given to an edit are text, UTF-8 encoded; the client's bytes are kept as
 they were, UTF-8 or not.
 
-A path an edit sets never starts with C<//>: a leading C<//> becomes C</>,
-as in L<PAGI::HTTPConnection/request_uri>, so the path alone cannot name
-another host. C<replace(path =E<gt> '//evil.example/x')> gives the path
-C</evil.example/x>.
+An edit keeps the path as given, a leading C<//> included:
+C<replace(path =E<gt> '//x')> gives the path C<//x>, and its L</path_query>
+is C</x>. Only L</path_segments>, L</join_path> and
+C<replace(path_segments =E<gt> ...)>, which build a path from segments, drop
+an empty first segment.
 
 =head2 with_query
 
@@ -879,7 +881,8 @@ authority and takes the reference's query and fragment; a relative path is
 merged with this URL's path, and C<.> and C<..> segments are removed; a
 reference with only a query or fragment keeps this URL's path. A reference
 starting C<//> keeps only the scheme, and one with a scheme and an authority
-keeps nothing.
+keeps nothing. The result is exactly what RFC 3986 gives, so C</.//x>
+resolves to the path C<//x>.
 
 This is the way to build an absolute URL from a path:
 L<PAGI::Routing::URL/path_for> gives the path, with the root path, and

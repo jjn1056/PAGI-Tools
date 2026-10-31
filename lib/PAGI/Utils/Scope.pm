@@ -72,11 +72,26 @@ sub raw_path {
 # into "//host"), and a leading "//" (another host to a browser) becomes "/".
 sub request_uri {
     my ($scope) = @_;
-    my $uri = _escape_path_bytes(raw_path($scope));
-    my $query_string = $scope->{query_string} // '';
-    $uri .= '?' . _escape_unsafe_bytes($query_string) if length $query_string;
-    $uri =~ s{\A/{2,}}{/};
-    return $uri;
+    my ($path, $query) = _request_path_and_query($scope);
+    return _one_leading_slash($path . (length $query ? "?$query" : ''));
+}
+
+# The request's path and query, each escaped as request_uri escapes them
+# and neither held to one leading slash. The query is '' when there is none.
+sub _request_path_and_query {
+    my ($scope) = @_;
+    return (
+        _escape_path_bytes(raw_path($scope)),
+        _escape_unsafe_bytes($scope->{query_string} // ''),
+    );
+}
+
+# A path handed out on its own starts with at most one "/": a leading "//"
+# is another host to a browser.
+sub _one_leading_slash {
+    my ($path) = @_;
+    $path =~ s{\A/{2,}}{/};
+    return $path;
 }
 
 # The encoded part of raw_path below root_path, for code that must tell an

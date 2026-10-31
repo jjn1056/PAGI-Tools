@@ -30,6 +30,8 @@ subtest 'path_query is raw_path and the query' => sub {
     is(uri('http://h//evil.example/x?q=1')->path_query, '/evil.example/x?q=1', 'never starts with //');
     is(uri('http://h/a')->replace(raw_path => '//evil.example/')->path_query, '/evil.example/',
         'an edited path is held to one leading slash');
+    is(uri('http://h///evil.example/x')->path_query, '/evil.example/x', 'any run of leading slashes becomes one');
+    is(uri('http://h/a//b')->path_query, '/a//b', 'a // later in the path is kept');
     like(dies { uri('http://h/')->path_query(1) }, qr/path_query takes no arguments/, 'a reader takes none');
 };
 
@@ -90,6 +92,7 @@ subtest 'is_equivalent: RFC 3986 6.2.2 on scheme, authority and path' => sub {
     ok(!uri('https://h:80/')->is_equivalent(uri('https://h/')), 'port 80 is not https default');
     ok(!uri('http://h:8080/')->is_equivalent(uri('http://h/')), 'other port differs');
     ok(!uri('http://h/a')->is_equivalent(uri('http://h/b')), 'different path');
+    ok(!uri('http://h//evil/x')->is_equivalent(uri('http://h/evil/x')), 'a leading // is part of the path');
     ok(!uri('http://h/a')->is_equivalent(uri('https://h/a')), 'different scheme');
     ok(!uri('http://h/A')->is_equivalent(uri('http://h/a')), 'the path is case sensitive');
     ok(!uri('http://h/#a')->is_equivalent(uri('http://h/#b')), 'different fragment');

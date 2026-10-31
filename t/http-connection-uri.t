@@ -51,6 +51,18 @@ subtest 'uri' => sub {
     is($scope, $before, 'the scope has no new keys and no changed values');
 };
 
+subtest 'uri keeps a leading // in the request path' => sub {
+    my $conn = PAGI::HTTPConnection->new(scope_of('http',
+        scheme => 'http', root_path => '', path => '//evil/x', raw_path => '//evil/x',
+        query_string => 'a=1', headers => [['host', 'h']]));
+    my $uri = $conn->uri;
+    is("$uri", 'http://h//evil/x?a=1', 'the request URL as sent');
+    is($uri->path, '//evil/x', 'path');
+    is($uri->raw_path, '//evil/x', 'raw_path agrees');
+    is($uri->path_query, '/evil/x?a=1', 'path_query is held to one /');
+    is($conn->request_uri, '/evil/x?a=1', 'request_uri is too');
+};
+
 subtest 'base_uri' => sub {
     my $base = PAGI::HTTPConnection->new(scope_of('http'))->base_uri;
     isa_ok($base, 'PAGI::Utils::URI');
