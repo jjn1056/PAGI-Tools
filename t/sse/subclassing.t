@@ -57,8 +57,9 @@ subtest 'a copy of the scope gets its own object, bound to the copy' => sub {
 
 {
     # A framework constructor that takes named arguments and blesses the
-    # fields itself, calling nothing in PAGI::SSE->new (as Thunderhorse's
-    # Mooish constructor does).
+    # fields itself, calling nothing in PAGI::SSE->new. Thunderhorse's Mooish
+    # constructor does call it, through FOREIGNBUILDARGS; this is the other
+    # shape a framework may take.
     package Local::MooishFeed;
     our @ISA = ('PAGI::SSE');
     sub new {

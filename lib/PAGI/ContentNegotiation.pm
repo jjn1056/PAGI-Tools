@@ -551,7 +551,7 @@ sub _require_declared {
 
     async sub app ($scope, $receive, $send) {
         # Scope headers are an arrayref of [name, value] pairs, not a hash.
-        # Read them through PAGI::Request, not $scope->{headers}{...}.
+        # Read them through PAGI::HTTPConnection, not $scope->{headers}{...}.
         my $req    = PAGI::Request->new($scope, $receive);
         my $accept = $req->header('accept') // '*/*';
 

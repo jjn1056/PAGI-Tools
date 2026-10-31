@@ -569,7 +569,7 @@
     try_send* returned 0, and keepalive and close sent nothing.
   - The middleware reads requests through PAGI::HTTPConnection, each
     reader keeping its own meaning. A header checked against something
-    reads every field joined ", " (D1), so a repeated one fails the check:
+    reads every field joined ", ", so a repeated one fails the check:
     CORS's Origin, CSRF's Origin, Sec-Fetch-Site, Host and token header
     (each read the first field). A header used as a value is absent when
     sent twice, and the reader's fallback applies: ReverseProxy's
@@ -589,7 +589,7 @@
     a repeated Referer or User-Agent joined (it logged the last). CSRF's
     token cookie, Session::State::Cookie's session cookie and the Cookie
     middleware's pagi.cookies are read as PAGI::HTTPConnection reads
-    cookies (D5): from every Cookie field (only the first counted), quotes
+    cookies: from every Cookie field (only the first counted), quotes
     removed, the last of a repeated name winning (CSRF and the Cookie
     middleware took the first), and the Cookie middleware no longer
     percent-decodes (pagi.cookies holds "x%2Fy" for Cookie: a=x%2Fy, where
