@@ -22,13 +22,6 @@
     and raise_on_error still throws the HTTP 400. Calling code needs no change.
   - PAGI::Request::is_xhr, true when X-Requested-With is XMLHttpRequest (any
     case). fetch() does not send the header.
-  - ReverseProxy covers WebSocket and SSE scopes, as it does HTTP: the same
-    trusted-proxy gate, X-Forwarded-For and X-Real-IP set the client,
-    X-Forwarded-Proto sets the scheme (wss for a WebSocket behind https, https
-    for SSE) and X-Forwarded-Host replaces Host, so $ws->uri and $sse->uri
-    read the proxied values. A trusted WebSocket or SSE request with a
-    repeated or malformed X-Forwarded-Host is now refused as an HTTP request
-    is. TrustedHosts stays HTTP-only.
   - PAGI::Utils::URI, the request's URL as an immutable value, on every
     connection as $conn->uri (and $conn->base_uri, the application's root
     URL), kept on the connection, never in the scope: scheme, authority,
@@ -342,8 +335,7 @@
 
   [Changed]
   - url_for and path_for write a space in a query as "+" (path segments and
-    the fragment keep "%20"). PAGI::Test::Client's query => and form =>
-    (shipped in 0.002002) do the same, a literal "+" being "%2B".
+    the fragment keep "%20").
   - PAGI::WebSocket and PAGI::SSE hand each send to the server at once and
     rely on it to keep a connection's sends in call order, as
     PAGI::Spec::Www 0.7 requires. A handler with several producers needs no
@@ -491,14 +483,11 @@
   - Host data is validated strictly by TrustedHosts and HTTPSRedirect, which
     answer 400 for malformed or duplicate Host; ReverseProxy accepts one
     trusted X-Forwarded-Host.
-  - host is on PAGI::HTTPConnection, so $ws->host and $sse->host exist, and
-    it is the uri's host: the Host as sent, without its port ("example.com"
-    for "Host: example.com:8080"; use $request->uri->authority for host:port
-    or $request->uri->port), never validated, and the server address when
-    there is no Host. url_for takes its scheme://authority from the same
-    URL, percent-encoding the authority, so a malformed Host no longer
-    croaks and cannot change the URL's path or query. Use TrustedHosts to
-    accept only the hosts the application serves.
+  - host is on PAGI::HTTPConnection, so $ws->host and $sse->host exist.
+    url_for takes its scheme://authority from the request's URL,
+    percent-encoding the authority, so a malformed Host no longer croaks and
+    cannot change the URL's path or query. Use TrustedHosts to accept only
+    the hosts the application serves.
   - Accept matching uses the most specific quality (an exact q=0 wins).
   - XSendfile mappings match path components, most specific first.
   - The Session middleware re-sends the cookie on a read once half of
@@ -558,6 +547,20 @@
     Tutorial link to one statement of each rule instead of restating it.
 
   [Breaking -- see UPGRADING.md]
+  - $request->host is the uri's host: the Host as sent, without its port
+    ("example.com" for "Host: example.com:8080"; use $request->uri->authority
+    for host:port or $request->uri->port), never validated, and the server
+    address where there is no Host, where it was undef. Code that builds
+    "http://" . $request->host . $path loses the port.
+  - PAGI::Test::Client's query => and form => (shipped in 0.002002) write a
+    space as "+", where they wrote "%20"; a literal "+" is "%2B".
+  - ReverseProxy covers WebSocket and SSE scopes, as it does HTTP, where it
+    passed them through: the same trusted-proxy gate, X-Forwarded-For and
+    X-Real-IP set the client, X-Forwarded-Proto sets the scheme (wss for a
+    WebSocket behind https, https for SSE) and X-Forwarded-Host replaces
+    Host, so $ws->uri and $sse->uri read the proxied values. A trusted
+    WebSocket or SSE request with a repeated or malformed X-Forwarded-Host
+    is refused as an HTTP request is. TrustedHosts stays HTTP-only.
   - PAGI::Headers->get, PAGI::Request->header, PAGI::WebSocket->header,
     PAGI::SSE->header and PAGI::Response->header join a repeated field
     ", " in order (RFC 9110 5.3; as Mojo::Headers, PSGI and Plack::Request
