@@ -616,6 +616,9 @@ sub _is_canonical_namespace {
     return 1;
 }
 
+# The path below root_path, handed out on its own: a wildcard value such as
+# "/evil.com/p" can make it start with "//", which a browser reads as another
+# host, so the result keeps one leading slash.
 sub _join_root_path {
     my ($root_path, $path) = @_;
     $root_path = '' unless defined $root_path;
@@ -628,7 +631,7 @@ sub _join_root_path {
     }
     chop $root_path if length($root_path) && substr($root_path, -1) eq '/'
         && length($path) && substr($path, 0, 1) eq '/';
-    return $root_path . $path . $suffix;
+    return PAGI::Utils::Scope::_one_leading_slash($root_path . $path . $suffix);
 }
 
 sub _encode_component { return PAGI::Utils::Scope::_encode_component(@_) }

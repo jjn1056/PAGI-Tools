@@ -815,4 +815,19 @@ subtest 'real compiled frames follow the active Router placement' => sub {
     ], 'URL reads real compiled leaf frames for both placements');
 };
 
+subtest 'a rendered path never starts with // so it cannot name another host' => sub {
+    my $resolver = _resolver(route('/*rest' => sub { }, name => 'files'));
+    my $scope = _scope('http', $resolver);
+    my $request = PAGI::Request->new($scope, sub { });
+
+    is(path_for($request, 'files', { rest => '/evil.com/p' }), '/evil.com/p',
+        'a wildcard value with a leading slash gives one leading slash');
+    is(path_for($request, 'files', { rest => '/' }), '/',
+        'a wildcard value of just a slash gives the root');
+    is(url_for($request, 'files', { rest => '/evil.com/p' }),
+        'http://example.test/evil.com/p', 'url_for keeps its own host');
+    is($request->uri->resolve(path_for($request, 'files', { rest => '/evil.com/p' }))->host,
+        'example.test', 'resolving the path stays on the request host');
+};
+
 done_testing;
