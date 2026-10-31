@@ -764,12 +764,7 @@ sub _request_target {
         $raw_path = Encode::encode('UTF-8', $raw_path);
         $raw_path =~ s/([\x80-\xff])/sprintf('%%%02X', ord $1)/eg;
     }
-    my $path = $raw_path;
-    if ($path =~ /%/) {
-        my $bytes = PAGI::Utils::Scope::_unescape($path);
-        $path = eval { Encode::decode('UTF-8', $bytes, Encode::FB_CROAK) } // $bytes;
-    }
-    return ($raw_path, $query_string, $path);
+    return ($raw_path, $query_string, PAGI::Utils::Scope::_decode_path($raw_path));
 }
 
 # A form or query value is characters, sent UTF-8 percent-encoded as a

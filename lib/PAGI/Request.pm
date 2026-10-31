@@ -12,7 +12,6 @@ use Carp qw(croak);
 use PAGI::Request::MultiPartHandler;
 use PAGI::Request::Upload;
 use PAGI::ContentNegotiation;
-use PAGI::Exception::HTTP ();
 use PAGI::Exception::RequestBody;
 use PAGI::Request::BodyStream;
 use PAGI::Request::_BodyInput ();
@@ -528,7 +527,7 @@ These methods read the scope and are documented in L<PAGI::HTTPConnection>:
 
 =item * Scope properties: C<scope>, C<connection>, C<client>, C<server>,
 C<scheme>, C<http_version>, C<path>, C<raw_path>, C<raw_path_info>,
-C<request_uri>, C<host>, C<query_string>
+C<request_uri>, C<host>, C<query_string>, C<uri>, C<base_uri>
 
 =item * Headers: C<headers>, C<header>, C<header_all>, C<content_type>,
 C<charset>, C<content_length>, C<bearer_token>, C<basic_auth>

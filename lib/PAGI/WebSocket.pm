@@ -905,9 +905,11 @@ scope.
 
 =item * Scope properties: C<scope>, C<connection>, C<client>, C<server>,
 C<scheme> (C<ws> unless the scope says otherwise), C<http_version>, C<path>,
-C<raw_path>, C<raw_path_info>, C<request_uri>, C<host>, C<query_string>
+C<raw_path>, C<raw_path_info>, C<request_uri>, C<host>, C<query_string>,
+C<uri>, C<base_uri>
 
-=item * Headers: C<headers>, C<header>, C<header_all>
+=item * Headers: C<headers>, C<header>, C<header_all>, C<content_type>,
+C<charset>, C<content_length>, C<bearer_token>, C<basic_auth>
 
 =item * Query parameters: C<query_params>, C<query_param>,
 C<raw_query_params>, C<raw_query_param>
