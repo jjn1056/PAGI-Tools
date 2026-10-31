@@ -34,6 +34,19 @@ sub scheme {
     return $scope->{scheme} // ($scope->{type} eq 'websocket' ? 'ws' : 'http');
 }
 
+# The scope's type, which must be http, websocket or sse: what a
+# connection, and its URL, can be read from. $owner names the caller in the
+# message.
+sub _require_connection_type {
+    my ($owner, $scope) = @_;
+    my $type = $scope->{type};
+    croak "$owner scope type is required"
+        unless defined($type) && !ref($type) && length($type);
+    croak "$owner requires HTTP, WebSocket, or SSE scope; received '$type'"
+        unless $type eq 'http' || $type eq 'websocket' || $type eq 'sse';
+    return $type;
+}
+
 # raw_path is rebuilt from path when the scope has no raw_path; with
 # neither there is nothing to answer from.
 sub _require_path_source {

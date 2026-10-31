@@ -82,6 +82,14 @@ subtest 'every connection has it' => sub {
     is("" . $sse->uri, 'https://example.com/app/items/42?x=1', 'an sse scope');
 };
 
+subtest 'base_uri is built once, whatever the value stringifies to' => sub {
+    my $conn = PAGI::HTTPConnection->new(scope_of('http'));
+    my $base = $conn->base_uri;
+    no warnings 'redefine';
+    local *PAGI::Utils::URI::to_string = sub { '' };
+    is(refaddr($conn->base_uri), refaddr($base), 'a value whose string form is false is still kept');
+};
+
 subtest 'a scope with no path' => sub {
     my $conn = PAGI::HTTPConnection->new({ type => 'http', headers => [['host', 'example.com']] });
     like(dies { $conn->uri }, qr/\Athis scope has no path at .*http-connection-uri\.t line /,

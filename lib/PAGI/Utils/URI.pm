@@ -23,6 +23,7 @@ sub from_scope {
     my ($class, $scope) = @_;
     croak 'PAGI::Utils::URI->from_scope requires a scope hashref'
         unless ref($scope) eq 'HASH';
+    PAGI::Utils::Scope::_require_connection_type($class, $scope);
     PAGI::Utils::Scope::_require_path_source($scope);
 
     my $scheme = PAGI::Utils::Scope::scheme($scope);
@@ -45,12 +46,14 @@ sub from_scope {
 
 sub parse {
     my ($class, $string) = @_;
+    $string = Encode::encode('UTF-8', $string) if defined $string;
     my ($scheme, $authority, $path, $query, $fragment) = defined $string
         ? $string =~ m{\A(?:([^:/?#]+):)?(?://([^/?#]*))?([^?#]*)(?:\?([^#]*))?(?:#(.*))?\z}s
         : ();
     croak 'not an absolute URI'
         unless defined $scheme && $scheme =~ /\A[A-Za-z][A-Za-z0-9+.\-]*\z/
             && defined $authority;
+    croak 'userinfo is not supported' if $authority =~ /\@/;
 
     return $class->_new(
         scheme       => $scheme,
@@ -93,13 +96,14 @@ sub _escape_authority {
     return $authority;
 }
 
-# Readers take no value: a value never changes.
+# Readers take no arguments: a value never changes, and no reader has
+# options.
 sub _read_only {
     my ($self, @value) = @_;
     return unless @value;
     my $name = (caller 1)[3];
     $name =~ s/.*:://;
-    croak "$name is read-only: a PAGI::Utils::URI never changes";
+    croak "$name takes no arguments: a PAGI::Utils::URI never changes, and its readers take no options";
 }
 
 sub scheme       { _read_only(@_); $_[0]{scheme} }
@@ -235,9 +239,11 @@ C<''>: a client does not send one. The value copies what it reads, so a
 later change to the scope does not reach it, and it writes nothing to the
 scope.
 
-Dies C<this scope has no path> when the scope has neither C<raw_path> nor
-C<path>, and C<no Host header, and the scope server cannot provide an
-authority> when it has no C<Host> and no usable C<server>.
+Dies as L<PAGI::HTTPConnection/new> does when the scope's C<type> is
+missing or is not C<http>, C<websocket> or C<sse>; C<this scope has no
+path> when the scope has neither C<raw_path> nor C<path>; and C<no Host
+header, and the scope server cannot provide an authority> when it has no
+C<Host> and no usable C<server>.
 
 =head2 parse
 
@@ -245,15 +251,28 @@ authority> when it has no C<Host> and no usable C<server>.
 
 A URL from its string form, split as RFC 3986 appendix B splits a URI. It
 must have a scheme and an authority (C<scheme://...>), or it dies C<not an
-absolute URI>. The authority is read as L</from_scope> reads a C<Host>, so
-the string form of a request URL parses back to the same host; anything a URI cannot hold
-in the path, query or fragment is percent-encoded, as the string form
-would show it. The string form of a value that came from L</from_scope> or
-L</parse> parses back to an equal value.
+absolute URI>; an authority with userinfo (C<user:pw@host>) dies
+C<userinfo is not supported>.
+
+The string is characters. Every non-ASCII character is UTF-8 encoded and
+then percent-encoded, in the authority, path, query and fragment alike:
+C<caf\x{e9}> is written C<caf%C3%A9>. An existing C<%XX> is kept as it is,
+so C<caf%C3%A9> stays C<caf%C3%A9>. Pass a URL as a string of characters,
+not as UTF-8 bytes, which would be encoded a second time. Anything else a
+URI cannot hold in the path, query or fragment is percent-encoded too, as
+the string form would show it.
+
+The authority is read as L</from_scope> reads a C<Host>: a trailing
+C<:digits> is the port, and the rest is percent-decoded. The string form of
+a value from L</from_scope> or L</parse> parses back to a value with the
+same string form, though not always the same host and port: C<Host:
+a%3A80> has the host C<a:80> and no port, and its string form
+C<http://a:80/> parses to the host C<a> and the port C<80>.
 
 =head1 READERS
 
-Each reader takes no argument; given one, it dies C<... is read-only>.
+Each reader takes no arguments and has no options; given any, it dies
+C<... takes no arguments>.
 
 =head2 scheme
 

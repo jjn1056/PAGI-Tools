@@ -16,11 +16,7 @@ sub new {
     croak "$class->new requires exactly one scope argument" if @extra;
     croak "$class requires an unblessed scope hashref"
         unless ref($scope) eq 'HASH' && !blessed($scope);
-    my $type = $scope->{type};
-    croak "$class scope type is required"
-        unless defined($type) && !ref($type) && length($type);
-    croak "$class requires HTTP, WebSocket, or SSE scope; received '$type'"
-        unless $type eq 'http' || $type eq 'websocket' || $type eq 'sse';
+    PAGI::Utils::Scope::_require_connection_type($class, $scope);
     return bless { scope => $scope }, $class;
 }
 
@@ -66,11 +62,11 @@ sub uri {
 # encoded root path and a trailing "/".
 sub base_uri {
     my $self = shift;
-    return $self->{_base_uri} if $self->{_base_uri};
-    my $root = PAGI::Utils::Scope::_encode_path($self->{scope}{root_path} // '');
-    $root .= '/' unless $root =~ m{/\z};
-    return $self->{_base_uri} = $self->uri->_clone(
-        raw_path => $root, query_string => '', fragment => '');
+    return $self->{_base_uri} //= do {
+        my $root = PAGI::Utils::Scope::_encode_path($self->{scope}{root_path} // '');
+        $root .= '/' unless $root =~ m{/\z};
+        $self->uri->_clone(raw_path => $root, query_string => '', fragment => '');
+    };
 }
 
 # The scope's headers as a PAGI::Headers, parsed once per object.

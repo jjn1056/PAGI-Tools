@@ -207,9 +207,11 @@ subtest 'immutable' => sub {
     is($uri->path, '/a', 'nor its path');
 
     for my $reader (qw(scheme authority host port path raw_path query_string query_params raw_query_params fragment)) {
-        like(dies { $uri->$reader('changed') }, qr/\A$reader is read-only/, "$reader takes no value");
+        like(dies { $uri->$reader('changed') }, qr/\A$reader takes no arguments/, "$reader takes no value");
     }
     is("$uri", 'http://example.com/a?x=1', 'unchanged');
+    like(dies { $uri->query_params(strict => 1) }, qr/\Aquery_params takes no arguments: .*no options/,
+        'an option to query_params is refused as an option');
 };
 
 subtest 'parse' => sub {
@@ -231,6 +233,12 @@ subtest 'parse' => sub {
     is($again->host, 'evil.com/x? A', 'the string form parses back to the same host');
     ok($again eq $hostile, 'and stringifies the same');
 
+    my $colon = uri_for(headers => [['host', 'a%3A80']]);
+    is([$colon->host, $colon->port, "$colon"], ['a:80', undef, 'http://a:80/'], 'Host: a%3A80 has the host a:80');
+    my $reparsed = PAGI::Utils::URI->parse("$colon");
+    is([$reparsed->host, $reparsed->port], ['a', '80'], 'its string form parses to the host a and the port 80');
+    ok($reparsed eq $colon, 'with the same string form');
+
     is(PAGI::Utils::URI->parse('http://example.com/%FF')->path, "/\xFF", 'a path that is not UTF-8 stays bytes');
     is("" . PAGI::Utils::URI->parse('http://example.com/a b?c d#e f'), 'http://example.com/a%20b?c%20d#e%20f',
         'what a URI cannot hold is escaped');
@@ -240,6 +248,45 @@ subtest 'parse' => sub {
     like(dies { PAGI::Utils::URI->parse('/items?x=1') }, qr/not an absolute URI/, 'a relative reference dies');
     like(dies { PAGI::Utils::URI->parse('mailto:a@example.com') }, qr/not an absolute URI/, 'so does one without an authority');
     like(dies { PAGI::Utils::URI->parse(undef) }, qr/not an absolute URI/, 'and undef');
+};
+
+subtest 'parse takes characters: every non-ASCII character is UTF-8 encoded' => sub {
+    my %cases = (
+        'a path, alone'                => ["http://example.com/caf\x{e9}",            'http://example.com/caf%C3%A9'],
+        'a path, beside a wide char'   => ["http://example.com/caf\x{e9}\x{263A}",    'http://example.com/caf%C3%A9%E2%98%BA'],
+        'a query, alone'               => ["http://example.com/?q=caf\x{e9}",         'http://example.com/?q=caf%C3%A9'],
+        'a query, beside a wide char'  => ["http://example.com/?q=caf\x{e9}\x{263A}", 'http://example.com/?q=caf%C3%A9%E2%98%BA'],
+        'a host, alone'                => ["http://caf\x{e9}.example/",               'http://caf%C3%A9.example/'],
+        'a host, beside a wide char'   => ["http://caf\x{e9}\x{263A}.example/",       'http://caf%C3%A9%E2%98%BA.example/'],
+        'a fragment'                   => ["http://example.com/#caf\x{e9}",           'http://example.com/#caf%C3%A9'],
+        'pre-escaped stays'            => ['http://caf%C3%A9.example/caf%C3%A9?q=caf%C3%A9#caf%C3%A9',
+                                           'http://caf%C3%A9.example/caf%C3%A9?q=caf%C3%A9#caf%C3%A9'],
+    );
+    for my $label (sort keys %cases) {
+        my ($in, $out) = @{ $cases{$label} };
+        is("" . PAGI::Utils::URI->parse($in), $out, $label);
+    }
+    my $uri = PAGI::Utils::URI->parse("http://example.com/caf\x{e9}?q=caf\x{e9}");
+    is($uri->path, '/café', 'path reads the character back');
+    is($uri->query_params->get('q'), 'café', 'so does the query');
+};
+
+subtest 'parse refuses userinfo' => sub {
+    like(dies { PAGI::Utils::URI->parse('http://user:pw@host.example/x') }, qr/\Auserinfo is not supported at .*uri\.t line /,
+        'user and password');
+    like(dies { PAGI::Utils::URI->parse('http://user@host.example/x') }, qr/\Auserinfo is not supported/, 'a user alone');
+    is(PAGI::Utils::URI->parse('http://user%40host.example/x')->host, 'user@host.example',
+        'an escaped @ is part of the host');
+};
+
+subtest 'from_scope requires an http, websocket or sse scope' => sub {
+    my @warnings;
+    local $SIG{__WARN__} = sub { push @warnings, @_ };
+    like(dies { PAGI::Utils::URI->from_scope({ path => '/', headers => [['host', 'example.com']] }) },
+        qr/\APAGI::Utils::URI scope type is required at .*uri\.t line /, 'no type');
+    like(dies { PAGI::Utils::URI->from_scope({ type => 'lifespan', path => '/', headers => [['host', 'example.com']] }) },
+        qr/\APAGI::Utils::URI requires HTTP, WebSocket, or SSE scope; received 'lifespan' at .*uri\.t line /, 'lifespan');
+    is(\@warnings, [], 'and no warnings');
 };
 
 done_testing;
