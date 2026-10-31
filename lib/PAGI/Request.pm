@@ -1106,9 +1106,8 @@ other methods call are:
     ------------  ----------------------------------------------------------
     path_params   path_param (and its strict mode)
     query_params  query_param, raw_query_param, raw_query_params
-    headers       header, header_all, content_type, charset, basic_auth,
-                  bearer_token, multipart_stream
-    header        content_length
+    headers       header, header_all, content_type, charset, content_length,
+                  basic_auth, bearer_token, multipart_stream
     header_all    cookies, accepts, preferred_type
     content_type  is_json, is_form, is_multipart
     cookies       cookie
