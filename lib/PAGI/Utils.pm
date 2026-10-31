@@ -959,19 +959,26 @@ middleware class name there, not in an application position.
 
     use PAGI::Utils qw(request_for_scope);
 
-    # In middleware: read a header the way the application would
-    sub _no_body { die "this middleware reads headers, not the body\n" }
-
-    my $request = request_for_scope($scope, \&_no_body);
-    my $token   = $request->header('Authorization');
+    # Hand an error handler the application's Request class, without the body
+    my $request = request_for_scope($scope);
+    my $answer  = $error_handler->($request);
 
 B<This is a limited-use Request.> It builds a I<new> Request for C<$scope>,
 of the application's class: the one the scope key C<pagi.request.factory>
 builds (set by L<PAGI::Middleware::RequestClass>), or a plain
 L<PAGI::Request> when the key is absent or undef. It is for code outside a
 route handler -- middleware, an error handler, a framework's own dispatch --
-that needs to read what the scope already holds: headers, cookies, the query
-string, the path. Know what it is not:
+that hands application code a Request of the class that code expects (an
+L<PAGI::Middleware::Authentication> backend, an
+L<PAGI::Middleware::ErrorHandler> handler). Code that only reads what the
+scope holds -- a header, a cookie, the query, the path -- needs no Request
+and no class; it builds a L<PAGI::HTTPConnection>:
+
+    use PAGI::HTTPConnection;
+
+    my $token = PAGI::HTTPConnection->new($scope)->header('Authorization');
+
+Know what C<request_for_scope> is not:
 
 =over 4
 
@@ -979,16 +986,17 @@ string, the path. Know what it is not:
 built for its route's scope; the two share no parse and no state, and
 nothing set on this one reaches the handler.
 
-=item * It does not own the body. The body belongs to the application:
-reading it here drains C<$receive>, and the application then reads an empty
-body, unless you hand the application a receive that delivers the body
-again (see L<PAGI::Middleware/Reading the request body>). Code that must not
-read the body passes a C<$receive> that dies, as above, so a mistaken read
-fails loudly at once instead of waiting for a body that never comes.
+=item * It does not own the body. The body belongs to the application.
+Called without C<$receive>, as above, the Request has no body: every body
+method dies at once (L<PAGI::Request/new>). Given C<$receive>, reading the
+body here drains it, and the application then reads an empty body, unless
+you hand the application a receive that delivers the body again (see
+L<PAGI::Middleware/Reading the request body>).
 
 =back
 
-A factory is called with C<($scope, $receive)>, synchronously, and must
+A factory is called with C<($scope, $receive)> -- C<($scope, undef)> when
+C<request_for_scope> was called without a receive -- synchronously, and must
 return a C<PAGI::Request> instance or subclass; a key that is not a coderef,
 or a factory that returns anything else (a Future, as an async sub would),
 croaks naming the key.

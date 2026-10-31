@@ -27,18 +27,6 @@ sub ProtocolProvider { return qr/accepted/ }
 }
 
 {
-    package Local::WrongProtocolCache;
-    sub new { return bless { scope => $_[1] }, $_[0] }
-    sub scope { return $_[0]{scope} }
-}
-
-{
-    package Local::DyingProtocolCache;
-    sub new { return bless {}, $_[0] }
-    sub scope { die 'cached protocol scope exploded' }
-}
-
-{
     package Local::ProtocolApplication;
 
     sub new {
@@ -254,7 +242,7 @@ subtest 'protocol endpoints reject package names and unblessed references' => su
     }
 };
 
-subtest 'normal WebSocket and SSE handlers use direct cached protocol objects' => sub {
+subtest 'normal WebSocket and SSE handlers get one protocol object built for them' => sub {
     my @seen;
     my @selected_channels;
     my @middleware_cached_ids;
@@ -379,10 +367,13 @@ subtest 'normal WebSocket and SSE handlers use direct cached protocol objects' =
     is([map { $_->{scope_id} } @seen],
         [map { refaddr($_->[0]) } @selected_channels],
         'protocol objects retain the exact selected scopes seen by middleware');
-    is([map { $_->{cached_id} } @seen], [map { $_->{object_id} } @seen],
-        'constructing each protocol helper again returns the exact cached object');
-    is(\@middleware_cached_ids, [map { $_->{object_id} } @seen],
-        'compiler reuses an object cached by route middleware on the exact selected scope');
+    # RV1: new builds a new object each time and nothing is cached in the scope.
+    is([grep { $seen[$_]{cached_id} == $seen[$_]{object_id} } 0 .. $#seen], [],
+        'constructing each protocol helper again builds a new object');
+    is([grep { $middleware_cached_ids[$_] == $seen[$_]{object_id} } 0 .. $#seen], [],
+        'compiler builds its own object, not one route middleware built over the scope');
+    is([grep { /^pagi\.(?:websocket|sse)$/ } map { keys %{$_->[0]} } @selected_channels], [],
+        'no protocol object is cached in the selected scopes');
     is(\@middleware_argument_counts, [3, 3],
         'protocol route middleware remains an exact three-argument native app');
     is(\@ws_events, [
@@ -397,77 +388,40 @@ subtest 'normal WebSocket and SSE handlers use direct cached protocol objects' =
     ], 'plain SSE completion adds no wire interpretation');
 };
 
-subtest 'normal protocol leaves reuse only an exact expected-class cache' => sub {
+subtest 'normal protocol leaves build a new object over the selected scope' => sub {
     for my $protocol (
-        [websocket => 'PAGI::WebSocket', 'pagi.websocket'],
-        [sse       => 'PAGI::SSE',       'pagi.sse'],
+        [websocket => 'PAGI::WebSocket'],
+        [sse       => 'PAGI::SSE'],
     ) {
-        my ($kind, $expected_class, $cache_key) = @$protocol;
-        for my $variant (qw(scalar hash parent wrong-class throwing-scope exact)) {
-            subtest "$kind $variant cache" => sub {
-                my ($seeded, $handled);
-                my $seed_cache = middleware(sub {
-                    my ($inner) = @_;
-                    return sub {
-                        my ($selected_scope, $receive, $send) = @_;
-                        if ($variant eq 'scalar') {
-                            $selected_scope->{$cache_key} = 1;
-                        }
-                        elsif ($variant eq 'hash') {
-                            $selected_scope->{$cache_key} = {};
-                        }
-                        elsif ($variant eq 'parent') {
-                            my $parent_scope = { %$selected_scope };
-                            $seeded = $expected_class->new(
-                                $parent_scope, $receive, $send,
-                            );
-                            $selected_scope->{$cache_key} = $seeded;
-                        }
-                        elsif ($variant eq 'wrong-class') {
-                            $seeded = Local::WrongProtocolCache->new(
-                                $selected_scope,
-                            );
-                            $selected_scope->{$cache_key} = $seeded;
-                        }
-                        elsif ($variant eq 'throwing-scope') {
-                            $seeded = Local::DyingProtocolCache->new;
-                            $selected_scope->{$cache_key} = $seeded;
-                        }
-                        else {
-                            $seeded = $expected_class->new(
-                                $selected_scope, $receive, $send,
-                            );
-                        }
-                        return $inner->(@_);
-                    };
-                });
-                my $handler = sub {
-                    ($handled) = @_;
-                    return;
+        my ($kind, $expected_class) = @$protocol;
+        subtest $kind => sub {
+            my ($seeded, $selected, $handled);
+            my $build_early = middleware(sub {
+                my ($inner) = @_;
+                return sub {
+                    my ($selected_scope, $receive, $send) = @_;
+                    $selected = $selected_scope;
+                    $seeded = $expected_class->new($selected_scope, $receive, $send);
+                    return $inner->(@_);
                 };
-                my $leaf = $kind eq 'websocket'
-                    ? websocket('/stream' => $handler,
-                        middleware => [$seed_cache])
-                    : sse('/stream' => $handler,
-                        middleware => [$seed_cache]);
-
-                run_scope(
-                    $leaf->to_app,
-                    scope(type => $kind, path => '/stream'),
-                );
-
-                isa_ok($handled, [$expected_class],
-                    'handler receives the expected protocol class');
-                if ($variant eq 'exact') {
-                    is(refaddr($handled), refaddr($seeded),
-                        'the exact selected-scope expected-class cache is reused');
-                }
-                elsif (ref($seeded)) {
-                    isnt(refaddr($handled), refaddr($seeded),
-                        'an incompatible cache is discarded');
-                }
+            });
+            my $handler = sub {
+                ($handled) = @_;
+                return;
             };
-        }
+            my $leaf = $kind eq 'websocket'
+                ? websocket('/stream' => $handler, middleware => [$build_early])
+                : sse('/stream' => $handler, middleware => [$build_early]);
+
+            run_scope($leaf->to_app, scope(type => $kind, path => '/stream'));
+
+            isa_ok($handled, [$expected_class],
+                'handler receives the expected protocol class');
+            isnt(refaddr($handled), refaddr($seeded),
+                'a new object, not the one route middleware built (RV1)');
+            is(refaddr($handled->scope), refaddr($selected),
+                'over the selected scope');
+        };
     }
 };
 

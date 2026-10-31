@@ -166,7 +166,7 @@ forms C<path_for> takes. It is resolved against the refused request, so the
 target's parameters are filled from the current route's matching ones (on
 C</orgs/{org}/settings>, C<< redirect => ['org_login'] >> goes to
 C</orgs/acme/login>), and the path and query the client requested
-(L<PAGI::Request/request_uri>, mount and root path included) are added to the
+(L<PAGI::HTTPConnection/request_uri>, mount and root path included) are added to the
 query as C<next>, so the login page can send the user back. A C<next> you
 give yourself is kept instead.
 

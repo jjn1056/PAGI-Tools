@@ -5,9 +5,9 @@ use FindBin qw($Bin);
 use lib "$Bin/../lib";
 use PAGI::Test::Client;
 
-# examples/tenant-orders: middleware read the request through Requests of
-# their own and the route reads the body through its own. A Request writes
-# nothing to the scope, so each reads what it was handed: the route reads
+# examples/tenant-orders: middleware read the request through Requests and
+# PAGI::HTTPConnections of their own and the route reads the body through its
+# own. Neither writes to the scope, so each reads what it was handed: the route reads
 # legacy_items' rewritten body though request_log had read the original, and
 # tenant sees the header legacy_api_key rewrote.
 
@@ -44,5 +44,13 @@ is($client->get('/log')->json, [
     'POST /orders (legacy key, 2 bytes)',
     'GET /log (anonymous, 0 bytes)',
 ], 'request_log read each caller and body size from its own Request');
+
+# The application's middleware see its lifespan scope too, and hand it on
+# untouched, so the application starts and stops.
+my $lifespan = PAGI::Test::Client->new(app => $app, lifespan => 1);
+ok(lives { $lifespan->start }, 'lifespan startup completes') or note($@);
+is($lifespan->post('/orders', headers => { %json, 'X-Api-Key' => 'k-acme' },
+    body => '{"items":["tea"]}')->status, 201, 'and the application serves');
+ok(lives { $lifespan->stop }, 'lifespan shutdown completes') or note($@);
 
 done_testing;

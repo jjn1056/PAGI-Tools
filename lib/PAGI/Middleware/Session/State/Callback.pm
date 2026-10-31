@@ -10,13 +10,16 @@ PAGI::Middleware::Session::State::Callback - Custom coderef-based session ID tra
 
 =head1 SYNOPSIS
 
+    use PAGI::HTTPConnection;
     use PAGI::Middleware::Session::State::Callback;
 
     my $state = PAGI::Middleware::Session::State::Callback->new(
         extract => sub {
             my ($scope) = @_;
-            # Return session ID or undef
-            return $scope->{headers}[0][1];
+            # Return session ID or undef: undef too when the header is
+            # sent twice, so neither value is taken as the session.
+            return PAGI::HTTPConnection->new($scope)
+                ->headers->get_single('X-Session-ID');
         },
         inject => sub {
             my ($headers, $id, $options) = @_;

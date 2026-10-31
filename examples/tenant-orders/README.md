@@ -1,9 +1,10 @@
 # Tenant orders
 
 An orders API for several tenants, behind four middleware that each read the
-request through a `PAGI::Request` of their own, as Starlette's middleware
-each build a `Request(scope, receive)`, while the route reads the body
-through its own:
+request through an object of their own -- a `PAGI::Request` where they read
+the body, a `PAGI::HTTPConnection` where they read only the scope, as
+Starlette's own middleware read headers through `Headers(scope=...)` /
+`HTTPConnection` -- while the route reads the body through its own:
 
 | Middleware | Reads | Hands on |
 |---|---|---|
@@ -22,11 +23,12 @@ pagi-server --app examples/tenant-orders/app.pl --port 5000
 uvicorn app:app --port 8000      # from this directory
 ```
 
-## Each Request reads what it was handed
+## Each reader reads what it was handed
 
-A `PAGI::Request` keeps what it parses -- headers, query, body -- on itself,
-and writes nothing to the scope. So a Request reads the scope and the body
-it was handed, whoever read the request before it:
+A `PAGI::Request` (and a `PAGI::HTTPConnection`, which it extends) keeps what
+it parses -- headers, query, body -- on itself, and writes nothing to the
+scope. So each reads the scope and the body it was handed, whoever read the
+request before it:
 
 - `tenant` sees the `Authorization` that `legacy_api_key` wrote on its copy
   of the scope, although `request_log` had read the headers first;
@@ -61,8 +63,9 @@ curl localhost:5000/log
 ## The Starlette version
 
 `app.py` writes each middleware as a pure ASGI class that builds a
-`Request(scope, receive)`, copies the scope to change it, and hands on a
-receive that delivers the body it read; the tenant goes in the scope's
+`Request(scope, receive)` where it reads the body and an
+`HTTPConnection(scope)` where it reads only the scope, copies the scope to
+change it, and hands on a receive that delivers the body it read; the tenant goes in the scope's
 `state`, which the route reads as `request.state`. Run on PAGI-Server and on
 uvicorn 0.54.0 / Starlette 1.10.0, the four requests above and the log gave
 the same statuses and bodies.

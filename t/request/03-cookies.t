@@ -60,9 +60,10 @@ subtest 'cookies with special characters' => sub {
 
     my $req = PAGI::Request->new($scope, $no_body);
 
-    # Cookie::Baker handles URL decoding
-    is($req->cookie('data'), 'hello world', 'decodes URL encoding');
-    is($req->cookie('encoded'), '=&', 'decodes special characters');
+    # D5 (Ruled by John 2026-10-30): cookie values are read as sent, never
+    # percent-decoded (Mojolicious's and Starlette's reading).
+    is($req->cookie('data'), 'hello%20world', 'percent-encoding is kept');
+    is($req->cookie('encoded'), '%3D%26', 'encoded special characters are kept');
 };
 
 done_testing;

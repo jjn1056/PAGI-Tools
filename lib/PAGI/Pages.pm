@@ -12,7 +12,7 @@ use Scalar::Util qw(blessed);
 
 use PAGI::Pages::_Catalog;
 use PAGI::Pages::Application ();
-use PAGI::Request;
+use PAGI::HTTPConnection;
 use PAGI::ContentNegotiation;
 use PAGI::Response ();
 use PAGI::Response::Empty ();
@@ -197,7 +197,6 @@ sub _application_for {
 sub _metadata_scope {
     my ($scope) = @_;
     my %metadata = %$scope;
-    delete $metadata{'pagi.request.headers'};
     return \%metadata;
 }
 
@@ -774,12 +773,7 @@ sub _assembled_headers {
     my @headers = @{$page->{headers} || []};
 
     if ($page->{upgrade_connection}) {
-        my $no_body = sub {
-            return Future->fail('metadata-only Request cannot consume a body');
-        };
-        my $version = PAGI::Request->new(
-            _metadata_scope($scope), $no_body,
-        )->http_version;
+        my $version = PAGI::HTTPConnection->new($scope)->http_version;
         croak 'PAGI::Pages status 426 Upgrade requires HTTP/1.1'
             unless defined($version) && !ref($version) && $version eq '1.1';
         # No Connection header: connection-level headers belong to the
@@ -818,16 +812,8 @@ sub _select_representation {
     my @families = ($self->{default});
     push @families, grep { $_ ne $self->{default} } qw(html json text);
 
-    my $no_body = sub {
-        return Future->fail('metadata-only Request cannot consume a body');
-    };
-    # Negotiation reads a metadata view of the scope, without a header cache a
-    # WebSocket or SSE helper keeps there, while descriptor factories retain
-    # the original scope identity.
-    my $request = PAGI::Request->new(
-        _metadata_scope($scope), $no_body,
-    );
-    my @accept_values = $request->header_all('accept');
+    my $connection = PAGI::HTTPConnection->new($scope);
+    my @accept_values = $connection->header_all('accept');
     my $accept = @accept_values ? join(', ', @accept_values) : undef;
     my $problem_rejected = $page->{kind} eq 'error'
         ? _problem_type_explicitly_rejected($accept) : 0;
@@ -1193,9 +1179,7 @@ return, adding headers or cookies say, takes that step first:
 See L<PAGI::Pages::Application/response_for>.
 
 Factory C<headers> options take the shapes in L</"HEADERS AND CACHE POLICY">. For request
-negotiation, Pages builds an isolated metadata view and reads repeated request
-fields through L<PAGI::Headers>; it does not reuse or mutate a header cache a
-WebSocket or SSE helper keeps in the source scope.
+negotiation, Pages reads repeated request fields through L<PAGI::HTTPConnection>.
 
 Pages rejects lifespan and unknown scopes before receive, rendering, or send.
 Pages does not handle lifespan. At a bare server root,

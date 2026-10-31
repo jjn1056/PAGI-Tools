@@ -6,6 +6,10 @@ use Test2::V0;
 use PAGI::Middleware::Session::State;
 use PAGI::Middleware::Session::State::Cookie;
 
+# extract reads the request through PAGI::HTTPConnection (spec 2026-10-30
+# section 5), which takes an http, websocket or sse scope: each scope here is
+# typed, as a server's always is.
+
 # ===================
 # State base class
 # ===================
@@ -44,6 +48,7 @@ subtest 'State::Cookie - custom cookie_name' => sub {
 subtest 'State::Cookie - extract session ID from cookie header' => sub {
     my $state = PAGI::Middleware::Session::State::Cookie->new();
     my $scope = {
+        type    => 'http',
         headers => [['Cookie', 'pagi_session=abc123; other=xyz']],
     };
     is $state->extract($scope), 'abc123', 'extracts session ID';
@@ -54,6 +59,7 @@ subtest 'State::Cookie - extract with custom cookie_name' => sub {
         cookie_name => 'sid',
     );
     my $scope = {
+        type    => 'http',
         headers => [['Cookie', 'sid=def456; pagi_session=abc123']],
     };
     is $state->extract($scope), 'def456', 'extracts custom cookie name';
@@ -62,6 +68,7 @@ subtest 'State::Cookie - extract with custom cookie_name' => sub {
 subtest 'State::Cookie - returns undef when no session cookie present' => sub {
     my $state = PAGI::Middleware::Session::State::Cookie->new();
     my $scope = {
+        type    => 'http',
         headers => [['Cookie', 'other=xyz; another=abc']],
     };
     is $state->extract($scope), undef, 'returns undef for missing session cookie';
@@ -70,6 +77,7 @@ subtest 'State::Cookie - returns undef when no session cookie present' => sub {
 subtest 'State::Cookie - returns undef when no cookie header at all' => sub {
     my $state = PAGI::Middleware::Session::State::Cookie->new();
     my $scope = {
+        type    => 'http',
         headers => [['Content-Type', 'text/html']],
     };
     is $state->extract($scope), undef, 'returns undef with no Cookie header';
@@ -77,13 +85,14 @@ subtest 'State::Cookie - returns undef when no cookie header at all' => sub {
 
 subtest 'State::Cookie - returns undef with empty headers' => sub {
     my $state = PAGI::Middleware::Session::State::Cookie->new();
-    my $scope = { headers => [] };
+    my $scope = { type => 'http', headers => [] };
     is $state->extract($scope), undef, 'returns undef with empty headers';
 };
 
 subtest 'State::Cookie - extract is case-insensitive for header name' => sub {
     my $state = PAGI::Middleware::Session::State::Cookie->new();
     my $scope = {
+        type    => 'http',
         headers => [['cookie', 'pagi_session=lower_case']],
     };
     is $state->extract($scope), 'lower_case', 'handles lowercase cookie header';

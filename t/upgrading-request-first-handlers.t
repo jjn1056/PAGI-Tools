@@ -104,8 +104,11 @@ subtest 'Request construction is strict and state has an explicit HashRef escape
     $scope->{state} = { db => 'fixture-db' };
     my $request = PAGI::Request->new($scope, \&receive_empty);
 
-    like(dies { PAGI::Request->new($scope) }, qr/receive coderef/,
-        'Request requires the receive channel');
+    # Without the receive channel a Request reads the scope and has no body
+    # (HTTPConnection design 2026-10-30).
+    like(dies { PAGI::Request->new($scope)->body->get },
+        qr/built from the scope alone; it has no body/,
+        'a Request without the receive channel has no body');
     my $websocket_scope = {
         %$scope, type => 'websocket',
         'pagi.connection' => PAGI::Test::ConnectionState->new(websocket => 1),

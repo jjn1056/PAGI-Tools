@@ -6,6 +6,7 @@ use parent 'PAGI::Middleware';
 use Future;
 use Future::AsyncAwait;
 use PAGI::Authority;
+use PAGI::HTTPConnection ();
 use PAGI::Response::Text ();
 use PAGI::Utils ();
 
@@ -88,7 +89,9 @@ given to middleware outside PAGI-Tools.
 
 =over 4
 
-=item * X-Forwarded-For - Original client IP
+=item * X-Forwarded-For - Original client IP: the leftmost address, every
+field read in order (one field C<1.1.1.1, 2.2.2.2> and the same split over
+two fields both give C<1.1.1.1>)
 
 =item * X-Forwarded-Proto - Original protocol (http/https)
 
@@ -100,6 +103,10 @@ exactly once and contain one valid authority, not a comma-separated list.
 =item * X-Real-IP - Alternative to X-Forwarded-For (nginx)
 
 =back
+
+X-Real-IP, X-Forwarded-Proto and X-Forwarded-Port each carry one value: one
+sent more than once counts as absent, and the socket's own client, scheme or
+port stands.
 
 =cut
 
@@ -133,12 +140,8 @@ sub wrap {
             return;
         }
 
-        my @forwarded_host = map { $_->[1] }
-            grep {
-                my $name = $_->[0];
-                $name =~ tr/A-Z/a-z/;
-                $name eq 'x-forwarded-host';
-            } @{ $scope->{headers} // [] };
+        my $headers = PAGI::HTTPConnection->new($scope)->headers;
+        my @forwarded_host = $headers->get_all('x-forwarded-host');
 
         if (@forwarded_host > 1) {
             await $self->_refuse($scope, $receive, $send);
@@ -164,9 +167,12 @@ sub wrap {
         # Build modified scope
         my %new_scope = %$scope;
 
-        # X-Forwarded-For or X-Real-IP
-        my $forwarded_for = $self->_get_header($scope, 'x-forwarded-for');
-        my $real_ip = $self->_get_header($scope, 'x-real-ip');
+        # X-Forwarded-For (every field joined, so its leftmost address is the
+        # first field's) or X-Real-IP. X-Real-IP, X-Forwarded-Proto and
+        # X-Forwarded-Port are used as values: a repeated one is absent, and
+        # the socket's own client, scheme or port stands.
+        my $forwarded_for = $headers->get('x-forwarded-for');
+        my $real_ip = $headers->get_single('x-real-ip');
 
         if ($forwarded_for) {
             # Take the leftmost IP (original client)
@@ -189,7 +195,7 @@ sub wrap {
         }
 
         # X-Forwarded-Proto
-        my $forwarded_proto = $self->_get_header($scope, 'x-forwarded-proto');
+        my $forwarded_proto = $headers->get_single('x-forwarded-proto');
         if ($forwarded_proto) {
             $forwarded_proto = lc($forwarded_proto);
             $new_scope{scheme} = $forwarded_proto if $forwarded_proto =~ /^https?$/;
@@ -207,7 +213,7 @@ sub wrap {
         }
 
         # X-Forwarded-Port
-        my $forwarded_port = $self->_get_header($scope, 'x-forwarded-port');
+        my $forwarded_port = $headers->get_single('x-forwarded-port');
         if ($forwarded_port && $forwarded_port =~ /^\d+$/) {
             $new_scope{server} = [$scope->{server}[0], int($forwarded_port)];
         }
@@ -264,16 +270,6 @@ sub _all {
         return 0 unless $code->();
     }
     return 1;
-}
-
-sub _get_header {
-    my ($self, $scope, $name) = @_;
-
-    $name = lc($name);
-    for my $h (@{$scope->{headers} // []}) {
-        return $h->[1] if lc($h->[0]) eq $name;
-    }
-    return;
 }
 
 async sub _refuse {

@@ -5,6 +5,7 @@ use warnings;
 use parent 'PAGI::Middleware';
 use Future::AsyncAwait;
 use PAGI::Headers ();
+use PAGI::HTTPConnection ();
 use PAGI::Utils::Headers qw(etag_matches);
 use PAGI::Utils ();
 
@@ -77,7 +78,7 @@ sub wrap {
         }
 
         # Get conditional request headers
-        my $request_headers = PAGI::Headers->new($scope->{headers} // []);
+        my $request_headers = PAGI::HTTPConnection->new($scope)->headers;
         my $has_if_none_match = $request_headers->has('If-None-Match');
         my $if_modified_since = $request_headers->get('If-Modified-Since');
 

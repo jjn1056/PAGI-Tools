@@ -26,13 +26,14 @@ sub on_startup ($self, $state, $scope) {
     };
 
     # One per request: the access log asks first, the handler gets the same answer.
-    $state->{viewer} = per_request async sub ($state, $request) {
+    # The builder's second argument is a PAGI::HTTPConnection (a Request is one too).
+    $state->{viewer} = per_request async sub ($state, $conn) {
         my $members = await $state->get('members');
-        await $members->find_by_token($request->cookie('token'));
+        await $members->find_by_token($conn->cookie('token'));
     };
 
     # A new form for every submission, its store wired in.
-    $state->{join_form} = factory async sub ($state, $request) {
+    $state->{join_form} = factory async sub ($state, $conn) {
         MyApp::JoinForm->new(members => await $state->get('members'));
     };
 }

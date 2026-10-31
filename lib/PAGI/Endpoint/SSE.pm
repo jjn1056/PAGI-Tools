@@ -8,7 +8,7 @@ use Future::AsyncAwait;
 use Carp qw(croak);
 use Scalar::Util qw(blessed);
 use PAGI::SSE;
-use PAGI::Utils::Scope ();
+use PAGI::Utils::_ProtocolHelpers ();
 
 # Keepalive interval in seconds (0 = disabled)
 sub keepalive_interval { 0 }
@@ -50,11 +50,12 @@ async sub handle {
         await $sse->start;
     }
 
-    # If on_connect already ended the exchange (e.g. $sse->decline for an
-    # auth-gate 401), there is no stream to wait on: run() would no-op on
-    # its own (it's gated on is_closed too), but guard explicitly so intent
-    # is clear and a post-decline sse.start can never be sent from here.
-    return if $sse->is_closed;
+    # If on_connect refused the exchange (e.g. $sse->decline for an
+    # auth-gate 401), there is no stream to wait on, even if the server has
+    # not yet reported the connection ended: run() would croak while the
+    # refusal is this helper's answer, and no sse.start may follow it.
+    return if $sse->is_closed
+        || PAGI::Utils::_ProtocolHelpers::refused($sse);
 
     # Wait for disconnect
     await $sse->run;
@@ -71,9 +72,6 @@ sub to_app {
         my $type = $scope->{type} // '';
         croak "Expected sse scope, got '$type'" unless $type eq 'sse';
 
-        PAGI::Utils::Scope::_compatible_cached_scope_object(
-            $scope, 'pagi.sse', 'PAGI::SSE',
-        );
         my $sse = PAGI::SSE->new($scope, $receive, $send);
 
         await $endpoint->handle($sse);

@@ -153,8 +153,9 @@ endpoint waits for disconnect on that connection's `PAGI::SSE` object.
 
 API authentication remains native PAGI middleware. Each protected route owns
 an explicit middleware description whose factory receives the inner native
-application. The returned application constructs `PAGI::Request` from the
-native channels, accepts `X-Demo-Token: demo-token`, or invokes the negotiated
+application. The returned application reads the token through
+`PAGI::HTTPConnection->new($scope)`, which reads the scope without touching
+the body, accepts `X-Demo-Token: demo-token`, or invokes the negotiated
 `unauthorized(...)` application with its `WWW-Authenticate` challenge.
 
 ## Files and lifespan state

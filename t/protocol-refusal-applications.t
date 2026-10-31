@@ -115,15 +115,30 @@ for my $kind (qw(websocket sse)) {
                     $h->{helper}->$method(response('Text', 'recovered', status => 503))->get;
                     is($h->{events}[0]{status}, 503, 'sequential retry can respond');
                 }
-            } else {
+            } elsif ($mode eq 'terminal') {
                 like(dies { $h->{helper}->$method(response('Text', 'again', status => 503))->get }, qr/(before|started|connected|pending|connecting)/i, 'sequential repeat rejected');
-                is($closed, $mode eq 'terminal' ? 1 : 0, 'only connection terminal runs cleanup');
+                is($closed, 1, 'only connection terminal runs cleanup');
                 my $before = @{$h->{events}};
                 if ($kind eq 'sse') {
                     $h->{helper}->start->get;
                     $h->{helper}->keepalive(5)->get;
-                    $h->{helper}->send('no')->get unless $mode eq 'terminal';
                 } else { $h->{helper}->accept->get }
+                is(scalar @{$h->{events}}, $before, 'protocol cannot reopen response');
+            } else {
+                # D7: the refusal started and the connection is open, so this
+                # helper is refusing: its data operations fail locally and
+                # keepalive returns quietly.
+                my $refusing = qr/^this helper is refusing the connection /;
+                like(dies { $h->{helper}->$method(response('Text', 'again', status => 503))->get }, $refusing, 'sequential repeat rejected');
+                is($closed, 0, 'only connection terminal runs cleanup');
+                my $before = @{$h->{events}};
+                if ($kind eq 'sse') {
+                    like(dies { $h->{helper}->start->get }, $refusing, 'start fails locally');
+                    $h->{helper}->keepalive(5)->get;
+                    like(dies { $h->{helper}->send('no')->get }, $refusing, 'send fails locally');
+                } else {
+                    like(dies { $h->{helper}->accept->get }, $refusing, 'accept fails locally');
+                }
                 is(scalar @{$h->{events}}, $before, 'protocol cannot reopen response');
             }
             $h->{connection}->_mark_disconnected('client_closed');
@@ -226,7 +241,10 @@ for my $kind (qw(websocket sse)) {
         my $h = PAGITest::RefusalHarness->new($kind);
         $h->{connection}->_mark_response_started;
         my $target = T::RefusalApp->new(sub { die 'must not invoke' });
-        like(dies { $h->{helper}->$method($target)->get }, qr/no response started/, 'public progress prevents admission even when helper phase is initial');
+        # RV2: a response this helper did not start was answered by another.
+        like(dies { $h->{helper}->$method($target)->get },
+            qr/^this connection was answered by another helper; use that one /,
+            'public progress prevents admission even when helper phase is initial');
         is($target->{calls}, 0, 'claimed connection rejected before conversion');
         $h->{connection}->_mark_disconnected('client_closed');
     };
@@ -314,7 +332,12 @@ subtest 'partial HTTP response blocks every SSE auto-start entry point' => sub {
         }))->get;
         my $operation = $invoke->($h->{helper});
         ok($operation->is_ready, "$name returns without waiting for terminal cleanup");
-        if ($operation->is_ready) {
+        if ($operation->is_ready && $name =~ /^(?:start|run|send|send_json|send_event|send_comment|each|every)$/) {
+            # D7: while this helper is refusing, its data operations fail
+            # locally; try_*, keepalive and close stay quiet.
+            like(dies { $operation->get }, qr/^this helper is refusing the connection /,
+                "$name fails locally after a partial HTTP response");
+        } elsif ($operation->is_ready) {
             my $result;
             ok(lives { $result = $operation->get }, "$name is safe after a partial HTTP response");
             ok(!$result, "$name returns false") if $name =~ /^try_/;

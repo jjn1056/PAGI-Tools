@@ -7,6 +7,7 @@ use Future::AsyncAwait;
 use PAGI::Middleware::BufferedResponse qw(stream_transform_response);
 use Compress::Raw::Zlib qw(WANT_GZIP Z_OK Z_SYNC_FLUSH Z_FINISH);
 use PAGI::Headers;
+use PAGI::HTTPConnection ();
 use PAGI::Utils ();
 
 =head1 NAME
@@ -40,7 +41,7 @@ Plack::Builder does.
 =head1 DESCRIPTION
 
 PAGI::Middleware::GZip compresses response bodies using gzip when the
-client supports it (Accept-Encoding: gzip).
+client supports it (C<gzip> in any Accept-Encoding field).
 
 =head1 CONFIGURATION
 
@@ -210,7 +211,8 @@ sub wrap {
 
 sub _client_accepts_gzip {
     my ($self, $scope) = @_;
-    my $accept_encoding = $self->_get_header($scope, 'accept-encoding') // '';
+    # Every Accept-Encoding field, joined: gzip in any of them counts.
+    my $accept_encoding = PAGI::HTTPConnection->new($scope)->header('accept-encoding') // '';
     return $accept_encoding =~ /\bgzip\b/i ? 1 : 0;
 }
 
@@ -228,17 +230,6 @@ sub _type_is_compressible {
         }
     }
     return 0;
-}
-
-
-sub _get_header {
-    my ($self, $scope, $name) = @_;
-
-    $name = lc($name);
-    for my $h (@{$scope->{headers} // []}) {
-        return $h->[1] if lc($h->[0]) eq $name;
-    }
-    return;
 }
 
 1;

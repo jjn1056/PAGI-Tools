@@ -5,6 +5,10 @@ use Test2::V0;
 
 use PAGI::Middleware::Session::State::Header;
 
+# extract reads the request through PAGI::HTTPConnection (spec 2026-10-30
+# section 5), which takes an http, websocket or sse scope: each scope here is
+# typed, as a server's always is.
+
 # ===================
 # State::Header - constructor
 # ===================
@@ -23,6 +27,7 @@ subtest 'State::Header - extracts from custom header' => sub {
         header_name => 'X-Session-ID',
     );
     my $scope = {
+        type    => 'http',
         headers => [['X-Session-ID', 'abc123']],
     };
     is $state->extract($scope), 'abc123', 'extracts session ID from custom header';
@@ -33,6 +38,7 @@ subtest 'State::Header - case-insensitive header matching' => sub {
         header_name => 'X-Session-ID',
     );
     my $scope = {
+        type    => 'http',
         headers => [['x-session-id', 'lower_case_value']],
     };
     is $state->extract($scope), 'lower_case_value', 'matches header case-insensitively';
@@ -43,6 +49,7 @@ subtest 'State::Header - returns undef when header missing' => sub {
         header_name => 'X-Session-ID',
     );
     my $scope = {
+        type    => 'http',
         headers => [['Content-Type', 'text/html']],
     };
     is $state->extract($scope), undef, 'returns undef for missing header';
@@ -52,7 +59,7 @@ subtest 'State::Header - returns undef with empty headers' => sub {
     my $state = PAGI::Middleware::Session::State::Header->new(
         header_name => 'X-Session-ID',
     );
-    my $scope = { headers => [] };
+    my $scope = { type => 'http', headers => [] };
     is $state->extract($scope), undef, 'returns undef with empty headers';
 };
 
@@ -62,6 +69,7 @@ subtest 'State::Header - extract with pattern' => sub {
         pattern     => qr/^Token\s+(.+)$/i,
     );
     my $scope = {
+        type    => 'http',
         headers => [['X-Auth-Token', 'Token my-session-id']],
     };
     is $state->extract($scope), 'my-session-id', 'extracts value via pattern capture';
@@ -73,6 +81,7 @@ subtest 'State::Header - pattern that does not match returns undef' => sub {
         pattern     => qr/^Token\s+(.+)$/i,
     );
     my $scope = {
+        type    => 'http',
         headers => [['X-Auth-Token', 'Basic credentials']],
     };
     is $state->extract($scope), undef, 'returns undef when pattern does not match';
@@ -101,6 +110,7 @@ subtest 'State::Header - inject is no-op' => sub {
 subtest 'State::Header with a Bearer pattern - extracts opaque token from Authorization Bearer' => sub {
     my $state = PAGI::Middleware::Session::State::Header->new(header_name => 'Authorization', pattern => qr/^Bearer\s+(.+)$/i);
     my $scope = {
+        type    => 'http',
         headers => [['Authorization', 'Bearer my-token']],
     };
     is $state->extract($scope), 'my-token', 'extracts bearer token';
@@ -109,6 +119,7 @@ subtest 'State::Header with a Bearer pattern - extracts opaque token from Author
 subtest 'State::Header with a Bearer pattern - returns undef for non-bearer auth' => sub {
     my $state = PAGI::Middleware::Session::State::Header->new(header_name => 'Authorization', pattern => qr/^Bearer\s+(.+)$/i);
     my $scope = {
+        type    => 'http',
         headers => [['Authorization', 'Basic dXNlcjpwYXNz']],
     };
     is $state->extract($scope), undef, 'returns undef for Basic auth';
@@ -117,6 +128,7 @@ subtest 'State::Header with a Bearer pattern - returns undef for non-bearer auth
 subtest 'State::Header with a Bearer pattern - returns undef when no Authorization header' => sub {
     my $state = PAGI::Middleware::Session::State::Header->new(header_name => 'Authorization', pattern => qr/^Bearer\s+(.+)$/i);
     my $scope = {
+        type    => 'http',
         headers => [['Content-Type', 'application/json']],
     };
     is $state->extract($scope), undef, 'returns undef with no Authorization header';

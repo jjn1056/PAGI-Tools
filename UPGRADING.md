@@ -6,7 +6,7 @@ are replaced. There are no compatibility aliases; every removed form fails
 when used. Upgrade PAGI::Server to **0.003000** or later at the same time,
 and run on **Perl 5.24** or later.
 
-Start with the table, then the worked port. Each row links to the details
+Start with the table, then the worked ports. Each row links to the details
 in [UPGRADING-REFERENCE.md](UPGRADING-REFERENCE.md).
 
 ## What replaces what
@@ -65,6 +65,27 @@ in [UPGRADING-REFERENCE.md](UPGRADING-REFERENCE.md).
 | `$request->text` decoded every body as UTF-8 | it decodes with the Content-Type charset, UTF-8 when none is declared; an unknown charset is a 415 |
 | `each_json` died (a 1011 server error) on a message that is not JSON | it closes 1007 and returns; pass `on_invalid_json`, or override `handle_invalid_json`, to answer otherwise |
 | `MyEndpoint->to_app` (an Endpoint class name) | `endpoint('MyEndpoint')->to_app`, or `MyEndpoint->new->to_app`; on a class name it now dies |
+| `$request->header`, `PAGI::Headers->get`, `PAGI::Response->header` returned the last value of a repeated field | every value joined `", "` in order, as Mojo::Headers, PSGI and Plack::Request do; read `Set-Cookie` with `header_all` / `get_all`; `get_single` still rejects duplicates |
+| `$request->cookie` / `cookies` percent-decoded each value (`a=x%2Fy` read `x/y`) | the value as the client sent it (`x%2Fy`), quotes removed (and, inside them, `\"` and `\\` undone, as Mojolicious does); encode and decode your own values (as Starlette and Mojolicious read cookies) |
+| `$request->cookie` gave the first value of a cookie name sent twice | the last value, as query and form parameters do |
+| `PAGI::WebSocket->new` / `PAGI::SSE->new` over a scope that already had one returned that object (cached in the scope as `pagi.websocket` / `pagi.sse`) | a new object on every call, and nothing stored in the scope: build one per connection and pass it on |
+| `$ws->path_param` / `$sse->path_param` returned `undef` for a name the route did not capture | it dies naming the names it did capture, as `$request->path_param` does; pass `strict => 0` for `undef` |
+| `$sse->path` answered `'/'`, and `$ws->path` / `$request->path` `undef`, on a scope without a path; `raw_path` / `request_uri` answered `'/'` on a scope with neither `raw_path` nor `path` | each dies "this scope has no path": a PAGI scope always has one |
+| A second `PAGI::WebSocket` / `PAGI::SSE` over a connection another helper answered: `accept` / `start` / `close` / `keepalive` returned quietly, WebSocket sends croaked "Cannot send on closed WebSocket", `receive` returned `undef`, SSE sends returned as if sent | every operation croaks "this connection was answered by another helper; use that one" and sends and reads nothing (`try_send*` still return 0): use the helper that answered, or wrap `$send` / `$receive` in a middleware |
+| After `$ws->deny` / `$sse->decline` started its response, `accept`, `start`, sends and `receive` returned quietly or croaked "Cannot send on closed WebSocket" | they croak "this helper is refusing the connection"; `close`, `close_or_deny`, `keepalive` and `try_send*` stay quiet |
+| A send, `close` or `keepalive` from another branch of the handler while the helper's own `accept` / `start` was still pending died "Cannot send on closed WebSocket" or did nothing | it reaches the server after the accept or start, in call order |
+| After an `accept` / `start` the server rejected (its `await` raises), WebSocket sends croaked "Cannot send on closed WebSocket", SSE sends returned without sending, `try_send*` returned 0, and `keepalive` and `close` sent nothing | the helper stays the connection's answerer, as Starlette's WebSocket does: its sends, `try_send*`, `keepalive` and `close` go to the server, which answers them, as does `close_or_deny` once the connection has started (before that it refuses with a 403, as for a helper that never accepted); to recover, build a new helper while the connection is live and unanswered, or use the one that answered |
+| CORS and CSRF checked the first `Origin` (and CSRF the first `Sec-Fetch-Site`, `Host` and token header) | every field joined `", "`: a header sent twice fails its check |
+| ReverseProxy used the first `X-Real-IP` / `X-Forwarded-Proto` / `X-Forwarded-Port`; Session::State::Header, RequestId (`trust_incoming`) and MethodOverride the first session, request-id or override header | a header sent twice is absent: the socket's client, scheme and port stand, there is no session id, a new request id is made, and MethodOverride checks `_method` |
+| MethodOverride's `_method` gave the first of a repeated parameter and split only on `&` | the last, splitting on `&` or `;`, as `query_param` does |
+| GZip compressed only when the first `Accept-Encoding` field named gzip; App::Directory listed JSON only when the first `Accept` field named `application/json` | any field counts (every field joined) |
+| AccessLog logged the last `Referer` / `User-Agent` of a repeated field | every field joined `", "` |
+| CSRF's token cookie, Session::State::Cookie's session cookie and the Cookie middleware's `pagi.cookies` read only the first `Cookie` field; CSRF and the Cookie middleware took the first of a repeated name, and the Cookie middleware percent-decoded | every `Cookie` field, quotes removed, the last of a repeated name, never percent-decoded (as `$request->cookie`) |
+| `Response->cookie` and the Cookie middleware's `cookie_jar->set` percent-encoded the value (`x/y` sent `x%2Fy`; `;` or a space was encoded); a cookie already set that way reads back encoded (`x%2Fy`) until it is set again | the value is written as is and must be RFC 6265 cookie-octets (printable ASCII except space, `"`, `,`, `;`, `\`); anything else croaks, "encode it first (Base64, say)"; read back, a value is what was written; clear the old cookies or set them again; a cookie name must be an RFC 6265 token (it was percent-encoded, which reading never undid); a `samesite` that is given must be Lax, Strict or None (any case) or it croaks (an unknown value was silently omitted) |
+| `Session::State::Cookie->extract` / `Session::State::Header->extract` read any hash with `headers` | they take an http, websocket or sse scope (one with its `type`) |
+| `$request->content_length` and `$sse->last_event_id` read the first field of a repeated header | `undef` for a repeated field (a value used as a value reads `headers->get_single`) |
+| Session gave a read-only session to any scope type with `headers` | only `websocket` and `sse` scopes get one; any other type passes to the app untouched, with no `pagi.session` |
+| Reading the body of an Authentication backend's or an ErrorHandler handler's Request died with a message of its own | it dies "this Request was built from the scope alone; it has no body", as every Request without a receive does |
 
 Behaviour that changes without a code change: stock refusals and error
 responses are plain text, each replaceable by one option ([details](UPGRADING-REFERENCE.md#audit-changed-first-party-defaults));
@@ -219,3 +240,83 @@ What changed, line by line:
   reads it with `error_context($request)`. In 0.002002 a body that was not
   JSON was a 500; it is now a 400.
 - `:id` became `{id}`, and `post` became `methods => ['POST']`.
+
+## A worked port: middleware that reads a header
+
+Middleware that read request headers kept a private loop over
+`$scope->{headers}`. It now builds a `PAGI::HTTPConnection` from the scope:
+it reads headers, query, cookies and path parameters without touching the
+body, writes nothing to the scope, and is what `PAGI::Request`,
+`PAGI::WebSocket` and `PAGI::SSE` extend. This is `PAGI::Middleware::CORS`'s
+own port.
+
+**Before: a private `_get_header`.**
+
+```perl
+sub wrap {
+    my ($self, $app) = @_;
+
+    return async sub  {
+        my ($scope, $receive, $send) = @_;
+        # Only handle HTTP requests
+        if ($scope->{type} ne 'http') {
+            await $app->($scope, $receive, $send);
+            return;
+        }
+
+        # Get Origin header
+        my $origin = $self->_get_header($scope, 'origin');
+        ...
+    };
+}
+
+sub _get_header {
+    my ($self, $scope, $name) = @_;
+
+    $name = lc($name);
+    for my $h (@{$scope->{headers} // []}) {
+        return $h->[1] if lc($h->[0]) eq $name;
+    }
+    return;
+}
+```
+
+**After.**
+
+```perl
+use PAGI::HTTPConnection ();
+
+sub wrap {
+    my ($self, $app) = @_;
+
+    return async sub  {
+        my ($scope, $receive, $send) = @_;
+        # Only handle HTTP requests
+        if ($scope->{type} ne 'http') {
+            await $app->($scope, $receive, $send);
+            return;
+        }
+
+        # Origin, every field joined: a repeated Origin matches no allowed
+        # origin.
+        my $origin = PAGI::HTTPConnection->new($scope)->header('origin');
+        ...
+    };
+}
+```
+
+What changed:
+
+- The loop is gone; `header` is case-insensitive and gives `undef` when the
+  field is absent.
+- A repeated field reads as every value joined `", "`. The loop took the
+  first, so a second `Origin` was ignored; now the joined value matches no
+  allowed origin and the check fails, as it should. For a value used as a
+  value (an address, an id), read `->headers->get_single($name)`, which
+  gives `undef` for a repeated field, so your fallback applies.
+- Check `$scope->{type}` first, as here: `PAGI::HTTPConnection->new` takes
+  an `http`, `websocket` or `sse` scope and dies on `lifespan`, which
+  application-wide middleware also sees.
+- Middleware that reads the body still builds a `PAGI::Request` and hands
+  the application a receive that delivers it (see "Reading the request body"
+  in `PAGI::Middleware`).

@@ -1,8 +1,9 @@
 #!/usr/bin/env perl
 #
 # An orders API for several tenants, behind middleware that each read the
-# request through a Request of their own -- as Starlette's do -- while the
-# route reads the body through its own:
+# request through an object of their own -- a Request where they read the
+# body, a PAGI::HTTPConnection where they read only the scope, as Starlette's
+# do -- while the route reads the body through its own:
 #
 #   request_log     reads the headers, and the body ahead to log its size,
 #                   then hands on the same body (record_receive);
@@ -13,9 +14,10 @@
 #                   string, as old clients send them, and hands on a body
 #                   with a list.
 #
-# A Request keeps what it parses on itself and writes nothing to the scope,
-# so each one reads the scope and the body it was handed: the route reads
-# legacy_items' rewritten body, though request_log had read the original.
+# A Request or an HTTPConnection keeps what it parses on itself and writes
+# nothing to the scope, so each one reads the scope and the body it was
+# handed: the route reads legacy_items' rewritten body, though request_log
+# had read the original.
 # The same application in Starlette is app.py.
 #
 # Run:  pagi-server --app examples/tenant-orders/app.pl --port 5000
@@ -29,6 +31,7 @@
 use v5.40;
 use Future::AsyncAwait;
 use JSON::MaybeXS qw(encode_json);
+use PAGI::HTTPConnection;
 use PAGI::Request;
 use PAGI::Utils qw(invoke_app);
 use PAGI::Utils::Middleware qw(record_receive);
@@ -53,29 +56,32 @@ sub request_log ($app) {
 }
 
 # An old client's X-Api-Key becomes Authorization: Bearer, on a copy of the
-# scope; the original scope is left as it was.
+# scope; the original scope is left as it was. The key is used as a value, so
+# a repeated X-Api-Key counts as absent and nothing is rewritten.
 sub legacy_api_key ($app) {
     return async sub ($scope, $receive, $send) {
-        my ($key) = map { $_->[1] } grep { lc($_->[0]) eq 'x-api-key' } @{ $scope->{headers} // [] };
+        return await $app->($scope, $receive, $send) unless $scope->{type} eq 'http';
+        my $key = PAGI::HTTPConnection->new($scope)->headers->get_single('x-api-key');
         return await $app->($scope, $receive, $send) unless defined $key;
         my @headers = grep { lc($_->[0]) ne 'x-api-key' && lc($_->[0]) ne 'authorization' } @{ $scope->{headers} };
         await $app->({ %$scope, headers => [@headers, ['authorization', "Bearer $key"]] }, $receive, $send);
     };
 }
 
-# Reads Authorization and the query through its own Request: the scope it is
-# given is legacy_api_key's copy, so it sees the rewritten header.
+# Reads Authorization and the query through its own PAGI::HTTPConnection,
+# which reads the scope without the body: the scope it is given is
+# legacy_api_key's copy, so it sees the rewritten header.
 sub tenant ($app) {
     return async sub ($scope, $receive, $send) {
-        my $request = PAGI::Request->new($scope, $receive);
-        my ($key) = ($request->header('authorization') // '') =~ /\ABearer (\S+)\z/;
+        my $conn = PAGI::HTTPConnection->new($scope);
+        my ($key) = ($conn->header('authorization') // '') =~ /\ABearer (\S+)\z/;
         my $tenant = defined $key ? $TENANT_FOR_KEY{$key} : undef;
         return await invoke_app(response('JSON', { error => 'unknown API key' }, status => 401,
             headers => ['WWW-Authenticate' => 'Bearer']), $scope, $receive, $send)
             unless defined $tenant;
         await $app->({ %$scope,
             'orders.tenant' => $tenant,
-            'orders.region' => $request->query_param('region') // 'eu',
+            'orders.region' => $conn->query_param('region') // 'eu',
         }, $receive, $send);
     };
 }

@@ -43,11 +43,14 @@ characters before storing them.
 
 =head2 get($name) and get_all($name)
 
-C<< $headers->get('Accept') >> returns the last value, or C<undef> when absent.
+C<< $headers->get('Accept') >> returns every field with that name joined
+with C<", "> in order (RFC 9110 5.3; as L<Mojo::Headers>, PSGI and
+L<Plack::Request> do), or C<undef> when absent; a single field is returned
+as is. C<Set-Cookie> cannot be joined: read it with C<get_all>.
 C<< $headers->get_all('Accept') >> returns all values in order as a list, or
 an empty list when absent. Both reads use ASCII case-insensitive names and
 leave stored fields untouched. Use C<get_single> when duplicates must be
-rejected rather than resolved by last-value lookup.
+rejected rather than joined.
 
 =head2 has($name), names, count, and is_empty
 
@@ -79,7 +82,7 @@ C<< my @old = $headers->remove('Vary') >> captures all previous Vary values.
 C<clone> returns an independent Headers container. C<to_pairs> returns a
 detached arrayref of ordered C<[name, value]> pairs; C<flatten> returns the
 ordered flat C<(name, value, ...)> list used by response headers. C<to_hash>
-is the lossy last-value snapshot described below; C<to_hash(1)> keeps each
+is the joined-value snapshot described below; C<to_hash(1)> keeps each
 name's values in an arrayref. None of these output methods mutate fields.
 Array dereference also returns a copy of the pair list, so use C<add> or C<set>
 to make a change.
@@ -98,14 +101,14 @@ field grammars.
 
 =head2 to_hash
 
-    my $flat  = $headers->to_hash;     # { Name => last-value }
+    my $flat  = $headers->to_hash;     # { Name => "v1, v2" }
     my $multi = $headers->to_hash(1);  # { Name => [ all values ] }
 
 Returns a plain hashref snapshot keyed by distinct header name (grouped
 case-insensitively, using the casing and order C<names> reports). The flat form
-mirrors C<get> -- one value per name, last wins. Passing a true argument returns
-the multi-value form, mirroring C<get_all> -- an arrayref of every value for each
-name. Values are B<not> comma-joined (unlike L<HTTP::Headers>/L<Mojo::Headers>).
+mirrors C<get> -- one value per name, a repeated field joined with C<", ">.
+Passing a true argument returns the multi-value form, mirroring C<get_all> -- an
+arrayref of every value for each name, unjoined (use it for C<Set-Cookie>).
 
 Header values are opaque bytes and pass through untouched -- including C<CR>,
 C<LF>, and C<NUL>. This container does B<not> validate or sanitize them; rejecting
@@ -181,7 +184,7 @@ Returns the lowercased media type from one valid C<Content-Type> field, such as
 C<text/html> from C<Text/HTML; charset=UTF-8>. The leading value must be
 C<token/token>. Missing, duplicate, or malformed fields return C<undef>.
 C<raise_on_error =E<gt> 1> raises for duplicate or malformed input, but not
-absence. Use C<get('Content-Type')> for the raw last-value lookup.
+absence. Use C<get('Content-Type')> for the raw joined lookup.
 
 =head2 content_type_parameters(%opts)
 
@@ -197,7 +200,7 @@ Unknown parameters remain available.
 Returns the lowercased disposition token from one valid C<Content-Disposition>
 field, such as C<attachment>. Missing, duplicate, or malformed fields return
 C<undef>, with the same C<raise_on_error> behavior as C<content_type>.
-Use C<get('Content-Disposition')> for the raw last-value lookup.
+Use C<get('Content-Disposition')> for the raw joined lookup.
 
 =head2 content_disposition_parameters(%opts)
 
@@ -262,10 +265,8 @@ sub clone { return PAGI::Headers->new($_[0]->{pairs}) }
 sub get {
     my ($self, $name) = @_;
     croak("header name required") unless defined $name;
-    my $key = _fold($name);
-    my $val;
-    for my $p (@{$self->{pairs}}) { $val = $p->[1] if _fold($p->[0]) eq $key }
-    return $val;
+    my @values = $self->get_all($name);
+    return @values ? join(', ', @values) : undef;
 }
 
 sub get_all {
@@ -526,8 +527,8 @@ sub to_pairs { return [ map { [ $_->[0], $_->[1] ] } @{ $_[0]->{pairs} } ] }
 sub flatten  { return map { @$_ } @{ $_[0]->{pairs} } }
 
 # Plain-hash snapshot, keyed by distinct name (case-insensitively grouped, in
-# names() order/casing). Flat form mirrors get() -- one value per name, last
-# wins; multi form (truthy arg) mirrors get_all() -- an arrayref of every value.
+# names() order/casing). Flat form mirrors get() -- one value per name, repeated
+# fields joined ", "; multi form (truthy arg) mirrors get_all() -- an arrayref of every value.
 # This is the explicit "I want a hash" path; the container itself is NOT a hash.
 sub to_hash {
     my ($self, $multi) = @_;

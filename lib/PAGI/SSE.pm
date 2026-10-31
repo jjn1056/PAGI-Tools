@@ -1,18 +1,15 @@
 package PAGI::SSE;
 use strict;
 use warnings;
+use parent 'PAGI::HTTPConnection';
 use Carp qw(croak);
 use PAGI::Utils ();
-use PAGI::Utils::Scope ();
-use Hash::MultiValue;
 use Future::AsyncAwait;
 use Future;
 use JSON::MaybeXS ();
-use PAGI::Headers ();
 use PAGI::Utils::_ProtocolHelpers ();
 use PAGI::FutureOwner;
 use Scalar::Util qw(blessed);
-use Encode qw(decode FB_CROAK FB_DEFAULT LEAVE_SRC);
 
 
 sub new {
@@ -29,24 +26,15 @@ sub new {
     # PAGI::Spec::Www 0.6: servers provide pagi.connection on every scope.
     PAGI::Utils::_ProtocolHelpers::require_connection($scope, 'PAGI::SSE');
 
-    # Return existing SSE object if one was already created for this scope
-    # This ensures consistent state (is_started, is_closed, callbacks) if
-    # multiple code paths create SSE objects from the same scope.
-    return $scope->{'pagi.sse'} if $scope->{'pagi.sse'};
-
-    my $self = bless {
-        scope             => $scope,
-        receive           => $receive,
-        send              => $send,
-        _state            => 'pending',  # pending -> started -> closed
-        _on_close         => [],
-        _on_error         => [],
-        _disconnect_reason => undef,     # Set when disconnect received
-    }, $class;
-
-    # Cache in scope for reuse (weakened to avoid circular reference leak)
-    $scope->{'pagi.sse'} = $self;
-    Scalar::Util::weaken($scope->{'pagi.sse'});
+    # One object per call: nothing is cached in the scope, so a handler
+    # keeps the object it was given (SUBCLASSING).
+    my $self = $class->SUPER::new($scope);
+    $self->{receive} = $receive;
+    $self->{send} = $send;
+    $self->{_state} = 'pending';  # pending -> started -> closed
+    $self->{_on_close} = [];
+    $self->{_on_error} = [];
+    $self->{_disconnect_reason} = undef;  # Set when disconnect received
 
     $self->{_cleanup_future} = Future->new;
     $self->{_owner} = PAGI::FutureOwner->new;
@@ -75,133 +63,37 @@ sub _refresh_connection {
     return;
 }
 
-# An initial helper cannot claim a response slot already used by an application.
-# Accepted/started helpers continue to use their established protocol.
-sub _response_claimed_before_start {
+# A helper drives only what it answered (PAGI::Utils::_ProtocolHelpers holds
+# the claim rules): while its own refusal is in progress, or once another
+# helper answered the open connection, it fails locally.
+sub _refusing { PAGI::Utils::_ProtocolHelpers::refusing($_[0]) }
+sub _answered_by_another { PAGI::Utils::_ProtocolHelpers::answered_by_another($_[0]) }
+
+# This helper answered: its start completed, or it was issued -- still
+# pending, or rejected by the server (D6: the helper keeps its claim and is
+# still treated as the answerer). Either way it drives the connection as a
+# started stream and never issues a second sse.start; the server keeps a
+# scope's sends in call order. Once the connection has ended, no helper has
+# answered it.
+sub _answered {
     my ($self) = @_;
-    $self->_refresh_connection;
-    return $self->{_state} eq 'pending'
-        && $self->{scope}{'pagi.connection'}->response_started;
+    return $self->is_started
+        || (($self->{_claim} // '') eq 'answering' && $self->connection_state eq 'pending');
+}
+
+# A keepalive saved for a start this helper may not make is dropped.
+sub _require_ownership {
+    my ($self) = @_;
+    my $refused = PAGI::Utils::_ProtocolHelpers::ownership_refusal($self);
+    return unless $refused;
+    delete $self->{_pending_keepalive};
+    croak $refused;
 }
 
 sub disconnect_detail {
     my ($self) = @_;
     $self->_refresh_connection;
     return $self->{_disconnect_detail};
-}
-
-# Scope property accessors
-sub scope        { shift->{scope} }
-sub connection   { shift->{scope}{'pagi.connection'} }
-sub path         { shift->{scope}{path} // '/' }
-sub raw_path      { PAGI::Utils::Scope::raw_path(shift->{scope}) }
-sub request_uri   { PAGI::Utils::Scope::request_uri(shift->{scope}) }
-sub raw_path_info { PAGI::Utils::Scope::raw_path_info(shift->{scope}) }
-sub query_string { shift->{scope}{query_string} // '' }
-
-# URL decode helper (handles + as space per application/x-www-form-urlencoded)
-sub _url_decode {
-    my ($str) = @_;
-    return '' unless defined $str;
-    $str =~ s/\+/ /g;
-    $str =~ s/%([0-9A-Fa-f]{2})/chr(hex($1))/ge;
-    return $str;
-}
-
-# UTF-8 decode helper with strict/lenient mode
-sub _decode_utf8 {
-    my ($str, $strict) = @_;
-    return '' unless defined $str;
-    my $flag = $strict ? FB_CROAK : FB_DEFAULT;
-    $flag |= LEAVE_SRC;
-    return decode('UTF-8', $str, $flag);
-}
-
-# Query params as Hash::MultiValue (cached in scope)
-# Options: strict => 1 (croak on invalid UTF-8), raw => 1 (skip UTF-8 decoding)
-sub query_params {
-    my ($self, %opts) = @_;
-    my $strict = delete $opts{strict} // 0;
-    my $raw    = delete $opts{raw}    // 0;
-    croak("Unknown options to query_params: " . join(', ', keys %opts)) if %opts;
-
-    my $cache_key = $raw ? 'pagi.sse.query.raw' : ($strict ? 'pagi.sse.query.strict' : 'pagi.sse.query');
-    return $self->{scope}{$cache_key} if $self->{scope}{$cache_key};
-
-    my $qs = $self->query_string;
-    my @pairs;
-
-    for my $part (split /[&;]/, $qs) {
-        next unless length $part;
-        my ($key, $val) = split /=/, $part, 2;
-        $key //= '';
-        $val //= '';
-
-        # URL decode (handles + as space)
-        my $key_decoded = _url_decode($key);
-        my $val_decoded = _url_decode($val);
-
-        # UTF-8 decode unless raw mode
-        my $key_final = $raw ? $key_decoded : _decode_utf8($key_decoded, $strict);
-        my $val_final = $raw ? $val_decoded : _decode_utf8($val_decoded, $strict);
-
-        push @pairs, $key_final, $val_final;
-    }
-
-    $self->{scope}{$cache_key} = Hash::MultiValue->new(@pairs);
-    return $self->{scope}{$cache_key};
-}
-
-# Raw query params (no UTF-8 decoding)
-sub raw_query_params {
-    my $self = shift;
-    return $self->query_params(raw => 1);
-}
-
-# Single query param accessor
-sub query_param {
-    my ($self, $name, %opts) = @_;
-    return $self->query_params(%opts)->get($name);
-}
-
-# Raw single query param
-sub raw_query_param {
-    my ($self, $name) = @_;
-    return $self->query_param($name, raw => 1);
-}
-
-sub scheme       { shift->{scope}{scheme} // 'http' }
-sub http_version { shift->{scope}{http_version} // '1.1' }
-sub client       { shift->{scope}{client} }
-sub server       { shift->{scope}{server} }
-
-
-# Application state (injected by PAGI::Lifespan, read-only)
-sub has_state {
-    my $self = shift;
-    return 0 unless exists $self->{scope}{state};
-    croak 'PAGI::SSE state must be a hashref'
-        unless ref($self->{scope}{state}) eq 'HASH';
-    return 1;
-}
-
-sub state {
-    my $self = shift;
-    require PAGI::State;
-    return PAGI::State->new($self) // PAGI::State->_without_state;
-}
-
-# Path parameter accessors - captured from URL path by router
-# Stored in scope->{path_params} for router-agnostic access
-sub path_params {
-    my ($self) = @_;
-    return $self->{scope}{path_params} // {};
-}
-
-sub path_param {
-    my ($self, $name) = @_;
-    my $params = $self->{scope}{path_params} // {};
-    return $params->{$name};
 }
 
 # Connection state accessors
@@ -299,13 +191,10 @@ sub start {
 
 async sub _start {
     my ($self, %opts) = @_;
-    if ($self->_response_claimed_before_start) {
-        delete $self->{_pending_keepalive};
-        return $self;
-    }
+    $self->_require_ownership;
 
     # Idempotent - don't start twice
-    return $self if $self->is_started || $self->is_closed || $self->connection_state eq 'closing';
+    return $self if $self->_answered || $self->is_closed || $self->connection_state eq 'closing';
 
     my $event = {
         type   => 'sse.start',
@@ -317,9 +206,13 @@ async sub _start {
         $event->{headers} = $headers;
     }
 
+    # The helper owns the connection from the moment its start is issued.
+    $self->{_claim} = 'answering';
     await PAGI::Utils::_ProtocolHelpers::forward_send($self, $event);
-    $self->_set_state('started') unless $self->is_closed;
-    return $self if $self->is_closed;
+    # A close made while the start was pending stands, and no saved
+    # keepalive is armed after it.
+    $self->_set_state('started') if $self->connection_state eq 'pending';
+    return $self unless $self->is_started;
 
     # Arm any keepalive requested before the stream started (see
     # keepalive()'s deferred-arm note below) -- illegal before sse.start,
@@ -349,18 +242,19 @@ async sub _start {
 async sub keepalive {
     my ($self, $interval, $comment) = @_;
 
-    # Safe no-op once closed (including via decline) -- there is no live
-    # connection left for the server to time a ping against.
-    if ($self->_response_claimed_before_start) {
+    # Safe no-op once closed or while declining -- there is no stream for
+    # the server to time a ping against.
+    if ($self->_refusing) {
         delete $self->{_pending_keepalive};
         return $self;
     }
+    $self->_require_ownership;
     return $self if $self->is_closed || $self->connection_state eq 'closing';
 
     $interval //= 0;
     $comment  //= '';
 
-    unless ($self->is_started) {
+    unless ($self->_answered) {
         if ($interval > 0) {
             $self->{_pending_keepalive} = { interval => $interval, comment => $comment };
         } else {
@@ -369,6 +263,8 @@ async sub keepalive {
         return $self;
     }
 
+    # Sent now, after the issued start, so a saved one is not armed later.
+    delete $self->{_pending_keepalive};
     await PAGI::Utils::_ProtocolHelpers::forward_send($self, {
         type     => 'sse.keepalive',
         interval => $interval,
@@ -385,45 +281,24 @@ async sub keepalive {
 async sub decline {
     my ($self, @targets) = @_;
     my $app = PAGI::Utils::_ProtocolHelpers::prepare_refusal(
-        $self->{scope}, 'SSE decline', @targets,
+        $self, 'SSE decline', @targets,
     );
-    await PAGI::Utils::invoke_app(
-        $app, $self->{scope}, $self->{receive}, $self->{send},
-    );
+    await PAGI::Utils::_ProtocolHelpers::refuse($self, $app);
     return $self;
-}
-
-# Single header lookup (case-insensitive, returns last value)
-sub header {
-    my ($self, $name) = @_;
-    return $self->headers->get($name);
-}
-
-# All headers as PAGI::Headers (cached in scope)
-sub headers {
-    my ($self) = @_;
-    return $self->{scope}{'pagi.request.headers'}
-        //= PAGI::Headers->new($self->{scope}{headers} // []);
-}
-
-# All values for a header
-sub header_all {
-    my ($self, $name) = @_;
-    return $self->headers->get_all($name);
 }
 
 # Get Last-Event-ID header from client (for reconnection)
 sub last_event_id {
     my ($self) = @_;
-    return $self->header('last-event-id');
+    return $self->headers->get_single('last-event-id');
 }
 
 # Send data-only event
 async sub send {
     my ($self, $data) = @_;
 
-    return $self if $self->_response_claimed_before_start;
     croak "Cannot send on closed SSE connection" if $self->is_closed || $self->connection_state eq 'closing';
+    $self->_require_ownership;
     defined($data = PAGI::Utils::_string_value($data))
         or croak 'send requires a string or an object that overloads stringification';
 
@@ -442,8 +317,8 @@ async sub send {
 async sub send_json {
     my ($self, $data) = @_;
 
-    return $self if $self->_response_claimed_before_start;
     croak "Cannot send on closed SSE connection" if $self->is_closed || $self->connection_state eq 'closing';
+    $self->_require_ownership;
 
     await $self->start unless $self->is_started;
 
@@ -461,8 +336,8 @@ async sub send_json {
 async sub send_event {
     my ($self, %opts) = @_;
 
-    return $self if $self->_response_claimed_before_start;
     croak "Cannot send on closed SSE connection" if $self->is_closed || $self->connection_state eq 'closing';
+    $self->_require_ownership;
     croak "send_event requires 'data' parameter" unless exists $opts{data};
 
     my $event = _send_event_for(%opts);
@@ -482,7 +357,7 @@ sub try_send { my $self = shift; return $self->_keep($self->_try_send(@_)) }
 
 async sub _try_send {
     my ($self, $data) = @_;
-    return 0 if $self->_response_claimed_before_start || $self->is_closed || $self->connection_state eq 'closing';
+    return 0 if $self->_refusing || $self->_answered_by_another || $self->is_closed || $self->connection_state eq 'closing';
 
     eval {
         defined($data = PAGI::Utils::_string_value($data))
@@ -504,7 +379,7 @@ sub try_send_json { my $self = shift; return $self->_keep($self->_try_send_json(
 
 async sub _try_send_json {
     my ($self, $data) = @_;
-    return 0 if $self->_response_claimed_before_start || $self->is_closed || $self->connection_state eq 'closing';
+    return 0 if $self->_refusing || $self->_answered_by_another || $self->is_closed || $self->connection_state eq 'closing';
 
     eval {
         await $self->start unless $self->is_started;
@@ -525,8 +400,8 @@ async sub _try_send_json {
 async sub send_comment {
     my ($self, $comment) = @_;
 
-    return $self if $self->_response_claimed_before_start;
     croak "Cannot send on closed SSE connection" if $self->is_closed || $self->connection_state eq 'closing';
+    $self->_require_ownership;
     defined($comment = PAGI::Utils::_string_value($comment))
         or croak 'send_comment requires a string or an object that overloads stringification';
 
@@ -544,7 +419,7 @@ sub try_send_comment { my $self = shift; return $self->_keep($self->_try_send_co
 
 async sub _try_send_comment {
     my ($self, $comment) = @_;
-    return 0 if $self->_response_claimed_before_start || $self->is_closed || $self->connection_state eq 'closing';
+    return 0 if $self->_refusing || $self->_answered_by_another || $self->is_closed || $self->connection_state eq 'closing';
 
     eval {
         defined($comment = PAGI::Utils::_string_value($comment))
@@ -566,7 +441,7 @@ sub try_send_event { my $self = shift; return $self->_keep($self->_try_send_even
 
 async sub _try_send_event {
     my ($self, %opts) = @_;
-    return 0 if $self->_response_claimed_before_start || $self->is_closed || $self->connection_state eq 'closing';
+    return 0 if $self->_refusing || $self->_answered_by_another || $self->is_closed || $self->connection_state eq 'closing';
 
     eval {
         my $event = _send_event_for(%opts);
@@ -749,7 +624,9 @@ sub _keep {
 # Close the connection
 sub close {
     my ($self, @args) = @_;
-    return Future->done($self) if $self->_response_claimed_before_start;
+    # A refusal is already this helper's answer.
+    return Future->done($self) if $self->_refusing;
+    $self->_require_ownership;
     if ($self->{_close_callbacks_ran}) {
         return $self->{_close_send}
             ? $self->_keep($self->{_close_send}->without_cancel->then(sub { Future->done($self) }))
@@ -761,7 +638,7 @@ sub close {
         if $self->{_close_send};
     return Future->done($self) if $self->is_closed;
     croak "SSE close requires an active accepted/started connection"
-        unless $self->is_started;
+        unless $self->_answered;
     $self->{_state} = 'closing';
     my $settled = $self->{_close_send} = Future->new;
     my $send;
@@ -793,10 +670,7 @@ sub close {
 # never by reading receive.
 async sub run {
     my ($self) = @_;
-    if ($self->_response_claimed_before_start) {
-        delete $self->{_pending_keepalive};
-        return;
-    }
+    $self->_require_ownership;
     await $self->start unless $self->is_started || $self->is_closed;
     await $self->{_cleanup_future}->without_cancel;
     return;
@@ -805,7 +679,7 @@ async sub run {
 # Iterate over items and send events
 async sub each {
     my ($self, $source, $callback) = @_;
-    return $self if $self->_response_claimed_before_start;
+    $self->_require_ownership;
 
     await $self->start unless $self->is_started;
 
@@ -848,7 +722,7 @@ async sub each {
 # Requires Future::IO to be installed
 async sub every {
     my ($self, $interval, $callback) = @_;
-    return $self if $self->_response_claimed_before_start;
+    $self->_require_ownership;
 
     croak "every() requires interval" unless defined $interval && $interval > 0;
     croak "every() requires callback coderef" unless ref $callback eq 'CODE';
@@ -1012,65 +886,52 @@ tests, supplies one with L<PAGI::Test::ConnectionState>:
         'pagi.connection' => PAGI::Test::ConnectionState->new,
     };
 
-B<Cached per scope (while referenced):> The SSE object is cached in
-C<< $scope->{'pagi.sse'} >>, so calling C<new()> again with the same scope
-returns the B<same object> — preserving state (is_started, is_closed,
-callbacks) across code paths that build an SSE object from the same scope —
-B<as long as you hold a strong reference to it>. The cache is deliberately
-B<weak> (to avoid a C<< $scope >> <-> SSE reference cycle), so it is B<not> a
-guaranteed singleton: if every strong reference is dropped the object may be
-garbage-collected, and a later C<new()> will build a fresh one with reset
-state. In normal use a handler keeps C<$sse> alive for the life of the
-connection, so this does not arise.
+Each call builds a new object and stores nothing in the scope, so build one
+per connection and pass it on (see L</SUBCLASSING>).
 
 An application that constructs the helper itself should
 C<await $sse-E<gt>finished> before it returns; see L</finished>. Routes and the
 Endpoint classes do this for you.
 
+=head1 INHERITED FROM PAGI::HTTPConnection
+
+A PAGI::SSE is a L<PAGI::HTTPConnection>: what can be read from the
+scope alone comes from the methods it inherits, documented there. Each parse
+(headers, query, cookies) is kept on the object; nothing is written to the
+scope.
+
+=over 4
+
+=item * Scope properties: C<scope>, C<connection>, C<client>, C<server>,
+C<scheme> (C<http> unless the scope says otherwise), C<http_version>, C<path>,
+C<raw_path>, C<raw_path_info>, C<request_uri>, C<query_string>
+
+=item * Headers: C<headers>, C<header>, C<header_all>
+
+=item * Query parameters: C<query_params>, C<query_param>,
+C<raw_query_params>, C<raw_query_param>
+
+=item * Path parameters: C<path_params>, C<path_param> (strict: a name the
+route did not capture dies, naming the ones it did; pass C<< strict => 0 >>
+for C<undef>), and the subclass hook C<_default_path_param_strict_opt>
+
+=item * Cookies: C<cookies>, C<cookie>
+
+=item * Application state: C<state>, C<has_state>
+
+=back
+
+C<path> dies C<this scope has no path> on a scope without one.
+
 =head1 SCOPE ACCESSORS
-
-=head2 scope, path, raw_path, query_string, scheme, http_version
-
-    my $path = $sse->path;              # /events
-    my $qs = $sse->query_string;        # token=abc
-
-C<raw_path> is the full path the client requested, percent-encoded as sent.
-Mounts leave it unchanged, so inside a mount it still starts with the mount
-prefix (see L<PAGI::Spec::Www/Paths, Mounts and Root Paths>). Without one in
-the scope it is C<root_path> followed by C<path>, percent-encoded. Never use
-it for authorization: different encodings reach the same C<path>.
-
-=head2 request_uri
-
-    my $here = $sse->request_uri;   # /app/admin/users?x=1
-
-The path and query the client requested: C<raw_path>, then C<?> and
-C<query_string> when there is one, with any byte a URI cannot hold
-percent-encoded and a leading C<//> reduced to C</>. It is the URL to
-redirect back to, at any mount depth and behind a server root path.
-
-=head2 raw_path_info
-
-    my $rest = $sse->raw_path_info;  # /a%2Fb inside mount('/files')
-
-The part of C<raw_path> below C<root_path>, still encoded, for code that must
-tell an encoded C</> from a separator. Returns C<undef> when it cannot be
-found: an encoded C</> straddles the mount boundary, or C<path> was rewritten.
-
-=head2 header, headers, header_all
-
-    my $auth = $sse->header('authorization');
-    my @cookies = $sse->header_all('cookie');
-    my $headers = $sse->headers;        # PAGI::Headers
-
-Case-insensitive header access through L<PAGI::Headers>.
 
 =head2 last_event_id
 
     my $id = $sse->last_event_id;       # From Last-Event-ID header
 
 Returns the Last-Event-ID header sent by reconnecting clients.
-Use this to replay missed events.
+Use this to replay missed events. A Last-Event-ID sent twice reads as absent
+(C<undef>).
 
 =head2 Per-Connection Shared State
 
@@ -1081,90 +942,6 @@ L<PAGI::Middleware::Stash> stacked above the handler provides:
     my $stash = PAGI::Stash->new($sse);
 
 =cut
-
-=head2 path_param
-
-    my $channel = $sse->path_param('channel');
-
-Returns a path parameter by name. Path parameters are captured from the URL
-path by a router and stored in C<< $scope->{path_params} >>.
-
-=head2 path_params
-
-    my $params = $sse->path_params;
-
-Returns hashref of all path parameters from scope.
-
-=head2 query_params
-
-    my $params = $sse->query_params;
-    my $params = $sse->query_params(strict => 1);
-    my $params = $sse->query_params(raw => 1);
-
-Returns query string parameters as a L<Hash::MultiValue>. Handles URL decoding
-and UTF-8 decoding automatically.
-
-Options:
-
-=over 4
-
-=item strict => 1
-
-Croak on invalid UTF-8 sequences instead of replacing with substitution character.
-
-=item raw => 1
-
-Skip UTF-8 decoding, return raw bytes after URL decoding.
-
-=back
-
-=head2 raw_query_params
-
-    my $params = $sse->raw_query_params;
-
-Shortcut for C<< query_params(raw => 1) >>.
-
-=head2 query_param
-
-    my $value = $sse->query_param('name');
-    my $value = $sse->query_param('name', strict => 1);
-
-Returns a single query parameter value by name. Accepts same options as
-C<query_params>.
-
-=head2 raw_query_param
-
-    my $value = $sse->raw_query_param('name');
-
-Shortcut for C<< query_param($name, raw => 1) >>.
-
-=head2 state
-
-    my $db = $sse->state->get('db');
-
-Returns a L<PAGI::State> facade for application state injected by
-L<PAGI::Lifespan>. Without application state the facade is empty, and its
-C<get> and C<data> die naming the likely cause (did lifespan startup run?
-L<PAGI::Test::Client> needs C<< lifespan => 1 >>); present state must be a
-hashref or this method croaks. The facade is read-oriented and catches
-missing top-level keys through C<get>.
-
-Repeated calls have equivalent behavior over the same backing state, but do
-not promise facade object identity. C<< $state->data >> is the explicit escape
-hatch when an integration genuinely requires the raw hashref.
-
-Application state is distinct from L<PAGI::Stash>, which holds mutable
-per-connection data, and from C<connection_state>, which reports this SSE
-stream's protocol lifecycle.
-
-=head2 has_state
-
-    if ($sse->has_state) {
-        ...
-    }
-
-Returns true when lifespan application state is present and a hashref. Returns
-false only when it is absent; malformed present state croaks.
 
 =head1 LIFECYCLE METHODS
 
@@ -1279,8 +1056,53 @@ without creating a clean terminal outcome.
 Waits for connection end and its asynchronous cleanup without reading the
 receive queue. Use this to keep a live stream handler open.
 
-Safe no-op after L</decline>, where no live stream was opened. For a started
-stream that has ended, it joins the same cleanup completion.
+After a L</decline> that completed, where no live stream was opened, it
+returns once cleanup is done; while the decline's response is still in
+progress it croaks (see L</WHICH HELPER ANSWERS>). For a started stream that
+has ended, it joins the same cleanup completion.
+
+=head1 WHICH HELPER ANSWERS
+
+A connection has one answer, and a helper drives only the answer it gave.
+Building a second helper over the same scope (C<new> always builds a new
+object) gives a helper that did not answer, so which helper answered
+decides what each can do. C<sse.start> is this helper's accept.
+
+B<This helper answered.> From the moment this helper issues its C<start>,
+before the server's send completes, it owns the connection: sends,
+iteration, C<run>, C<keepalive> and C<close> work as on a started stream.
+A send made while the start is still pending joins that start and goes out
+after it; a C<close> made then goes out after the start, in call order, and
+the completed start does not reopen the stream; a C<keepalive> made then is
+sent after the start. If the server rejects the start, the error raises at
+its C<await>; the helper keeps the claim it recorded when it sent the start
+and is still treated as the connection's answerer: its sends,
+C<try_send*>, C<keepalive> and C<close> go to the server as on a started
+stream (which the server may reject in turn), no second C<sse.start> is
+sent, and code that keeps using it gets no protection from the rules below.
+After a failed start, build a new helper if the connection is still live
+and unanswered, or use the helper that answered if another did.
+
+B<This helper is refusing.> Once the response of this helper's L</decline>
+has started and the connection is still open, the refusal is its answer.
+Its C<start>, a second C<decline>, C<send>, C<send_json>, C<send_event>,
+C<send_comment>, C<each>, C<every> and C<run> croak
+C<this helper is refusing the connection>, sending nothing and reading
+nothing; C<try_send*> return 0; C<close> and C<keepalive> return quietly.
+The refusal itself completes as usual. A refusal that settles with no
+response started answered nothing, and the helper may try again.
+
+B<Another helper answered.> While the connection is open and its response
+was started by another helper, every operation of this one croaks
+C<this connection was answered by another helper; use that one>, sending
+nothing and reading nothing, except C<try_send*>, which return 0. That
+includes C<close> and C<keepalive>: ending a stream another helper owns is
+that helper's call. A middleware that must act on the connection's data
+wraps C<$send> or C<$receive> instead.
+
+B<The connection has ended.> Every helper behaves as it does for an ended
+connection: sends croak C<Cannot send on closed SSE connection>, and
+C<start>, C<close>, C<keepalive> and C<run> do nothing more.
 
 =head1 CONNECTION STATE ACCESSORS
 
@@ -1471,11 +1293,16 @@ call returns C<$self> without sending anything.
 
 B<DEFERRED ARM:> C<sse.keepalive> is illegal before C<sse.start> -- both
 L<PAGI::Utils::_SendValidation> and the reference server's C<EventValidator> reject
-it from the pre-start state. Calling C<keepalive> before L</start> does
-B<not> send anything: it records the interval/comment, and C<start> arms
-the recording (sends the real event) immediately afterward, where it is
-legal. A subsequent pre-start call with C<< interval => 0 >> clears the
-recording instead of arming anything. This is transparent to callers --
+it from the pre-start state. Calling C<keepalive> before L</start> is
+called does B<not> send anything: it records the interval/comment, and
+C<start> arms the recording (sends the real event) once its C<sse.start>
+has been sent, where it is legal. A subsequent pre-start call with an
+interval of 0 clears the recording instead of arming anything. Once
+C<start> has been called -- its C<sse.start> still pending, completed, or
+rejected by the server -- C<keepalive> sends at once, after the start in
+call order, and drops any recording; a recording made before a start the
+server rejected is never armed, so call C<keepalive> again if the helper
+carries on. This is transparent to callers --
 C<< await $sse->keepalive($n) >> still "just works" whether called before or
 after C<start> -- and it's specifically what lets
 L<PAGI::Endpoint::SSE/keepalive_interval> be configured before C<on_connect>
@@ -1768,24 +1595,20 @@ A framework may subclass PAGI::SSE (Thunderhorse does). The contract:
 =over 4
 
 =item * B<State.> The object holds C<scope>, C<receive> and C<send>, and its
-private connection state, every field of which starts with C<_> (C<_state>
-and the callbacks and the disconnect reason among them). A subclass adds fields under any other name.
+private connection state, every field of which starts with C<_> (C<_state>,
+C<_claim>, and the callbacks and the disconnect reason among them). A subclass adds fields under any other name.
 
-=item * B<One object per connection.> Build it once, after the final route
-match, and never replace its C<scope>, C<receive> or C<send>: its state
-machine (start, send, close, disconnect) assumes the same channels for its whole life, and
-swapping them, above all after C<start>, breaks it. Path parameters reach it
-through the scope, written there in place before it is built (see
-L<PAGI::Request/SUBCLASSING>).
-
-=item * B<Built where the channels are final.> A Request holds no connection
-state, so when a middleware hands the inner application a copy of the scope,
-a new Request over the copy is all it takes. A SSE object I<is> the
-connection: C<new> returns the object already cached in the scope
-(C<pagi.sse>), and a middleware's copy carries that key, so building again over
-the copy hands back the first object, still bound to the first channels.
-Build it inside the innermost middleware, from the channels the handler
-receives. State a framework gathers earlier in a dispatch belongs on its own
+=item * B<One object per scope.> Build it once the scope is final, after
+the route match and inside the innermost middleware, from the channels the
+handler receives, and never replace its C<scope>, C<receive> or C<send>: its
+state machine (start, send, close, disconnect) assumes the
+same channels for its whole life. C<new> builds a new object on every call
+and stores nothing in the scope, so a second C<new> does not find the first:
+pass the one object on. Successive route matches over one scope reuse the
+object, reading their path parameters live from the scope, written there in
+place (see L<PAGI::Request/SUBCLASSING>); a middleware's copy of the scope is
+a new scope, and gets a new object. Nothing rebinds an object to another
+scope. State a framework gathers earlier in a dispatch belongs on its own
 context or in the scope, not on this object.
 
 =item * B<The pattern.> PAGI-FastAPI builds

@@ -3,6 +3,7 @@ package PAGI::Middleware::Session::State::Header;
 use strict;
 use warnings;
 use parent 'PAGI::Middleware::Session::State';
+use PAGI::HTTPConnection ();
 
 =head1 NAME
 
@@ -61,17 +62,20 @@ sub new {
 
     my $session_id = $state->extract($scope);
 
-Find the configured header in C<$scope-E<gt>{headers}> (case-insensitive)
-and return its value as the session ID. If a C<pattern> is configured,
-apply it and return the first capture group. Returns undef if the header
-is not found or the pattern does not match.
+Read the configured header (case-insensitive) through
+L<PAGI::HTTPConnection> and return its value as the session ID. If a
+C<pattern> is configured, apply it and return the first capture group.
+Returns undef if the header is not found, is sent more than once (a session
+id is one value), or the pattern does not match. C<$scope> is an http,
+websocket or sse scope.
 
 =cut
 
 sub extract {
     my ($self, $scope) = @_;
 
-    my $value = $self->_get_header($scope, $self->{header_name});
+    # Used as the session id: a repeated header is absent.
+    my $value = PAGI::HTTPConnection->new($scope)->headers->get_single($self->{header_name});
     return unless defined $value;
 
     if (my $pattern = $self->{pattern}) {
@@ -97,16 +101,6 @@ sub inject {
     my ($self, $headers, $id, $options) = @_;
 
     # No-op: client manages header-based transport
-    return;
-}
-
-sub _get_header {
-    my ($self, $scope, $name) = @_;
-
-    $name = lc($name);
-    for my $h (@{$scope->{headers} // []}) {
-        return $h->[1] if lc($h->[0]) eq $name;
-    }
     return;
 }
 

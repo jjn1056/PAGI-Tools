@@ -46,6 +46,7 @@ package SignedRequests::BadSignature {
 package SignedRequests::VerifySignature {
     use parent 'PAGI::Middleware';
     use Digest::SHA qw(hmac_sha256_hex);
+    use PAGI::HTTPConnection;
     use PAGI::Tools qw(response);    # imports are per package; async is lexical, so only this one
     use PAGI::Utils::SecureCompare qw(secure_compare);
 
@@ -57,7 +58,9 @@ package SignedRequests::VerifySignature {
     sub wrap ($self, $app) {
         return async sub ($scope, $receive, $send) {
             return await $app->($scope, $receive, $send) unless $scope->{type} eq 'http';
-            my ($given) = map { $_->[1] } grep { lc($_->[0]) eq 'x-signature' } @{$scope->{headers}};
+            # Every X-Signature field joined: a repeated one matches no
+            # signature.
+            my $given = PAGI::HTTPConnection->new($scope)->header('x-signature');
             return await $self->{refuse}->($scope, $receive, $send) unless defined $given;
 
             # The routes' receive: each chunk is hashed as they read it, and

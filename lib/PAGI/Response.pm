@@ -4,7 +4,7 @@ use strict;
 use warnings;
 
 use Carp qw(croak);
-use Cookie::Baker ();
+use PAGI::Utils::_SetCookie ();
 use Exporter qw(import);
 use Future;
 use Future::AsyncAwait;
@@ -328,6 +328,8 @@ public Response-specific emission method.
     is_buffered / body
 
 C<header($name, $value)> appends and preserves repeated-field order;
+C<header($name)> reads a repeated field as every value joined with C<", ">
+in order, and C<Set-Cookie> is read with C<header_all>;
 C<content_type> replaces Content-Type, and C<content_type(undef)> gives back the
 class's default type (Text's C<text/plain; charset=utf-8>, for one), so a typed
 body always says what it is; Empty and File have none, File's coming from the
@@ -352,6 +354,23 @@ Header values and cookie parts are bytes (L</BYTES AND CHARACTERS>), as
 HTTP field values are octets: a character above 0xFF croaks, naming the
 header or cookie part, and text with one is encoded first (a non-ASCII
 download name is: File encodes C<filename> itself, following RFC 8187).
+
+C<cookie($name, $value, %options)> writes the value as is, so it must be
+RFC 6265 cookie-octets: printable ASCII except space, C<">, C<,>, C<;> and
+C<\>. Any other character (a control character, whitespace, one of those, or
+one above 0x7E) croaks, naming it, with "encode it first (Base64, say)":
+a browser ends a value at the first C<;>, and other readers split on C<,> or
+strip quotes, so only these characters read back unchanged through any
+client. Nothing is percent-encoded; encode a value that needs it before
+passing it, and decode it after reading it back. The name must be a
+non-empty RFC 6265 token (letters, digits and C<!#$%&'*+-.^_`|~>); any other
+character croaks, naming it, as the name is never encoded or decoded. A
+C<samesite> option that is given must be C<Lax>, C<Strict> or C<None> (any
+case, the whole word), else it croaks; without it no SameSite attribute is
+written. A true C<partitioned> option adds the C<Partitioned> attribute
+(CHIPS), which keeps the cookie per top-level site for a cookie set inside
+a cross-site embed; it forces C<SameSite=None> and C<secure>, as browsers
+require.
 
 Header names are HTTP tokens (RFC 9110): letters, digits and
 C<!#$%&'*+-.^_`|~>. A name with anything else (a space, a colon, a
@@ -675,17 +694,18 @@ sub cookie {
     for my $option (qw(domain path)) {
         $options{$option} = _cookie_string($option, $options{$option}) if defined $options{$option};
     }
-    my %cookie = (value => $value, path => $options{path} // '/');
+    my %cookie = (path => $options{path} // '/');
     $cookie{domain}    = $options{domain}  if defined $options{domain};
     $cookie{expires}   = $options{expires} if defined $options{expires};
     $cookie{'max-age'} = $options{max_age} if defined $options{max_age};
     $cookie{secure}    = $options{secure} if $options{secure};
     $cookie{httponly}  = $options{httponly} if $options{httponly};
+    $cookie{partitioned} = $options{partitioned} if $options{partitioned};
     $cookie{samesite}  = $options{samesite} if defined $options{samesite};
-    return $self->header('Set-Cookie', Cookie::Baker::bake_cookie($name, \%cookie));
+    return $self->header('Set-Cookie', PAGI::Utils::_SetCookie::set_cookie_string($name, $value, %cookie));
 }
 
-# A cookie's value, domain or path as a string, or croak: Cookie::Baker
+# A cookie's value, domain or path as a string, or croak: the writer
 # would otherwise send a reference as HASH(0x...).
 sub _cookie_string {
     my ($what, $value) = @_;

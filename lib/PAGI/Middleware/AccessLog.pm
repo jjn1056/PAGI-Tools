@@ -7,6 +7,7 @@ use Future::AsyncAwait;
 use Time::HiRes qw(time);
 use POSIX qw(strftime);
 use PAGI::Utils qw(request_ended_abnormally);
+use PAGI::HTTPConnection ();
 use PAGI::Utils::Scope ();
 
 =head1 NAME
@@ -143,17 +144,10 @@ sub _format_log {
     my $full_path = PAGI::Utils::Scope::request_uri($scope);
     my $protocol = 'HTTP/' . ($scope->{http_version} // '1.1');
 
-    # Get headers
-    my $referer = '-';
-    my $user_agent = '-';
-    for my $h (@{$scope->{headers} // []}) {
-        my $name = lc($h->[0]);
-        if ($name eq 'referer') {
-            $referer = $h->[1];
-        } elsif ($name eq 'user-agent') {
-            $user_agent = $h->[1];
-        }
-    }
+    # Referer and User-Agent, every field joined
+    my $connection = PAGI::HTTPConnection->new($scope);
+    my $referer = $connection->header('referer') // '-';
+    my $user_agent = $connection->header('user-agent') // '-';
 
     # Format timestamp
     my $timestamp = strftime('%d/%b/%Y:%H:%M:%S %z', localtime());
@@ -190,7 +184,7 @@ __END__
 
 =head1 LOG FORMATS
 
-The request field in every format is L<PAGI::Request/request_uri>: the path
+The request field in every format is L<PAGI::HTTPConnection/request_uri>: the path
 and query the client requested, percent-encoded, including any mount prefix.
 A client cannot forge a log line with an encoded CR LF.
 

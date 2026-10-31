@@ -469,7 +469,7 @@ async sub _handle_exception {
     my $context = PAGI::ErrorContext->new($error_scope);
     my $answered = eval {
         if ($entry) {
-            $request //= PAGI::Utils::request_for_scope($error_scope, \&_no_body);
+            $request //= PAGI::Utils::request_for_scope($error_scope);
             my $answer = await Future->wrap($entry->($request, $context));
             await _send_answer($answer, $context, 'ErrorHandler catch entry', $error_scope, $receive,
                 _sending_allow($send, $headers));
@@ -663,16 +663,6 @@ sub _sending_allow {
     };
 }
 
-# The receive behind a handler's or catch entry's Request: the body was the
-# application's, and on a real server reading it again would wait for an
-# event that never comes, so reading it dies at once -- as Starlette's
-# ServerErrorMiddleware hands its handler a Request with no receive. The
-# message names the handler's line, not PAGI::Request's.
-our @CARP_NOT = ('PAGI::Request');
-sub _no_body {
-    croak "ErrorHandler handlers read the request's headers, not its body: the body was the application's";
-}
-
 # An unhandled error's answer: catch for the configured status, handler, or
 # the built-in answer, each with a Request that has no body.
 async sub _answer_server_error {
@@ -682,7 +672,7 @@ async sub _answer_server_error {
         $error->{answered_by} = 'catch entry';    # names it if it fails
         my $context = PAGI::ErrorContext->new($scope);
         my $answer = await Future->wrap($entry->(
-            PAGI::Utils::request_for_scope($scope, \&_no_body), $context));
+            PAGI::Utils::request_for_scope($scope), $context));
         return await _send_answer($answer, $context, 'ErrorHandler catch entry', $scope, $receive, $send);
     }
     if (my $app = $self->{handler_app}) {
@@ -690,7 +680,7 @@ async sub _answer_server_error {
     }
     my $context = PAGI::ErrorContext->new($scope);
     if (my $handler = $self->{handler_code}) {
-        my $answer = await Future->wrap($handler->(PAGI::Utils::request_for_scope($scope, \&_no_body)));
+        my $answer = await Future->wrap($handler->(PAGI::Utils::request_for_scope($scope)));
         return await _send_answer($answer, $context, 'ErrorHandler handler', $scope, $receive, $send);
     }
     $error->{answered_by} = 'built-in answer';

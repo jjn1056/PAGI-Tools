@@ -13,6 +13,7 @@ use Time::HiRes qw(time);
 
 use PAGI::App::File;
 use PAGI::Compose qw(compose);
+use PAGI::HTTPConnection;
 use PAGI::Middleware::AccessLog;
 use PAGI::Pages;
 use PAGI::Routing qw(endpoint middleware route sse websocket);
@@ -163,17 +164,13 @@ my $require_json = sub {
     async sub {
         my ($scope, $receive, $send) = @_;
 
-        # Only check POST requests
+        # Only check POST requests. PAGI::HTTPConnection reads the request's
+        # headers without its body, so the endpoint still gets the whole body.
+        # content_type is the parsed media type: lowercased, parameters
+        # dropped, and undef for a missing or repeated Content-Type field.
         if (($scope->{method} // '') eq 'POST') {
-            my $content_type = '';
-            for my $h (@{$scope->{headers} // []}) {
-                if (lc($h->[0]) eq 'content-type') {
-                    $content_type = $h->[1];
-                    last;
-                }
-            }
-
-            unless ($content_type =~ m{application/json}i) {
+            my $type = PAGI::HTTPConnection->new($scope)->headers->content_type // '';
+            unless ($type eq 'application/json') {
                 my $response = PAGI::Pages->unsupported_media_type(
                     as     => 'json',
                     detail => 'Content-Type must be application/json');

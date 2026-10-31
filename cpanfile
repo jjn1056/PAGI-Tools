@@ -18,7 +18,6 @@ recommends 'Future::IO', '0.23';
 # Body/header processing
 requires 'JSON::MaybeXS', '1.004003';
 requires 'Hash::MultiValue', '0.16';
-requires 'Cookie::Baker', '0.11';
 requires 'HTTP::MultiPartParser', '0.02';
 
 # Response compression (PAGI::Middleware::GZip). Ships with core Perl; declared

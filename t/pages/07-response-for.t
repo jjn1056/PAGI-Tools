@@ -325,15 +325,13 @@ subtest 'materialization gives policy a shallow real-protocol metadata view with
 
     my $nested = { request_id => 'nested-by-identity' };
     my $headers = [['Accept' => 'application/problem+json']];
-    my $protocol_cache = PAGI::Headers->new([['Accept' => 'text/plain']]);
     my $source = {
-        type                   => 'websocket',
-        method                 => 'POST',
-        path                   => '/chat',
-        headers                => $headers,
-        state                  => $nested,
-        'pagi.request.headers' => $protocol_cache,
-        'pagi.connection'      => PAGI::Test::ConnectionState->new(websocket => 1),
+        type              => 'websocket',
+        method            => 'POST',
+        path              => '/chat',
+        headers           => $headers,
+        state             => $nested,
+        'pagi.connection' => PAGI::Test::ConnectionState->new(websocket => 1),
     };
     my @source_keys = sort keys %$source;
 
@@ -358,15 +356,13 @@ subtest 'materialization gives policy a shallow real-protocol metadata view with
         'the repeated raw header list retains identity');
     is(refaddr($metadata->{state}), refaddr($nested),
         'other nested scope metadata retains identity');
-    ok(!exists $metadata->{'pagi.request.headers'},
-        'negotiation keeps its rebuilt request header cache private');
+    is([sort keys %$metadata], \@source_keys,
+        'metadata carries the source keys and nothing more');
 
     is([sort keys %$source], \@source_keys, 'source keys are unchanged');
     is($source->{type}, 'websocket', 'source type is unchanged');
     is($source->{method}, 'POST', 'source method is unchanged');
     is($source->{path}, '/chat', 'source path is unchanged');
-    is(refaddr($source->{'pagi.request.headers'}), refaddr($protocol_cache),
-        'the original protocol header cache is unchanged');
 
     my $methodless = {
         type    => 'sse',
@@ -384,7 +380,7 @@ subtest 'materialization gives policy a shallow real-protocol metadata view with
         'shallow copying preserves nested reference identity');
 };
 
-subtest 'WebSocket and SSE caches are omitted only from isolated metadata views' => sub {
+subtest 'WebSocket and SSE header parses stay on the object, out of the metadata view' => sub {
     local $Local::CountingPages::RESPONSE_COUNT = 0;
     local @Local::CountingPages::RESPONSE_SCOPES;
 
@@ -414,8 +410,8 @@ subtest 'WebSocket and SSE caches are omitted only from isolated metadata views'
         my ($label, $factory) = @$case;
         my $object = $factory->();
         my $source = $object->scope;
-        my $cache = $object->headers;
-        isa_ok($cache, ['PAGI::Headers'], "$label builds its protocol cache first");
+        my $parsed = $object->headers;
+        isa_ok($parsed, ['PAGI::Headers'], "$label parses its headers first");
         my @source_keys = sort keys %$source;
 
         my $response = $application->response_for($object);
@@ -426,13 +422,13 @@ subtest 'WebSocket and SSE caches are omitted only from isolated metadata views'
 
         my $metadata = $Local::CountingPages::RESPONSE_SCOPES[-1];
         ok(!exists $metadata->{'pagi.request.headers'},
-            "$label metadata does not receive the private HTTP cache");
+            "$label metadata holds no header parse");
         is($metadata->{headers}, [map { ['Accept' => $_] } @accept],
             "$label metadata retains both raw Accept lines");
-        is(refaddr($source->{'pagi.request.headers'}), refaddr($cache),
-            "$label source retains its original protocol cache");
-        isa_ok($source->{'pagi.request.headers'}, ['PAGI::Headers'],
-            "$label source cache class is not replaced");
+        ok(!exists $source->{'pagi.request.headers'},
+            "$label source holds no header parse: it stays on the object");
+        is(refaddr($object->headers), refaddr($parsed),
+            "$label object keeps its own parse");
         is([sort keys %$source], \@source_keys,
             "$label response materialization does not change source keys");
     }

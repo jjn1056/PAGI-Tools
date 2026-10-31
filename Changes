@@ -3,10 +3,19 @@
 0.003000 - 2026-09-30
 
   Most of the 0.002002 API is replaced; there are no compatibility aliases.
-  UPGRADING.md has a table of what replaces what and a worked port;
+  UPGRADING.md has a table of what replaces what and worked ports;
   UPGRADING-REFERENCE.md has the details. Needs PAGI::Server 0.003000.
 
   [New]
+  - PAGI::HTTPConnection, Starlette's HTTPConnection: what can be known
+    about an http, websocket or sse request without talking to it --
+    path, headers, query, path parameters, cookies, client and application
+    state -- built from the scope alone, so middleware can read a request
+    without touching its body or socket, and a helper written against it
+    serves any of the three protocols. It never writes the scope and keeps
+    every parse on the object. A scope with no path dies where the path is
+    read; cookies come from every Cookie field, split on ';' only, quotes
+    removed, never percent-decoded, the last of a repeated name winning.
   - PAGI::Middleware::Stash (middleware('Stash')) gives every layer below
     it one shared stash, so a middleware sees what a handler stored, after
     the handler returns, through any scope copies between them.
@@ -196,10 +205,11 @@
     as the routes read it, as Starlette's body-size limit does.
   - PAGI::Utils exports request_for_scope($scope, $receive): a new Request
     of the application's class (RequestClass's, else PAGI::Request), for
-    middleware, error handlers and a framework's own dispatch to read what
-    the scope holds. A limited-use Request: not the route handler's, and
-    it does not own the body; code that must not read the body passes a
-    receive that dies, as Authentication and ErrorHandler do.
+    middleware, error handlers and a framework's own dispatch to hand
+    application code the Request it expects. A limited-use Request: not the
+    route handler's, and it does not own the body. request_for_scope($scope),
+    without a receive, gives a Request with no body, whose body methods die
+    at once; the factory is then called with ($scope, undef).
   - Cookbook: "Linking inside a mounted app"; PAGI::Routing::URL's
     path_for shows absolute, sibling and parent references in a Mount.
   - examples/gut-check: everyday applications next to their Starlette
@@ -288,6 +298,10 @@
     Starlette's StreamingResponse iterates its content (NDJSON takes a
     source of items). Stream calls nothing else on a source; the on_close
     option is its cleanup, for a source or a producer.
+  - PAGI::Response cookie and the Cookie middleware jar's set take a
+    partitioned option: the Partitioned attribute (CHIPS), which keeps a
+    cookie set inside a cross-site embed per top-level site. It forces
+    SameSite=None and secure.
 
   [Changed]
   - PAGI::WebSocket and PAGI::SSE hand each send to the server at once and
@@ -496,6 +510,123 @@
     Tutorial link to one statement of each rule instead of restating it.
 
   [Breaking -- see UPGRADING.md]
+  - PAGI::Headers->get, PAGI::Request->header, PAGI::WebSocket->header,
+    PAGI::SSE->header and PAGI::Response->header join a repeated field
+    ", " in order (RFC 9110 5.3; as Mojo::Headers, PSGI and Plack::Request
+    do) where they returned the last value; to_hash's flat form joins too.
+    Set-Cookie cannot be joined: read it with get_all / header_all. A
+    repeated If-Modified-Since now reads "date1, date2", which
+    PAGI::Middleware::ConditionalGet cannot parse, so the client gets the
+    full response where the last date alone could produce a 304.
+  - PAGI::Request is a PAGI::HTTPConnection and reads cookies as it does:
+    a value is no longer percent-decoded (Cookie: a=x%2Fy reads "x%2Fy",
+    where it read "x/y"), and a name sent twice gives the last value, where
+    it gave the first. An application that stores such values encodes and
+    decodes them itself. A quoted value is unquoted as Mojolicious does:
+    the quotes are removed and \" and \\ undone (a="x\"y" reads x"y,
+    where it read x\"y). Its path dies "this scope has no path" on a scope
+    with none, where it answered undef, and raw_path and request_uri die
+    the same on a scope with neither raw_path nor path, where they answered
+    '/'. PAGI::Request->new($scope), or with an undef receive, builds a
+    Request that reads the scope and has no body: its body methods die
+    "this Request was built from the scope alone; it has no body" before
+    reading or marking anything.
+  - PAGI::WebSocket and PAGI::SSE are PAGI::HTTPConnections, and new
+    builds a new object on every call: the object is no longer cached in
+    the scope (pagi.websocket, pagi.sse), so a second new over one scope,
+    or over a middleware's copy, gets a second object -- build one per
+    connection and pass it on. Their query and header parses are kept on
+    the object, not in the scope (pagi.websocket.query*, pagi.sse.query*,
+    pagi.request.headers). path_param is strict, as Request's: a name the
+    route did not capture dies naming the ones it did, where it returned
+    undef (strict => 0 gives undef). path dies "this scope has no path" on
+    a scope without one, where SSE answered '/' and WebSocket undef, and
+    raw_path and request_uri die the same on a scope with neither raw_path
+    nor path, where they answered '/'. Both gain cookies and cookie.
+  - PAGI::WebSocket and PAGI::SSE drive only the answer they gave. A
+    helper over a connection another helper answered fails locally, sending
+    nothing and reading nothing, with "this connection was answered by
+    another helper; use that one": its accept and start, which returned
+    quietly; its sends, where WebSocket croaked "Cannot send on closed
+    WebSocket" and SSE returned as if sent; WebSocket receive and what is
+    built on it, which returned undef as if the client had left; SSE each,
+    every and run, which returned; close, close_or_deny and keepalive,
+    which returned quietly; and deny and decline, which croaked "requires a
+    live connection with no response started". Its try_send* still return
+    0. While a helper's own deny or decline is under way (its response
+    started, the connection open), its accept, start, a second deny or
+    decline, its sends and its receives croak "this helper is refusing the
+    connection", where they returned quietly or croaked "Cannot send on
+    closed WebSocket"; close, close_or_deny, keepalive and try_send* stay
+    quiet. A helper owns the connection from the moment it issues its
+    accept or start: a send, close, close_or_deny, keepalive or try_send
+    made while that accept or start is still pending reaches the server
+    after it, and a WebSocket receive reads, where WebSocket sends croaked
+    "Cannot send on closed WebSocket", receive returned undef, SSE sends
+    returned without sending, try_send* returned 0, and close,
+    close_or_deny and keepalive returned quietly. A helper whose own
+    accept or start the server rejected raises at that await and stays the
+    connection's answerer, as Starlette's WebSocket does: its later sends,
+    try_send*, keepalive and close go to the server, as does close_or_deny
+    once the connection has started (before that it refuses, as for a
+    helper that never accepted), and SSE never issues a second sse.start, where WebSocket sends croaked
+    "Cannot send on closed WebSocket", SSE sends returned without sending,
+    try_send* returned 0, and keepalive and close sent nothing.
+  - The middleware reads requests through PAGI::HTTPConnection, each
+    reader keeping its own meaning. A header checked against something
+    reads every field joined ", ", so a repeated one fails the check:
+    CORS's Origin, CSRF's Origin, Sec-Fetch-Site, Host and token header
+    (each read the first field). A header used as a value is absent when
+    sent twice, and the reader's fallback applies: ReverseProxy's
+    X-Real-IP, X-Forwarded-Proto and X-Forwarded-Port (the socket's own
+    client, scheme and port stand, where the first field was used),
+    Session::State::Header's session header (no session id), RequestId's
+    incoming id under trust_incoming (a new id is generated),
+    MethodOverride's override header (its _method query parameter is
+    checked), PAGI::Request's content_length (undef; body_stream sets no
+    limit from it, where it read the first field) and PAGI::SSE's
+    last_event_id (undef, where it read the first field).
+    MethodOverride's _method gives the last of a repeated
+    parameter and splits on ';' as well as '&', where the first counted.
+    GZip compresses when any Accept-Encoding field names gzip (only the
+    first counted). App::Directory sends its JSON listing when any Accept
+    field names application/json (only the first counted). AccessLog logs
+    a repeated Referer or User-Agent joined (it logged the last). CSRF's
+    token cookie, Session::State::Cookie's session cookie and the Cookie
+    middleware's pagi.cookies are read as PAGI::HTTPConnection reads
+    cookies: from every Cookie field (only the first counted), quotes
+    removed, the last of a repeated name winning (CSRF and the Cookie
+    middleware took the first), and the Cookie middleware no longer
+    percent-decodes (pagi.cookies holds "x%2Fy" for Cookie: a=x%2Fy, where
+    it held "x/y"). ContentNegotiation's Accept, Response::File's Range,
+    ConditionalGet and CSRF's form Content-Type read as before.
+    Session::State::Cookie and ::Header extract take an http, websocket or
+    sse scope: an untyped hash dies. Session gives no session to scope
+    types other than http, websocket and sse (it gave a read-only one to
+    any type with headers): such a scope passes to the app untouched.
+    Authentication's backend and
+    ErrorHandler's handler and catch entries get request_for_scope($scope):
+    reading their Request's body dies "this Request was built from the
+    scope alone; it has no body", where each had its own message.
+  - PAGI::Response->cookie and the Cookie middleware's cookie jar write a
+    cookie's value as is instead of percent-encoding it (Cookie::Baker did):
+    the value must be RFC 6265 cookie-octets, printable ASCII except space,
+    '"', ',', ';' and '\', and any other character croaks, "cookie value
+    contains ';' which browsers cannot carry; encode it first (Base64,
+    say)". What PAGI writes reads back unchanged through any client:
+    cookie('a', 'x/y') sends "a=x/y" where it sent "a=x%2Fy", and a value
+    with ';' or a space, which it percent-encoded, croaks. A cookie already
+    set percent-encoded reads back encoded ("x%2Fy") until the application
+    sets it again. A cookie name is written as is too, so it must be a
+    non-empty RFC 6265 token (Cookie::Baker percent-encoded a name, which
+    reading never decoded: "a b" came back as "a%20b"); another character
+    croaks, and so does an undefined value through the jar (it wrote "a="
+    with a warning). The attributes are spelled and ordered as before, but
+    SameSite accepts exactly Lax, Strict and None, any case (a prefix such as
+    "Laxity" was written capitalised), and any other value croaks
+    ("samesite must be Lax, Strict or None"; it was silently omitted), while
+    no samesite writes none as before (PAGI::Utils::_SetCookie, private); Cookie::Baker is no longer a
+    prerequisite.
   - PAGI::Test::Client's form and query values are characters, sent UTF-8
     percent-encoded, as its path and json already were: each character
     was sent as one byte, so "caf\x{e9}" reached the application as

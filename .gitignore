@@ -67,3 +67,4 @@ docs/superpowers/
 
 # Files the contact-form example saves at run time
 examples/contact-form/uploads/
+__pycache__/

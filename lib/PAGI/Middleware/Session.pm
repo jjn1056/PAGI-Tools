@@ -383,21 +383,20 @@ logic instead of stacking multiple Session middleware instances:
             },
         );
 
-=head1 NON-HTTP SCOPES (WebSocket, SSE, ...)
+=head1 NON-HTTP SCOPES (WebSocket, SSE)
 
 If there is a session, WebSocket and SSE connections see it too: a scope
-whose C<type> is not C<'http'> but which still carries a C<headers> key --
-both a WebSocket upgrade request and an SSE request are typed this way (SSE is
-its own distinct scope C<type>, not C<'http'> plus a flag) -- gets a
-B<read-only> session: the
+whose C<type> is C<'websocket'> or C<'sse'> (SSE is its own distinct scope
+C<type>, not C<'http'> plus a flag) gets a B<read-only> session: the
 same C<state-E<gt>extract> + C<store-E<gt>get> lookup the C<'http'> path
 uses, populating C<< $scope->{'pagi.session'} >> (and
 C<< $scope->{'pagi.session_id'} >>, when a real session was found) before
 calling the wrapped app. This is store-agnostic -- it works with whatever
 C<store>/C<state> pair the middleware was configured with, not just
-cookie-backed setups -- and scope-type-agnostic: any current or future
-scope type with a C<headers> key gets the same treatment, WebSocket and SSE
-are simply the two named, tested cases today.
+cookie-backed setups.
+
+Any other scope type (C<lifespan>, or a type a server defines for itself)
+passes to the wrapped app untouched, with no C<pagi.session>.
 
 B<Nothing is ever saved.> There is no C<http.response.start>-shaped event on
 a protocol upgrade to hook a save onto, so C<< store->set >> is never called
@@ -585,7 +584,10 @@ sub wrap {
 async sub _wrap_non_http {
     my ($self, $scope, $receive, $send, $app) = @_;
 
-    unless (exists $scope->{headers}) {
+    # Only WebSocket and SSE are given a session; any other scope type, and a
+    # scope with no headers (lifespan), passes through untouched.
+    unless (($scope->{type} eq 'websocket' || $scope->{type} eq 'sse')
+            && exists $scope->{headers}) {
         await $app->($scope, $receive, $send);
         return;
     }
@@ -687,12 +689,12 @@ Keys starting with C<_> are reserved for internal use.
 
 The session ID string. Absent (not merely undef) for a non-'http' scope
 whose session id didn't resolve to anything -- see L</NON-HTTP SCOPES
-(WebSocket, SSE, ...)>.
+(WebSocket, SSE)>.
 
 =back
 
 This applies to a non-C<'http'> scope too, as long as it carries a
-C<headers> key -- see L</NON-HTTP SCOPES (WebSocket, SSE, ...)> for the
+C<headers> key -- see L</NON-HTTP SCOPES (WebSocket, SSE)> for the
 read-only, never-saved semantics that applies there instead of the full
 load/mutate/save cycle described below.
 
@@ -748,7 +750,7 @@ L<PAGI::Middleware::Session::Store::Cookie>), where a discarded transport
 after a mutation would leave the client holding stale, incorrect data.
 
 This entire section describes the C<'http'> scope path only. A non-http
-scope (see L</NON-HTTP SCOPES (WebSocket, SSE, ...)>) never saves and never
+scope (see L</NON-HTTP SCOPES (WebSocket, SSE)>) never saves and never
 emits a transport, regardless of whether its session was mutated.
 
 =head1 SEE ALSO

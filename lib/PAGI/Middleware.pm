@@ -122,11 +122,9 @@ B<through a reference> (see L<PAGI::Stash>, and L<PAGI::Middleware::Stash>, whic
 puts one stash on the scope for every layer below it). The full model -- and why it works
 this way -- is in L<PAGI::Building/MIDDLEWARE>.
 
-The copy also carries a L<PAGI::WebSocket> or L<PAGI::SSE> object already
-cached in the scope (C<pagi.websocket>, C<pagi.sse>), held strongly by the
-copy though weakly by the original, and C<new> over the copy returns that
-object, so an application builds them inside the innermost middleware, not
-before it (see L<PAGI::WebSocket/SUBCLASSING>).
+A L<PAGI::WebSocket> or L<PAGI::SSE> is built once per scope, so an
+application builds it inside the innermost middleware, from the scope the
+handler receives (see L<PAGI::WebSocket/SUBCLASSING>).
 
 =cut
 
@@ -200,7 +198,6 @@ sub _refusal_scope_for_authority_error {
         %$scope,
         headers => \@accept,
     };
-    delete $safe_scope->{'pagi.request.headers'};
     return $safe_scope;
 }
 

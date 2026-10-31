@@ -4,7 +4,8 @@ use strict;
 use warnings;
 use parent 'PAGI::Middleware';
 use Future::AsyncAwait;
-use Cookie::Baker ();
+use PAGI::Utils::_SetCookie ();
+use PAGI::HTTPConnection ();
 use PAGI::Utils ();
 
 =head1 NAME
@@ -44,7 +45,9 @@ Plack::Builder does.
 =head1 DESCRIPTION
 
 PAGI::Middleware::Cookie parses the Cookie header and makes the parsed
-cookies available in C<< $scope->{'pagi.cookies'} >> as a hashref.
+cookies available in C<< $scope->{'pagi.cookies'} >> as a hashref, read as
+L<PAGI::HTTPConnection/cookies> reads them: from every Cookie field, quotes
+removed, never percent-decoded, the last of a repeated name winning.
 
 It also provides a helper for setting response cookies.
 
@@ -80,9 +83,8 @@ sub wrap {
             return;
         }
 
-        # Parse cookies from Cookie header
-        my $cookie_header = $self->_get_header($scope, 'cookie') // '';
-        my $cookies = $self->_parse_cookies($cookie_header);
+        # Every Cookie field, as PAGI::HTTPConnection reads them
+        my $cookies = PAGI::HTTPConnection->new($scope)->cookies;
 
         # Create cookie jar for setting response cookies
         my @response_cookies;
@@ -118,37 +120,18 @@ sub wrap {
     };
 }
 
-sub _parse_cookies {
-    my ($self, $header) = @_;
-
-    return {} unless defined $header && length $header;
-    return Cookie::Baker::crush_cookie($header);
-}
-
 sub _format_set_cookie {
     my ($self, $name, $value, %opts) = @_;
 
-    my %cookie_opts = (
-        value => $value,
-        path  => $opts{path} // '/',
-    );
+    my %cookie_opts = (path => $opts{path} // '/');
     $cookie_opts{domain}    = $opts{domain}   if defined $opts{domain};
     $cookie_opts{expires}   = $opts{expires}  if defined $opts{expires};
     $cookie_opts{'max-age'} = $opts{max_age}  if defined $opts{max_age};
     $cookie_opts{secure}    = $opts{secure}   if $opts{secure};
     $cookie_opts{httponly}  = $opts{httponly} if $opts{httponly};
+    $cookie_opts{partitioned} = $opts{partitioned} if $opts{partitioned};
     $cookie_opts{samesite}  = $opts{samesite} if defined $opts{samesite};
-    return Cookie::Baker::bake_cookie($name, \%cookie_opts);
-}
-
-sub _get_header {
-    my ($self, $scope, $name) = @_;
-
-    $name = lc($name);
-    for my $h (@{$scope->{headers} // []}) {
-        return $h->[1] if lc($h->[0]) eq $name;
-    }
-    return;
+    return PAGI::Utils::_SetCookie::set_cookie_string($name, $value, %cookie_opts);
 }
 
 # Simple cookie jar class for method-style access
@@ -156,6 +139,9 @@ package PAGI::Middleware::Cookie::Jar;
 
 use strict;
 use warnings;
+
+# A croak from the cookie writer blames the jar's caller, not this hand-off.
+our @CARP_NOT = qw(PAGI::Middleware::Cookie);
 
 sub new {
     my ($class, $cookies_ref, $formatter) = @_;
@@ -176,12 +162,11 @@ sub delete {
     my ($self, $name, %opts) = @_;
 
     my %cookie_opts = (
-        value   => '',
         expires => 0,  # Epoch 0 = expired
         path    => $opts{path} // '/',
     );
     $cookie_opts{domain} = $opts{domain} if defined $opts{domain};
-    push @{$self->{cookies}}, Cookie::Baker::bake_cookie($name, \%cookie_opts);
+    push @{$self->{cookies}}, PAGI::Utils::_SetCookie::set_cookie_string($name, '', %cookie_opts);
 }
 
 package PAGI::Middleware::Cookie;
@@ -213,6 +198,19 @@ Object with methods for setting response cookies:
     );
 
     $scope->{'pagi.cookie_jar'}->delete('name');
+
+C<set> writes the value as is, so it must be RFC 6265 cookie-octets:
+printable ASCII except space, C<">, C<,>, C<;> and C<\>. Any other
+character croaks, naming it, with "encode it first (Base64, say)"; nothing
+is percent-encoded. The name must be a non-empty RFC 6265 token (letters,
+digits and C<!#$%&'*+-.^_`|~>), else it croaks too, and an undefined value
+croaks. A C<samesite> option that is given must be C<Lax>, C<Strict> or
+C<None> (any case, the whole word), else it croaks; without it no SameSite
+attribute is written. A true C<partitioned> option adds the C<Partitioned>
+attribute (CHIPS), which keeps the cookie per top-level site for a cookie
+set inside a cross-site embed; it forces C<SameSite=None> and C<secure>, as
+browsers require.
+L<PAGI::Response/cookie> follows the same rules.
 
 =back
 

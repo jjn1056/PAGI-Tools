@@ -30,7 +30,7 @@ PSGI responses to PAGI events.
 
 C<SCRIPT_NAME> is the scope's C<root_path> and C<PATH_INFO> its path below
 it, both as bytes, as PSGI requires; a client's C<%2F> and non-UTF-8 bytes
-come through exactly. C<REQUEST_URI> is L<PAGI::Request/request_uri>: the
+come through exactly. C<REQUEST_URI> is L<PAGI::HTTPConnection/request_uri>: the
 path and query the client requested, including any mount prefix. At an exact
 mount C<PATH_INFO> is C</>.
 

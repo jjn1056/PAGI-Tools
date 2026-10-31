@@ -7,6 +7,7 @@ use Future;
 use Future::AsyncAwait;
 use PAGI::Response::Text ();
 use PAGI::ContentNegotiation;
+use PAGI::HTTPConnection ();
 use PAGI::Utils ();
 use PAGI::Utils::Middleware ();
 
@@ -177,8 +178,8 @@ sub wrap {
             return;
         }
 
-        # Parse Accept header
-        my $accept = $self->_get_header($scope, 'accept') // '*/*';
+        # Accept, every field joined
+        my $accept = PAGI::HTTPConnection->new($scope)->header('accept') // '*/*';
         my $preferred = PAGI::ContentNegotiation->best_match(
             $self->{supported_types}, $accept,
         );
@@ -211,18 +212,6 @@ sub _parse_accept {
     return map {
         +{ type => $_->[0], q => $_->[1] }
     } PAGI::ContentNegotiation->parse_accept($accept);
-}
-
-sub _get_header {
-    my ($self, $scope, $name) = @_;
-
-    $name = lc($name);
-    my @values;
-    for my $h (@{$scope->{headers} // []}) {
-        push @values, $h->[1] if lc($h->[0]) eq $name;
-    }
-    return unless @values;
-    return join(', ', @values);
 }
 
 1;

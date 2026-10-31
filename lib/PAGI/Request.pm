@@ -1,16 +1,14 @@
 package PAGI::Request;
 use strict;
 use warnings;
+use parent 'PAGI::HTTPConnection';
 use Hash::MultiValue;
 use PAGI::Headers ();
 use PAGI::Authority ();
-use PAGI::Utils::Scope ();
-use Encode qw(decode find_encoding FB_CROAK FB_DEFAULT LEAVE_SRC);
-use Cookie::Baker qw(crush_cookie);
+use Encode qw(find_encoding FB_CROAK FB_DEFAULT LEAVE_SRC);
 use Future::AsyncAwait;
 use JSON::MaybeXS qw(decode_json);
 use Carp qw(croak);
-use Scalar::Util qw(blessed);
 use PAGI::Request::MultiPartHandler;
 use PAGI::Request::Upload;
 use PAGI::ContentNegotiation;
@@ -19,58 +17,27 @@ use PAGI::Exception::RequestBody;
 use PAGI::Request::BodyStream;
 use PAGI::Request::_BodyInput ();
 
+# Without a receive (absent or undef) the Request reads the scope but has no
+# body: every body entry point dies in _require_body_scope.
 sub new {
     croak 'PAGI::Request->new requires exactly scope and receive arguments'
         if @_ > 3;
     my ($class, $scope, $receive) = @_;
-    croak 'PAGI::Request requires an unblessed scope hashref'
-        unless ref($scope) eq 'HASH' && !blessed($scope);
-    my $type = $scope->{type};
-    croak 'PAGI::Request scope type is required'
-        unless defined($type) && !ref($type) && length($type);
-    croak "PAGI::Request requires HTTP, WebSocket, or SSE scope; received '$type'"
-        unless $type eq 'http' || $type eq 'websocket' || $type eq 'sse';
+    my $self = $class->SUPER::new($scope);
     croak 'PAGI::Request requires a receive coderef'
-        unless ref($receive) eq 'CODE';
-    return bless { scope => $scope, receive => $receive }, $class;
+        if defined($receive) && ref($receive) ne 'CODE';
+    $self->{receive} = $receive;
+    return $self;
 }
 
-# Basic properties from scope
 sub method       { shift->{scope}{method} }
-sub path         { shift->{scope}{path} }
-sub raw_path      { PAGI::Utils::Scope::raw_path(shift->{scope}) }
-sub request_uri   { PAGI::Utils::Scope::request_uri(shift->{scope}) }
-sub raw_path_info { PAGI::Utils::Scope::raw_path_info(shift->{scope}) }
-sub query_string { shift->{scope}{query_string} // '' }
-sub scheme       { my $s = shift; $s->{scope}{scheme} // ($s->{scope}{type} eq 'websocket' ? 'ws' : 'http') }
-sub http_version { shift->{scope}{http_version} // '1.1' }
-sub client       { shift->{scope}{client} }
-sub server       { shift->{scope}{server} }
 sub raw          { shift->{scope} }
-
-# Internal: URL decode a string (handles + as space)
-sub _url_decode {
-    my ($str) = @_;
-    return '' unless defined $str;
-    $str =~ s/\+/ /g;
-    $str =~ s/%([0-9A-Fa-f]{2})/chr(hex($1))/ge;
-    return $str;
-}
-
-# Internal: Decode UTF-8 with replacement or croak in strict mode
-sub _decode_utf8 {
-    my ($str, $strict) = @_;
-    return '' unless defined $str;
-    my $flag = $strict ? FB_CROAK : FB_DEFAULT;
-    $flag |= LEAVE_SRC;
-    return decode('UTF-8', $str, $flag);
-}
 
 # As _decode_utf8, for request body content: invalid UTF-8 under strict is the
 # client's error, a PAGI::Exception::RequestBody (400) rather than a croak.
 sub _decode_body_utf8 {
     my ($str, $strict) = @_;
-    my $text = eval { _decode_utf8($str, $strict) };
+    my $text = eval { PAGI::HTTPConnection::_decode_utf8($str, $strict) };
     return $text unless $@;
     PAGI::Exception::RequestBody->throw(
         reason => 'invalid_encoding',
@@ -128,91 +95,7 @@ sub charset {
 # Content-Length shortcut
 sub content_length {
     my $self = shift;
-    return $self->header('content-length');
-}
-
-# Private cache: the source of truth for header lookups (built once per object).
-sub _header_snapshot {
-    my $self = shift;
-    return $self->{_headers} //= PAGI::Headers->new($self->{scope}{headers} // []);
-}
-
-# Public: the cached PAGI::Headers object used by all Request header lookups.
-sub headers { return $_[0]->_header_snapshot }
-
-# Single header lookup (case-insensitive, last value)
-sub header     { return $_[0]->_header_snapshot->get($_[1]) }
-
-# All values for a header
-sub header_all { return $_[0]->_header_snapshot->get_all($_[1]) }
-
-# Query params as Hash::MultiValue (cached on the object)
-# Options: strict => 1 (croak on invalid UTF-8), raw => 1 (skip UTF-8 decoding)
-sub query_params {
-    my ($self, %opts) = @_;
-    my $strict = delete $opts{strict} // 0;
-    my $raw    = delete $opts{raw}    // 0;
-    croak("Unknown options to query_params: " . join(', ', keys %opts)) if %opts;
-
-    my $cache_key = $raw ? '_query_raw' : ($strict ? '_query_strict' : '_query');
-    return $self->{$cache_key} if $self->{$cache_key};
-
-    my $qs = $self->query_string;
-    my @pairs;
-
-    for my $part (split /[&;]/, $qs) {
-        next unless length $part;
-        my ($key, $val) = split /=/, $part, 2;
-        $key //= '';
-        $val //= '';
-
-        # URL decode (handles + as space)
-        my $key_decoded = _url_decode($key);
-        my $val_decoded = _url_decode($val);
-
-        # UTF-8 decode unless raw mode
-        my $key_final = $raw ? $key_decoded : _decode_utf8($key_decoded, $strict);
-        my $val_final = $raw ? $val_decoded : _decode_utf8($val_decoded, $strict);
-
-        push @pairs, $key_final, $val_final;
-    }
-
-    $self->{$cache_key} = Hash::MultiValue->new(@pairs);
-    return $self->{$cache_key};
-}
-
-# Raw query params (no UTF-8 decoding)
-sub raw_query_params {
-    my $self = shift;
-    return $self->query_params(raw => 1);
-}
-
-# Shortcut for single query param
-sub query_param {
-    my ($self, $name, %opts) = @_;
-    return $self->query_params(%opts)->get($name);
-}
-
-# Raw single query param
-sub raw_query_param {
-    my ($self, $name) = @_;
-    return $self->query_param($name, raw => 1);
-}
-
-# All cookies as hashref (cached on the object)
-sub cookies {
-    my $self = shift;
-    return $self->{_cookies} if exists $self->{_cookies};
-
-    my $cookie_header = $self->header('cookie') // '';
-    $self->{_cookies} = crush_cookie($cookie_header);
-    return $self->{_cookies};
-}
-
-# Single cookie value
-sub cookie {
-    my ($self, $name) = @_;
-    return $self->cookies->{$name};
+    return $self->headers->get_single('content-length');
 }
 
 # Method predicates
@@ -223,11 +106,6 @@ sub is_patch   { uc(shift->method // '') eq 'PATCH' }
 sub is_delete  { uc(shift->method // '') eq 'DELETE' }
 sub is_head    { uc(shift->method // '') eq 'HEAD' }
 sub is_options { uc(shift->method // '') eq 'OPTIONS' }
-
-sub connection {
-    my $self = shift;
-    return $self->{scope}{'pagi.connection'};
-}
 
 sub is_disconnected {
     my $self = shift;
@@ -302,62 +180,14 @@ sub _client_header {
     PAGI::Exception::HTTP->throw(400, "The $field header could not be parsed.");
 }
 
-# Path parameters - captured from URL path by router
-# Stored in scope->{path_params} for router-agnostic access
-sub path_params {
-    my ($self, %opts) = @_;
-    my $strict = delete $opts{strict};
-    croak("Unknown options to path_params: " . join(', ', keys %opts)) if %opts;
-
-    my $params = $self->{scope}{path_params};
-    if (!defined $params && $strict) {
-        croak "path_params not set in scope (no router configured?). "
-            . "Pass strict => 0 to allow this.";
-    }
-    return $params // {};
-}
-
-sub _default_path_param_strict_opt { return 1 }
-
-sub path_param {
-    my ($self, $name, %opts) = @_;
-    my $strict = exists $opts{strict} ? delete $opts{strict} : $self->_default_path_param_strict_opt;
-    croak("Unknown options to path_param: " . join(', ', keys %opts)) if %opts;
-
-    my $params = $self->path_params;
-
-    if ($strict && !exists $params->{$name}) {
-        my @available = keys %$params;
-        croak "path_param '$name' not found. "
-            . (@available ? "Available: " . join(', ', sort @available) : "No path params set (no router?)");
-    }
-
-    return $params->{$name};
-}
-
-sub scope { shift->{scope} }
-
 sub _require_body_scope {
     my ($self) = @_;
+    croak 'this Request was built from the scope alone; it has no body'
+        unless defined $self->{receive};
     my $type = $self->{scope}{type};
     croak 'body input requires HTTP or SSE scope'
         unless $type eq 'http' || $type eq 'sse';
     return $type;
-}
-
-# Application state (injected by PAGI::Lifespan, read-only)
-sub has_state {
-    my $self = shift;
-    return 0 unless exists $self->{scope}{state};
-    croak 'PAGI::Request state must be a hashref'
-        unless ref($self->{scope}{state}) eq 'HASH';
-    return 1;
-}
-
-sub state {
-    my $self = shift;
-    require PAGI::State;
-    return PAGI::State->new($self) // PAGI::State->_without_state;
 }
 
 # Body streaming - mutually exclusive with buffered body methods
@@ -534,8 +364,8 @@ async sub form_params {
         $val //= '';
 
         # URL decode (handles + as space)
-        my $key_decoded = _url_decode($key);
-        my $val_decoded = _url_decode($val);
+        my $key_decoded = PAGI::HTTPConnection::_url_decode($key);
+        my $val_decoded = PAGI::HTTPConnection::_url_decode($val);
 
         # UTF-8 decode unless raw mode
         my $key_final = $raw ? $key_decoded : _decode_body_utf8($key_decoded, $strict);
@@ -702,6 +532,12 @@ the raw C<$scope> hashref and C<$receive> callback with convenient methods
 for accessing headers, query parameters, cookies, request body, and file
 uploads.
 
+A PAGI::Request is a L<PAGI::HTTPConnection>: what can be read from the scope
+alone -- path, headers, query and path parameters, cookies, client,
+application state -- comes from the methods it inherits (see
+L</INHERITED FROM PAGI::HTTPConnection>). This class adds the method, the
+Host and Content-Type readers, the body, forms and uploads.
+
 HTTP, WebSocket, and SSE scopes are supported for metadata access. Request
 body input is available for HTTP and SSE scopes using each protocol's native
 request and disconnect events. WebSocket scopes reject body methods before
@@ -715,12 +551,21 @@ work with C<$scope> and C<$receive> directly.
 =head2 new
 
     my $req = PAGI::Request->new($scope, $receive);
+    my $req = PAGI::Request->new($scope);   # no body
 
 Creates a request object. C<$scope> must be an unblessed HTTP, WebSocket, or
-SSE scope hashref, and C<$receive> must be a coderef. The receive callback is
-retained for deferred HTTP or SSE body consumption; construction never reads
-from it. These are the constructor's exact two arguments after the invocant;
-a C<$send> callback or any other extra argument is rejected.
+SSE scope hashref. C<$receive>, when given and defined, must be a coderef; it
+is retained for deferred HTTP or SSE body consumption, and construction never
+reads from it. These are the constructor's exact two arguments after the
+invocant; a C<$send> callback or any other extra argument is rejected.
+
+Without a receive (absent or C<undef>) the Request reads everything the scope
+holds but has no body: L</body>, L</text>, L</json>, L</body_stream>,
+L</multipart_stream>, the form methods and the upload methods die C<this
+Request was built from the scope alone; it has no body>, before they read
+anything or mark the body consumed. Code that only reads a request uses
+L<PAGI::HTTPConnection>; this form is for code that needs the application's
+Request class without its body, as L<PAGI::Utils/request_for_scope> builds it.
 
 =head1 PROPERTIES
 
@@ -730,64 +575,13 @@ Request method (GET, POST, PUT, etc.). A WebSocket scope may omit this value,
 in which case C<method> returns C<undef>; it does not guess GET for an extended
 CONNECT request.
 
-=head2 path
-
-Request path, UTF-8 decoded.
-
-=head2 raw_path
-
-The full path the client requested, percent-encoded as sent.
-Mounts leave it unchanged, so inside a mount it still starts with the mount
-prefix (see L<PAGI::Spec::Www/Paths, Mounts and Root Paths>). Without one in
-the scope it is C<root_path> followed by C<path>, percent-encoded. Never use
-it for authorization: different encodings reach the same C<path>.
-
-=head2 request_uri
-
-    my $here = $req->request_uri;   # /app/admin/users?x=1
-
-The path and query the client requested: C<raw_path>, then C<?> and
-C<query_string> when there is one, with any byte a URI cannot hold
-percent-encoded and a leading C<//> reduced to C</>. It is the URL to
-redirect back to, at any mount depth and behind a server root path.
-
-=head2 raw_path_info
-
-    my $rest = $req->raw_path_info;  # /a%2Fb inside mount('/files')
-
-The part of C<raw_path> below C<root_path>, still encoded, for code that must
-tell an encoded C</> from a separator. Returns C<undef> when it cannot be
-found: an encoded C</> straddles the mount boundary, or C<path> was rewritten.
-
-=head2 query_string
-
-Raw query string (without leading ?).
-
-=head2 scheme
-
-C<http> or C<https> for HTTP and SSE scopes; C<ws> or C<wss> for WebSocket
-scopes.
-
 =head2 host
 
 Returns the complete validated Host field, including an explicit port. Returns
 C<undef> only when Host is absent, and croaks when Host is malformed or occurs
-more than once. Use L</header> with C<'host'> as the raw, last-value escape
-hatch when that behavior is required.
-
-=head2 http_version
-
-HTTP version (1.0 or 1.1).
-
-=head2 client
-
-Arrayref of C<[host, port]> or undef.
-
-=head2 server
-
-Arrayref of C<[host, port]> for the local server endpoint, or undef when the
-server did not provide it. This is informational only; use L</host> for the
-validated inbound Host authority.
+more than once. To read the field without validation, use
+L<PAGI::HTTPConnection/header> with C<'host'>: the raw value, or every value
+joined C<", "> when Host is repeated.
 
 =head2 content_type
 
@@ -797,7 +591,7 @@ With C<raise_on_error =E<gt> 1> a duplicate or malformed field throws a
 L<PAGI::Exception::HTTP> 400, C<The Content-Type header could not be parsed.>:
 the client sent it, so it is the client's error, which a Compose application
 answers by itself (see L</AUTH HELPERS>).
-Use C<< $request->header('Content-Type') >> for the raw last-value lookup;
+Use C<< $request->header('Content-Type') >> for the raw joined lookup;
 parsing does not alter the stored field.
 
 =head2 charset
@@ -813,177 +607,37 @@ L</body_stream>).
 
 =head2 content_length
 
-Content-Length header value.
+Content-Length header value. A Content-Length sent twice reads as absent
+(C<undef>).
 
 =head2 raw
 
-Deferred alias for L</scope>; returns the raw scope hashref without interpreting
+Deferred alias for L<PAGI::HTTPConnection/scope>; returns the raw scope hashref without interpreting
 it.
 
-=head1 HEADER METHODS
+=head1 INHERITED FROM PAGI::HTTPConnection
 
-=head2 header
-
-    my $value = $req->header('Content-Type');
-
-Get a single header value (case-insensitive). Returns the last value if
-the header appears multiple times.
-
-=head2 header_all
-
-    my @values = $req->header_all('Accept');
-
-Get all values for a header.
-
-=head2 headers
-
-    my $headers = $req->headers;  # PAGI::Headers
-
-Returns the exact cached L<PAGI::Headers> object used by C<header>,
-C<header_all>, and header-derived accessors. Deliberate mutation through this
-object therefore affects later header reads through this Request, and no
-other object: each Request parses the scope's headers itself.
-Call C<< $req->headers->clone >> when an isolated copy is required.
-
-=head1 QUERY PARAMETERS
-
-=head2 query_params
-
-    my $params = $req->query_params;  # Hash::MultiValue
-    my $params = $req->query_params(strict => 1);  # Die on invalid UTF-8
-    my $params = $req->query_params(raw => 1);     # Skip UTF-8 decoding
-
-Get query parameters as L<Hash::MultiValue>.
-
-B<Options:>
+These methods read the scope and are documented in L<PAGI::HTTPConnection>:
 
 =over 4
 
-=item * C<strict> - If true, die on invalid UTF-8 sequences. Default: false
-(invalid bytes replaced with U+FFFD).
+=item * Scope properties: C<scope>, C<connection>, C<client>, C<server>,
+C<scheme>, C<http_version>, C<path>, C<raw_path>, C<raw_path_info>,
+C<request_uri>, C<query_string>
 
-=item * C<raw> - If true, skip UTF-8 decoding entirely and return raw bytes.
-Default: false.
+=item * Headers: C<headers>, C<header>, C<header_all>
 
-=back
+=item * Query parameters: C<query_params>, C<query_param>,
+C<raw_query_params>, C<raw_query_param>
 
-=head2 query_param
+=item * Path parameters: C<path_params>, C<path_param>, and the subclass hook
+C<_default_path_param_strict_opt>
 
-    my $value = $req->query_param('page');
-    my $value = $req->query_param('page', strict => 1);
-    my $value = $req->query_param('page', raw => 1);
+=item * Cookies: C<cookies>, C<cookie>
 
-Shortcut for C<< $req->query_params(%opts)->get($name) >>. Accepts the same
-C<strict> and C<raw> options as C<query_params>.
-
-=head2 raw_query_param
-
-    my $value = $req->raw_query_param('page');
-
-Shortcut for C<< $req->query_param($name, raw => 1) >>. Returns the raw bytes
-without UTF-8 decoding.
-
-=head2 raw_query_params
-
-    my $params = $req->raw_query_params;
-
-Shortcut for C<< $req->query_params(raw => 1) >>.
-
-=head1 PATH PARAMETERS
-
-Path parameters are captured from the URL path by a router (for example,
-L<PAGI::Routing>) and stored in C<< $scope->{path_params} >>. This is a
-router-agnostic interface; any router can populate this field.
-
-=head2 path_params
-
-    my $params = $req->path_params;  # hashref
-
-Get all path parameters as a hashref. Returns an empty hashref if no router
-has set path parameters.
-
-    # Route: /users/:id/posts/:post_id
-    # URL: /users/42/posts/100
-    my $params = $req->path_params;
-    # { id => '42', post_id => '100' }
-
-B<Note:> This method can be overridden in subclasses for custom parameter
-handling (e.g., lazy conversion from positional to named parameters).
-The C<path_param> method delegates to this method.
-
-B<Options:>
-
-=over 4
-
-=item * C<strict> - If true, die when no router has populated
-C<< $scope->{path_params} >> instead of returning an empty hashref. Default:
-false. Mirrors the C<strict> option on L</path_param>.
+=item * Application state: C<state>, C<has_state>
 
 =back
-
-=head2 path_param
-
-    my $id = $req->path_param('id');
-    my $id = $req->path_param('id', strict => 0);  # Don't die if missing
-
-Get a single path parameter by name.
-
-    # Route: /users/:id
-    # URL: /users/42
-    my $id = $req->path_param('id');  # '42'
-
-B<Strict by default:> Unlike C<query_param()>, this method dies if the requested
-parameter does not exist. This catches typos early since path parameters are
-defined by the route - if the route matched, the expected parameters must
-exist.
-
-    # Route defines :userId but you typed :user_id
-    my $id = $req->path_param('user_id');
-    # Dies: "path_param 'user_id' not found. Available: userId, postId"
-
-B<Options:>
-
-=over 4
-
-=item * C<strict> - If false, return C<undef> for missing parameters instead
-of dying. Default: true.
-
-=back
-
-=head2 Strict Mode
-
-By default, C<path_params> returns an empty hashref if no router has set
-C<< $scope->{path_params} >>. This is the safest behavior for middleware and
-handlers that may run with or without a router.
-
-To catch configuration errors early, pass C<< strict => 1 >>:
-
-    # Dies if no router populated the scope:
-    my $params = $req->path_params(strict => 1);
-    # "path_params not set in scope (no router configured?)"
-
-C<path_param> (singular) is strict by default for the requested key, so asking
-for a parameter when no router ran also dies, naming the missing key:
-
-    my $id = $req->path_param('id');
-    # "path_param 'id' not found. ... No path params set (no router?)"
-
-This matches Starlette's behavior of returning an empty dict by default, while
-letting you opt into a loud failure per call.
-
-=head1 COOKIES
-
-=head2 cookies
-
-    my $cookies = $req->cookies;  # hashref
-
-Get all cookies.
-
-=head2 cookie
-
-    my $session = $req->cookie('session');
-
-Get a single cookie value.
 
 =head1 BODY METHODS (ASYNC)
 
@@ -1324,16 +978,8 @@ L<PAGI::ContentNegotiation/respond_to>.
 
 =head1 CONNECTION STATE METHODS
 
-These methods provide non-destructive connection lookup without reading from
-the receive queue.
-
-=head2 connection
-
-    my $conn = $req->connection;
-
-Returns the server-supplied object under C<pagi.connection>, or C<undef> if
-absent. Its interface is defined by the PAGI specification; callers use those
-public methods rather than requiring a particular server's connection class.
+C<is_disconnected> and the inherited L<PAGI::HTTPConnection/connection> look
+up the connection without reading from the receive queue.
 
 =head2 is_disconnected
 
@@ -1345,7 +991,7 @@ Returns C<1> when the provided connection reports disconnected, C<0> when it
 reports connected, and C<undef> when no C<pagi.connection> is available.
 
 For advanced lifecycle, disconnect-reason, callback, or Future operations,
-obtain the server-provided object with L</connection> and use its explicit
+obtain the server-provided object with L<PAGI::HTTPConnection/connection> and use its explicit
 interface directly. Outbound transport is separate from connection lifecycle.
 Use the L<PAGI::Transport> factory for its optional flow-control facade:
 
@@ -1389,15 +1035,6 @@ L<PAGI::Middleware::Authentication>), and does not log it. Its message never
 carries the credential. The L<PAGI::Headers> readers these call raise plain
 errors instead, since they parse any header list, not only a request's.
 
-=head2 scope
-
-    my $scope = $req->scope;
-
-Returns the raw PAGI scope hashref. Useful for constructing helper
-objects like L<PAGI::Stash> and L<PAGI::Session>:
-
-    my $stash = PAGI::Stash->new($req);
-
 =head2 Constructing responses
 
 Request owns HTTP input and remains the scope source for request-local helpers;
@@ -1427,30 +1064,8 @@ Construct from a Request object or scope:
     my $stash = PAGI::Stash->new($req);
     $stash->set(user => $current_user);
 
-=cut
-
-=head2 state
-
-    my $state = $req->state;
-    my $db = $state->get('db');
-    my $config = $state->get('config');
-
-Returns a L<PAGI::State> facade over the application state injected by
-L<PAGI::Lifespan>. This contains worker-level shared state like database
-connections and configuration. Always returns a facade: without application
-state it is empty, and its C<get> and C<data> die naming the likely cause
-(did lifespan startup run? L<PAGI::Test::Client> needs C<< lifespan => 1 >>).
-Croaks if a
-present state value is not a hashref. C<has_state> tells whether state exists.
-
-Repeated calls are not guaranteed to return the same facade object.
-
-=head2 has_state
-
-Returns true when a state hashref is present and false when state is absent.
-Croaks when a present state value is malformed.
-
-B<Key differences from L<PAGI::Stash>:>
+B<How the stash differs from application state> (C<< $req->state >>, see
+L<PAGI::HTTPConnection/state>):
 
 =over 4
 
@@ -1473,8 +1088,8 @@ C<extends>). The contract:
 =over 4
 
 =item * B<State.> The object is a blessed hash. PAGI-Tools uses the fields
-C<scope> and C<receive> and fields whose names start with C<_>. A subclass
-adds fields under any other name.
+C<scope> and C<receive> (C<undef> in a Request built without one) and fields
+whose names start with C<_>. A subclass adds fields under any other name.
 
 =item * B<What is parsed is kept on the object.> A Request keeps the
 headers, query, cookies, body, form and uploads it parses, and the latches
@@ -1491,10 +1106,9 @@ other methods call are:
     ------------  ----------------------------------------------------------
     path_params   path_param (and its strict mode)
     query_params  query_param, raw_query_param, raw_query_params
-    headers       content_type, charset, basic_auth, bearer_token,
-                  multipart_stream
-    header        content_length, cookies
-    header_all    accepts, preferred_type
+    headers       header, header_all, content_type, charset, content_length,
+                  basic_auth, bearer_token, multipart_stream
+    header_all    cookies, accepts, preferred_type
     content_type  is_json, is_form, is_multipart
     cookies       cookie
     body          text, json, form_params

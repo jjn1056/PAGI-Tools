@@ -7,8 +7,8 @@ use Future;
 use Future::AsyncAwait;
 use Carp qw(croak);
 use Scalar::Util qw(blessed);
-use PAGI::Utils::Scope ();
 use PAGI::WebSocket;
+use PAGI::Utils::_ProtocolHelpers ();
 
 # Encoding: 'text', 'bytes', or 'json'
 sub encoding { 'text' }
@@ -24,9 +24,6 @@ sub to_app {
         my $type = $scope->{type} // '';
         croak "Expected websocket scope, got '$type'" unless $type eq 'websocket';
 
-        PAGI::Utils::Scope::_compatible_cached_scope_object(
-            $scope, 'pagi.websocket', 'PAGI::WebSocket',
-        );
         my $websocket = PAGI::WebSocket->new($scope, $receive, $send);
 
         await Future->wrap($endpoint->handle($websocket));
@@ -61,7 +58,10 @@ async sub handle {
         await $websocket->accept;
     }
 
-    return if $websocket->is_closed;
+    # A refusal (deny) is on_connect's answer: there are no messages to read,
+    # even if the server has not yet reported the connection ended.
+    return if $websocket->is_closed
+        || PAGI::Utils::_ProtocolHelpers::refused($websocket);
 
     # Handle messages based on encoding
     eval {
