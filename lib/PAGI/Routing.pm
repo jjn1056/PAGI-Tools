@@ -781,7 +781,7 @@ requests the provider.
 
 An unqualified provider resolves to the exact symbol-table CODE slot in the
 package that directly called C<route>, C<websocket>, C<sse>, or C<mount>.
-An ordinary Exporter alias leaves the consuming package as the caller. A real
+An imported name leaves the consuming package as the caller. A real
 wrapper sub and a role-defined method make their own defining package the
 declaration boundary; invoking such code through a subclass does not rebind
 it. Use a fully qualified spelling when reusable declarations must name an

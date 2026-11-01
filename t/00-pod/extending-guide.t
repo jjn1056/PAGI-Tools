@@ -138,6 +138,8 @@ subtest 'the wrapping example works as the guide says' => sub {
     like($example, qr/^package My::Framework::Response;/, 'the block is the example');
     ok(eval "$example; 1", 'it compiles and loads') or diag($@), return;
 
+    ok(!My::Framework::Response->can('response'), 'the class has no response method');
+
     my $res = My::Framework::Response->new;
     isa_ok($res->status(201), ['My::Framework::Response'], 'a delegated setter returns the framework response');
     isa_ok($res->header('X-Staged' => 'yes'), ['My::Framework::Response'], 'and so does header');

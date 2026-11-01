@@ -115,7 +115,13 @@ of yours. Return your own object instead:
     package My::Framework::Response;
     use Moo;
     use Scalar::Util qw(blessed refaddr);
-    use PAGI::Response qw(response);
+
+    # A package with no methods to hold response(), so the class does not
+    # answer it as a method.
+    {
+        package My::Framework::_Fn;
+        use PAGI::Response qw(response);
+    }
 
     # Errors from response() then name your user's line, not this file's.
     $Carp::Internal{+__PACKAGE__}++;
@@ -135,7 +141,7 @@ of yours. Return your own object instead:
     sub finalize {
         my ($self, $name, $content) = @_;
         my $staged = $self->_staged;
-        return response($name // '+PAGI::Response', $content,
+        return My::Framework::_Fn::response($name // '+PAGI::Response', $content,
             ($staged->has_status ? (status => $staged->status) : ()),
             headers => $staged->headers);
     }

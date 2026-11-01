@@ -39,7 +39,7 @@ my @SOURCES = (
 
 # Function modules keep their exported names callable by full name, so the
 # names re-exported from them are callable as PAGI::Tools::<name> as well.
-# A name from a class gets no such sub here, just as it has none in its class.
+# A name from a class gets no such sub here.
 my %FUNCTION_MODULES = map { $_ => 1 } qw(PAGI::Routing PAGI::Utils::Middleware);
 
 my (%EXPORTS, %TAGS, @DEFAULTS);
@@ -47,9 +47,7 @@ for (my $i = 0; $i < @SOURCES; $i += 2) {
     my ($module, $names) = @SOURCES[$i, $i + 1];
     for my $name (@$names) {
         no strict 'refs';
-        my $code = $module->can('_exports')
-            ? $module->_exports->{$name}
-            : defined &{"${module}::$name"} ? \&{"${module}::$name"} : undef;
+        my $code = $module->_exports->{$name};
         die "PAGI::Tools: $module does not export $name\n" unless $code;
         $EXPORTS{$name} = $code;
         *{"PAGI::Tools::$name"} = $code if $FUNCTION_MODULES{$module};

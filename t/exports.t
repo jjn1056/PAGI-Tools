@@ -14,7 +14,9 @@ use PAGI::Utils qw(app_path);
 # searching lib for its call, so a newly converted module is covered without
 # editing this list.
 
-# Function modules: each exported name stays callable by its full name.
+# Function modules: each exported name stays callable by its full name in
+# its own package; PAGI::Tools keeps a full name only for the names it
+# re-exports from the other function modules.
 my @FUNCTION_MODULES = qw(
     PAGI::Utils
     PAGI::Utils::Headers
@@ -119,6 +121,15 @@ sub kept_methods {
     return [sort keys %{ $module->_exports }] if $KEEPS_EVERY_NAME{$module};
     return $KEPT_METHODS{$module} || [];
 }
+
+subtest 'no lib module uses Exporter' => sub {
+    my @users;
+    for my $module (@LIB_MODULES) {
+        push @users, $module->[0]
+            if code_of($module->[1]) =~ /\b(?:use|require)\s+Exporter\b|\@EXPORT/;
+    }
+    is(\@users, [], 'none does');
+};
 
 subtest 'the function modules export through the installer' => sub {
     ok($IS_EXPORTING{$_}, "$_ is found") for @FUNCTION_MODULES;
@@ -269,6 +280,19 @@ for my $module (@MODULES) {
         }
     };
 }
+
+# PAGI::Lifespan and PAGI::Utils load each other; loading Lifespan first must
+# still leave both names importable.
+subtest 'PAGI::Lifespan loaded first leaves PAGI::Utils importable' => sub {
+    my $code = 'use PAGI::Lifespan; package T; use PAGI::Utils qw(to_app handle_lifespan);'
+        . ' print defined &T::to_app && defined &T::handle_lifespan ? "ok" : "missing"';
+    open my $child, '-|', $^X, "-I$lib", "-I$server_lib", '-we', $code
+        or die "cannot start child perl: $!";
+    my $output = do { local $/; <$child> };
+    close $child;
+    is($?, 0, 'the process loads cleanly');
+    is($output, 'ok', 'both names are defined');
+};
 
 subtest 'route and mount resolve &Name in the importing package' => sub {
     for my $source (qw(PAGI::Tools PAGI::Routing)) {

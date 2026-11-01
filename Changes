@@ -562,6 +562,18 @@
     Tutorial link to one statement of each rule instead of restating it.
 
   [Breaking -- see UPGRADING.md]
+  - Every module exports through one installer, PAGI::Utils::_Exporter, in
+    place of Exporter. A class's exported function (response, compose,
+    stash, ...) is no longer also a sub of its package, so it is not callable
+    by full name and its objects no longer answer it as a method;
+    PAGI::Pages' names, respond_to, Auth's auth, auth_result, unauth_result
+    and www_authenticate, and Routing::URL's path_for and url_for stay
+    methods. Function modules are unchanged. A name imported from a subclass
+    dies, naming the module to import from; Exporter's :DEFAULT, !name and
+    /regex/ forms are gone. PAGI::Tools::response and the other class-sourced
+    full names no longer exist. PAGI::Middleware::Builder's POD now says its
+    object interface is add_middleware, add_middleware_if and add_mount, and
+    its SYNOPSIS runs.
   - $request->host is the uri's host: the Host as sent, without its port
     ("example.com" for "Host: example.com:8080"; use $request->uri->authority
     for host:port or $request->uri->port), never validated, and the server
