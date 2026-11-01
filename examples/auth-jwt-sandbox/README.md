@@ -2,7 +2,7 @@
 
 This runnable example is the PAGI version of the Starlette JWT learning
 application from the design discussion. It uses the version 1 Auth API and the
-generic `Authentication` middleware. The Request Bearer helper parses the
+generic `Authentication` middleware. The connection's Bearer helper parses the
 Authorization header; JWT decoding, verification, and response policy remain
 ordinary application code.
 
@@ -10,13 +10,13 @@ This revision follows the spec's **constrained result constructors**, **explicit
 HTTP responses**, and **ordinary middleware composition**. `auth_result` requires
 an authenticated user; `unauth_result` supplies a fresh unauthenticated user and
 empty scopes by default. Both produce the same result type. Backends receive only
-the Request, use its helper to parse Authorization, and own JWT decoding and
+a `PAGI::HTTPConnection`, use its helper to parse Authorization, and own JWT decoding and
 verification, including the policy for missing credentials.
 
 Malformed Bearer syntax and duplicate Authorization headers are reported with
 this application's `malformed_authorization` failure code. Protected response
 code handles that case explicitly as 400 `invalid_request`; token verification
-failures remain 401 `invalid_token`. The Request Bearer helper parses the field;
+failures remain 401 `invalid_token`. The connection's Bearer helper parses the field;
 the application decides how failures become responses. The dedicated integration
 test exercises these responses through both real applications.
 
@@ -78,9 +78,9 @@ The `backend` option accepts exactly a coderef or an object implementing
 directly:
 
 ```perl
-sub jwt_backend ($request) {
+sub jwt_backend ($conn) {
     my $token;
-    try { $token = $request->bearer_token(raise_on_error => 1) }
+    try { $token = $conn->bearer_token(raise_on_error => 1) }
     catch ($e) {
         return unauth_result(failure => {
             code => 'malformed_authorization',
@@ -127,14 +127,14 @@ Completed results also expose `user`, `credentials`, and `failure` directly.
 A backend unit test or wrapper can inspect its result without installing a scope:
 
 ```perl
-my $result = jwt_backend($request);  # This sandbox backend is synchronous.
+my $result = jwt_backend($conn);  # This sandbox backend is synchronous.
 my $user = $result->user;
 my $failure = $result->failure;
 ```
 
 Generic Authentication processes HTTP, WebSocket, and SSE scopes. It passes
 startup/shutdown (`lifespan`) and other scope types through before creating a
-Request or calling the backend. The `require_login` wrapper in `app.pl` is
+connection or calling the backend. The `require_login` wrapper in `app.pl` is
 explicitly HTTP-only and passes other types through before reading Auth context;
 that also permits using it at Compose root as shown in the spec's cookbook.
 

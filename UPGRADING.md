@@ -88,7 +88,7 @@ in [UPGRADING-REFERENCE.md](UPGRADING-REFERENCE.md).
 | `Session::State::Cookie->extract` / `Session::State::Header->extract` read any hash with `headers` | they take an http, websocket or sse scope (one with its `type`) |
 | `$request->content_length` and `$sse->last_event_id` read the first field of a repeated header | `undef` for a repeated field (a value used as a value reads `headers->get_single`) |
 | Session gave a read-only session to any scope type with `headers` | only `websocket` and `sse` scopes get one; any other type passes to the app untouched, with no `pagi.session` |
-| Reading the body of an Authentication backend's or an ErrorHandler handler's Request died with a message of its own | it dies "this Request was built from the scope alone; it has no body", as every Request without a receive does |
+| Reading the body of an ErrorHandler handler's Request died with a message of its own | it dies "this Request was built from the scope alone; it has no body", as every Request without a receive does |
 
 Behaviour that changes without a code change: stock refusals and error
 responses are plain text, each replaceable by one option ([details](UPGRADING-REFERENCE.md#audit-changed-first-party-defaults));

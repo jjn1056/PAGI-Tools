@@ -8,8 +8,8 @@
 #   - middleware('RequestClass', class => ...) puts the class in the scope,
 #     so every handler below it gets one: here a plain route, an
 #     Endpoint::HTTP method, and a route inside a mount; also refuse and
-#     deny/decline handlers, an ErrorHandler handler listed after it, and
-#     Authentication backends. No handler is wrapped.
+#     deny/decline handlers, an ErrorHandler handler listed after it. No
+#     handler is wrapped. (An Authentication backend gets a connection.)
 #   - For one or two helpers, a function that takes the request
 #     (NoteStore->for_request($request), as in gut-check 02) is simpler;
 #     a subclass pays off when many handlers use several helpers.

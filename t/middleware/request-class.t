@@ -310,25 +310,31 @@ subtest 'an Authentication backend gets a connection, the route the class, in ei
     }
 };
 
-subtest 'an ErrorHandler catch entry answering the backend\'s error gets the configured Request class' => sub {
-    my ($backend_saw, $entry_saw);
-    my $backend = sub {
-        $backend_saw = ref $_[0];
-        PAGI::Exception::HTTP->throw(401, 'no');
-    };
-    my $client = PAGI::Test::Client->new(app => compose(
-        middleware => [
-            middleware('RequestClass', class => 'Local::AppRequest'),
-            middleware('ErrorHandler', catch => { 'PAGI::Exception::HTTP' => sub {
-                $entry_saw = ref $_[0];
-                return response('Text', 'denied', status => 401);
-            } }),
-        ],
-        routes => [route('/' => $class_of, middleware => [middleware('Authentication', backend => $backend)])],
-    ));
-    my $res = $client->get('/');
-    is([$res->status, $backend_saw, $entry_saw], [401, 'PAGI::HTTPConnection', 'Local::AppRequest'],
-        'the backend gets a connection, the outer ErrorHandler entry the class');
+subtest 'an ErrorHandler catch entry answering the backend\'s error gets the Request class' => sub {
+    for my $case (
+        ['with RequestClass',    'Local::AppRequest', [middleware('RequestClass', class => 'Local::AppRequest')]],
+        ['without RequestClass', 'PAGI::Request',     []],
+    ) {
+        my ($label, $expected, $before) = @$case;
+        my ($backend_saw, $entry_saw);
+        my $backend = sub {
+            $backend_saw = ref $_[0];
+            PAGI::Exception::HTTP->throw(401, 'no');
+        };
+        my $client = PAGI::Test::Client->new(app => compose(
+            middleware => [
+                @$before,
+                middleware('ErrorHandler', catch => { 'PAGI::Exception::HTTP' => sub {
+                    $entry_saw = ref $_[0];
+                    return response('Text', 'denied', status => 401);
+                } }),
+            ],
+            routes => [route('/' => $class_of, middleware => [middleware('Authentication', backend => $backend)])],
+        ));
+        my $res = $client->get('/');
+        is([$res->status, $backend_saw, $entry_saw], [401, 'PAGI::HTTPConnection', $expected],
+            "$label: the backend gets a connection, the outer ErrorHandler entry $expected");
+    }
 };
 
 subtest 'a hand-written middleware sets the same key' => sub {

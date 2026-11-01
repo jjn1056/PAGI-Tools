@@ -969,8 +969,7 @@ builds (set by L<PAGI::Middleware::RequestClass>), or a plain
 L<PAGI::Request> when the key is absent or undef. It is for code outside a
 route handler -- middleware, an error handler, a framework's own dispatch --
 that hands application code a Request of the class that code expects (an
-L<PAGI::Middleware::Authentication> backend, an
-L<PAGI::Middleware::ErrorHandler> handler). Code that only reads what the
+L<PAGI::Middleware::ErrorHandler> handler, say). Code that only reads what the
 scope holds -- a header, a cookie, the query, the path -- needs no Request
 and no class; it builds a L<PAGI::HTTPConnection>:
 

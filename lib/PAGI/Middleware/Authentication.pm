@@ -227,8 +227,8 @@ answers the backend's own error class, as Starlette's C<on_error> answers
 C<AuthenticationError> -- and an HTTP error no entry matches gets the
 built-in answer. Without C<catch>, the backend's error is answered by the
 ErrorHandler this middleware is inside, on a route, and with the built-in
-answer elsewhere;
-that ErrorHandler's entries get the application's Request class, as for a route's error.
+answer elsewhere. That ErrorHandler's entries get the application's Request
+class, as for a route's error.
 
 Other scope types are passed through unchanged without constructing a request
 or invoking the backend.

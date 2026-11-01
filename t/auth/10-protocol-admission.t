@@ -94,6 +94,7 @@ subtest 'mounted Auth retains real protocol scopes and ordinary refusal applicat
                 middleware => [middleware('Authentication', backend => sub {
                     my ($conn) = @_;
                     isa_ok $conn, 'PAGI::HTTPConnection';
+                    ok !$conn->isa('PAGI::Request'), 'the backend\'s connection is not a Request';
                     push @backend_types, $conn->scope->{type};
                     $observe_shared->($conn);
                     my $token = $conn->header('authorization') // '';

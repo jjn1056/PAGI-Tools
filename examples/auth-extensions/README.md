@@ -25,7 +25,7 @@ The test cases below run the actual files in `t/auth/11-extension-examples.t`.
 | File | Test case | Demonstrated behavior |
 | --- | --- | --- |
 | [01-users-and-results.pl](01-users-and-results.pl) | users and results script | Built-in users and duck-typed Guest; Auth subclass through `SUPER`; all four helpers as functions, classes, instances and direct `new->...`; result readers and optional failure code/message; immediate and Future results; guest grants; live scopes and an explicit copy; `has`, `has_any`, `has_all`, including admin OR manager plus edit |
-| [02-basic-backend.pl](02-basic-backend.pl) | Basic backend app | Object `authenticate($request)` backend with supplied verifier, dependencies at construction, Request Basic extraction with strict parsing errors, missing/rejected responses, and accepted SimpleUser grants |
+| [02-basic-backend.pl](02-basic-backend.pl) | Basic backend app | Object `authenticate($conn)` backend with supplied verifier, dependencies at construction, connection Basic extraction with strict parsing errors, missing/rejected responses, and accepted SimpleUser grants |
 | [03-context-and-placement.pl](03-context-and-placement.pl) | context and placement app | Custom `clone_scope` authenticator and completed result; Router, Route, Mount and Compose placement; middleware factory, object and class; nested replacement preserving outer context; manual identity and grant ownership check |
 | [04-response-applications.pl](04-response-applications.pl) | response applications app | Sync/async Request notices, concrete Response, negotiated Pages, `to_app` object, native CODE returned as-is, and group wrapper awaiting `invoke_app`/downstream |
 | [05-protocol-admission.pl](05-protocol-admission.pl) | protocol admission app | HTTP, WebSocket and SSE sharing installed context; refusal reading `auth($request)->failure` before accept/start; successful protocol lifecycle and cleanup |
@@ -34,7 +34,7 @@ The test cases below run the actual files in `t/auth/11-extension-examples.t`.
 ## Basic learning fixture
 
 File 02 accepts `ada:test`, with `Authorization: Basic YWRhOnRlc3Q=`. Its backend
-calls `Request->basic_auth(raise_on_error => 1)`, which rejects duplicate and
+calls `$conn->basic_auth(raise_on_error => 1)`, which rejects duplicate and
 malformed fields while treating a missing field or another scheme as a guest.
 The example separately accepts only ASCII username/password bytes from
 `0x20` through `0x7e`. The example has an application-supplied
