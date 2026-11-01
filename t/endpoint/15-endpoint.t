@@ -896,7 +896,7 @@ subtest 'load errors name the line that called endpoint' => sub {
     like($error, qr/ at \Q$this_file\E line $line\.$/, 'through PAGI::Routing');
 
     $line = __LINE__ + 1;
-    $error = dies { PAGI::Tools->_exports->{endpoint}->('No::Such::Endpoint') };
+    $error = dies { PAGI::Tools::endpoint('No::Such::Endpoint') };
     my @locations = $error =~ / at (\S+) line (\d+)\./g;
     is(\@locations, [$this_file, $line], 'through PAGI::Tools, with one location');
 
@@ -931,7 +931,7 @@ subtest 'the steps are methods a subclass may override' => sub {
 };
 
 subtest 'endpoint is exported by PAGI::Routing and PAGI::Tools' => sub {
-    ok(PAGI::Tools->_exports->{endpoint} == \&PAGI::Routing::endpoint, 'one sub');
+    ok(\&PAGI::Tools::endpoint == \&PAGI::Routing::endpoint, 'one sub');
     is(eval q{ package Local::EndpointRoutingAll; use PAGI::Routing qw(:all); defined(&endpoint) ? 1 : 0 },
         1, "in PAGI::Routing's :all");
     is(eval q{ package Local::EndpointRoutingRoutes; use PAGI::Routing qw(:routes); defined(&endpoint) ? 1 : 0 },

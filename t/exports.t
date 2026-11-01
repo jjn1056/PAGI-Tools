@@ -171,9 +171,28 @@ for my $module (@MODULES) {
             "naming the importer's line");
 
         if ($module eq 'PAGI::Tools') {
+            # A name re-exported from a function module keeps its full-name
+            # spelling here as well; a name from a class has none.
+            my @function_sources = grep { $_ ne 'PAGI::Tools' } @FUNCTION_MODULES;
+            my %from_function_module = map {
+                my $name = $_;
+                ($name => scalar grep {
+                    my $source = $_->_exports->{$name};
+                    $source && $source == $exports->{$name};
+                } @function_sources);
+            } @names;
+            ok((grep { $from_function_module{$_} } @names), 'some names come from function modules');
+            ok((grep { !$from_function_module{$_} } @names), 'some names come from classes');
             no strict 'refs';
-            ok(!defined &{"PAGI::Tools::$_"}, "PAGI::Tools has no $_ sub of its own")
-                for @names;
+            for my $name (@names) {
+                if ($from_function_module{$name}) {
+                    ok(defined &{"PAGI::Tools::$name"} && \&{"PAGI::Tools::$name"} == $exports->{$name},
+                        "PAGI::Tools::$name is the exported sub");
+                }
+                else {
+                    ok(!defined &{"PAGI::Tools::$name"}, "PAGI::Tools has no $name sub of its own");
+                }
+            }
         }
         elsif ($IS_FUNCTION_MODULE{$module}) {
             for my $name (@names) {
