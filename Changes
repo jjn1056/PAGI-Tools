@@ -12,7 +12,8 @@
     stash($request) and session($request), so the reader that cannot touch
     the body or socket is the easy one for middleware to reach for.
     PAGI::Request, WebSocket and SSE still import nothing; asking them or a
-    subclass for a name now dies with Exporter's error, where it was ignored.
+    subclass for a name now dies ("PAGI::Request exports nothing; import
+    from PAGI::HTTPConnection"), where it was ignored.
   - PAGI::HTTPConnection, Starlette's HTTPConnection: what can be known
     about an http, websocket or sse request without talking to it --
     path, headers, query, path parameters, cookies, client and application
@@ -844,6 +845,13 @@
     It used to build the class with new and no arguments, ignoring BUILD_APP.
 
   [Fixed]
+  - PAGI::Middleware::Builder: enable_if (and add_middleware_if) with a
+    middleware name builds the middleware once, with the app, as enable
+    does and as enable_if with an instance already did. It was built anew
+    on every request the condition admitted, so state it keeps never
+    accumulated -- RateLimit under enable_if never refused anyone -- and a
+    bad option surfaced only on the first matching request; it now fails
+    when the app is built.
   - PAGI::Test::WebSocket: a receive the application cancels while it
     waits (Future->wait_any cancels the receive that loses a race) no longer
     swallows the next message the test sends; the next receive gets it, and

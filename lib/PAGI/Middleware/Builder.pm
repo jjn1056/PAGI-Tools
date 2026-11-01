@@ -151,6 +151,11 @@ the scope and returns true/false. A pre-configured middleware instance
 may be passed instead of a class name; config args alongside an instance
 are an error.
 
+The middleware is built once, when the app is built, exactly as with
+C<enable>; the condition only decides, per request, whether the request
+passes through it. State a middleware keeps (RateLimit's buckets) spans
+every request the condition admits, and a bad option fails at build time.
+
 =cut
 
 sub _enable_if {
@@ -344,41 +349,20 @@ sub _wrap_middleware {
     my ($self, $mw, $app) = @_;
     my $condition = $mw->{condition};
 
-    # Pre-configured instance path
-    if (my $instance = $mw->{instance}) {
-        my $wrapped = $instance->wrap($app);
-        return $wrapped unless $condition;
-        return async sub {
-            my ($scope, $receive, $send) = @_;
-            if ($condition->($scope)) {
-                await $wrapped->($scope, $receive, $send);
-            } else {
-                await $app->($scope, $receive, $send);
-            }
-        };
-    }
+    # One instance per enable, built with the app, so a middleware's state
+    # (RateLimit's buckets) spans requests whether or not it is conditional.
+    my $instance = $mw->{instance} // $mw->{class}->new(%{ $mw->{config} });
+    my $wrapped  = $instance->wrap($app);
+    return $wrapped unless $condition;
 
-    # Class name + config path
-    my $class  = $mw->{class};
-    my $config = $mw->{config};
-
-    if ($condition) {
-        # Conditional middleware
-        return async sub {
-            my ($scope, $receive, $send) = @_;
-            if ($condition->($scope)) {
-                my $instance = $class->new(%$config);
-                my $wrapped  = $instance->wrap($app);
-                await $wrapped->($scope, $receive, $send);
-            } else {
-                await $app->($scope, $receive, $send);
-            }
-        };
-    } else {
-        # Unconditional middleware
-        my $instance = $class->new(%$config);
-        return $instance->wrap($app);
-    }
+    return async sub {
+        my ($scope, $receive, $send) = @_;
+        if ($condition->($scope)) {
+            await $wrapped->($scope, $receive, $send);
+        } else {
+            await $app->($scope, $receive, $send);
+        }
+    };
 }
 
 # Private: build mount routing app; anything no mount takes goes to the
