@@ -99,4 +99,48 @@ subtest "Builder's POD names the object interface's methods" => sub {
         for qw(add_middleware add_middleware_if add_mount);
 };
 
+# The SYNOPSIS, run as published: both applications it builds answer an API
+# path, where the conditional middleware is built, and any other path.
+subtest "Builder's SYNOPSIS runs" => sub {
+    my $file = $INC{'PAGI/Middleware/Builder.pm'};
+    open my $fh, '<', $file or die "cannot read $file: $!";
+    my $source = do { local $/; <$fh> };
+    my ($synopsis) = $source =~ /^=head1 SYNOPSIS\n(.*?)^=head1 /ms;
+    my $code = join "\n", map { s/^    //r } split /\n/, $synopsis;
+
+    require PAGI::Response::Text;
+    require PAGI::Test::Client;
+    my $package = fresh_package();
+    my @warnings;
+    my $apps = do {
+        local $SIG{__WARN__} = sub { push @warnings, $_[0] };
+        eval qq{
+            package $package;
+            use strict;
+            use warnings;
+            my \$static_app = PAGI::Response::Text->new('static')->to_app;
+            my \$admin_app  = PAGI::Response::Text->new('admin')->to_app;
+            my \$my_app     = PAGI::Response::Text->new('inner')->to_app;
+            $code
+            ;
+            { dsl => \$app, object => \$oo_app };
+        };
+    };
+    is($@, '', 'it compiles and runs');
+    is(\@warnings, [], 'without warnings');
+
+    for my $form (qw(dsl object)) {
+        ok(ref $apps && $apps->{$form}, "the $form form builds an application")
+            or next;
+        my $client = PAGI::Test::Client->new(
+            app => $apps->{$form}, raise_app_exceptions => 1);
+        for my $path ('/api/x', '/other') {
+            my $response;
+            ok(lives { $response = $client->get($path) }, "$form: GET $path lives")
+                or note($@);
+            is($response && $response->status, 200, "$form: GET $path answers 200");
+        }
+    }
+};
+
 done_testing;

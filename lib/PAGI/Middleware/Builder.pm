@@ -34,8 +34,6 @@ use PAGI::Utils ();
 use Scalar::Util qw(blessed);
 use PAGI::Utils ();
 
-# Note: We use traditional Perl subs because prototypes don't work with signatures.
-
 =encoding UTF-8
 
 =head1 NAME
@@ -50,7 +48,7 @@ PAGI::Middleware::Builder - DSL for composing PAGI middleware
     my $app = builder {
         enable 'ContentLength';
         enable 'CORS', origins => ['*'];
-        enable_if { $_[0]->{path} =~ m{^/api/} } 'RateLimit', limit => 100;
+        enable_if { $_[0]->{path} =~ m{^/api/} } 'RateLimit', requests_per_second => 100;
         mount '/static' => $static_app;
         $my_app;
     };
@@ -59,9 +57,9 @@ PAGI::Middleware::Builder - DSL for composing PAGI middleware
     my $builder = PAGI::Middleware::Builder->new;
     $builder->add_middleware('ContentLength');
     $builder->add_middleware('CORS', origins => ['*']);
-    $builder->add_middleware_if(sub { $_[0]->{path} =~ m{^/api/} }, 'RateLimit', limit => 100);
+    $builder->add_middleware_if(sub { $_[0]->{path} =~ m{^/api/} }, 'RateLimit', requests_per_second => 100);
     $builder->add_mount('/admin', $admin_app);
-    my $app = $builder->to_app($my_app);
+    my $oo_app = $builder->to_app($my_app);
 
 =head1 DESCRIPTION
 
