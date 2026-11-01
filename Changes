@@ -135,7 +135,7 @@
     PAGI::Exception::HTTP (with no headers), so one catch entry for
     PAGI::Exception::HTTP answers a bad body too.
   - PAGI::Auth (auth, auth_result, unauth_result, www_authenticate)
-    and PAGI::Middleware::Authentication. Its backend, and its catch
+    and PAGI::Middleware::Authentication. Its backend, and its own catch
     entries, get a PAGI::HTTPConnection, whatever Request class RequestClass
     sets (as Starlette's backend gets an HTTPConnection): it reads the
     headers, cookies, query and session, never the body; a request signed

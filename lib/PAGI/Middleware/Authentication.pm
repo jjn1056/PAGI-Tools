@@ -78,8 +78,12 @@ sub wrap {
             # here meets that boundary, which diagnoses a rejected status
             # claim; elsewhere this is the only chance to say why.
             my $outer = $type eq 'http' ? $scope->{'pagi.error_handler'} : undef;
-            my $answering = $outer && !$self->{own_catch} ? $outer : $self->{answers};
-            my $handled = await $answering->_handle_exception($error, $conn, $scope, $receive, $send,
+            my $by_outer = $outer && !$self->{own_catch};
+            my $answering = $by_outer ? $outer : $self->{answers};
+            # This middleware's own table gets the backend's connection; the
+            # ErrorHandler around it builds the application's Request class.
+            my $handled = await $answering->_handle_exception($error,
+                $by_outer ? undef : $conn, $scope, $receive, $send,
                 $outer ? 'quiet' : undef);
             die $error if !$handled || $handled == 2;
             return;
@@ -223,7 +227,8 @@ answers the backend's own error class, as Starlette's C<on_error> answers
 C<AuthenticationError> -- and an HTTP error no entry matches gets the
 built-in answer. Without C<catch>, the backend's error is answered by the
 ErrorHandler this middleware is inside, on a route, and with the built-in
-answer elsewhere.
+answer elsewhere;
+that ErrorHandler's entries get the application's Request class, as for a route's error.
 
 Other scope types are passed through unchanged without constructing a request
 or invoking the backend.
