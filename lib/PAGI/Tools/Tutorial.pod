@@ -1254,6 +1254,7 @@ Create reusable middleware by extending L<PAGI::Middleware>:
   use parent 'PAGI::Middleware';
   use Future::AsyncAwait;
   use PAGI::HTTPConnection qw(http_connection);
+  use PAGI::Stash;
 
   sub new {
       my ($class, %args) = @_;
@@ -1292,9 +1293,13 @@ Create reusable middleware by extending L<PAGI::Middleware>:
 
   1;
 
-Use it in a C<middleware> list:
+Use it in a C<middleware> list. It writes to the stash, which only
+C<middleware('Stash')> provides, so stack that above it:
 
-  middleware => [middleware('+MyApp::Middleware::Auth', secret => 'secret-key')],
+  middleware => [
+      middleware('Stash'),
+      middleware('+MyApp::Middleware::Auth', secret => 'secret-key'),
+  ],
 
 The leading C<+> uses the class name as-is instead of prepending
 C<PAGI::Middleware::>; Builder's C<enable> takes the same spelling. Or skip
@@ -1312,7 +1317,7 @@ Or per-route:
   route('/admin' => sub {
       my ($request) = @_;
       return response('Text', 'admin');
-  }, middleware => [middleware($auth)]);
+  }, middleware => [middleware('Stash'), middleware($auth)]);
 
 =head3 Middleware Patterns
 
@@ -1320,7 +1325,10 @@ Or per-route:
 
 =item * Modify scope
 
-Add data for downstream handlers:
+Add data for downstream handlers, through a stash that C<middleware('Stash')>
+provides above this layer:
+
+  use PAGI::Stash;
 
   sub wrap {
       my ($self, $app) = @_;

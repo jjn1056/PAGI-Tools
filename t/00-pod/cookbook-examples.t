@@ -599,6 +599,40 @@ subtest 'Company Collection recipe builds its class by name' => sub {
     }
 };
 
+subtest 'Tutorial 6.4 custom middleware answers a request with a token' => sub {
+    my $heading = '=head2 6.4 Writing Custom Middleware';
+    my $middleware = code_block_containing($tutorial, $heading, 'package MyApp::Middleware::Auth');
+    my $usage = code_block_containing($tutorial, $heading, "middleware('Stash')");
+    like $middleware, qr/^use PAGI::Stash;/m, 'the middleware loads the stash it writes to';
+    my $scope_patterns = code_block_containing($tutorial, '=item * Modify scope', 'custom_data');
+    like $scope_patterns, qr/use PAGI::Stash;/, 'the Modify scope snippet loads the stash';
+
+    require PAGI::Test::Client;
+    my $app = eval <<"PERL";
+package PAGITest::TutorialMiddleware;
+$middleware
+use PAGI::Compose qw(compose);
+use PAGI::Response qw(response);
+use PAGI::Routing qw(middleware route);
+use PAGI::Stash qw(stash);
+compose(
+    routes => [route('/' => sub {
+        my (\$request) = \@_;
+        my \$user = stash(\$request)->get(user => undef);
+        return response('Text', \$user ? \$user->{username} : 'anonymous');
+    })],
+    $usage
+)->to_app;
+PERL
+    is $@, '', 'the middleware and its usage compile as published' or return;
+
+    my $client = PAGI::Test::Client->new(app => $app);
+    my $with_token = $client->get('/', headers => { Authorization => 'Bearer abc' });
+    is [$with_token->status, $with_token->text], [200, 'alice'], 'a token reaches the handler as the user';
+    my $without = $client->get('/');
+    is [$without->status, $without->text], [200, 'anonymous'], 'no token, no user';
+};
+
 unlike $cookbook,
     qr/PAGI::(?:App|Endpoint)::Router|\b(?:App|Endpoint) Router\b|->to_router|middleware_as|app_as/,
     'Cookbook contains no removed frontend syntax';
