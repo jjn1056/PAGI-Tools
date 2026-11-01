@@ -65,7 +65,6 @@ sub new {
 # the claim rules): while its own refusal is in progress, or once another
 # helper answered the open connection, it fails locally.
 sub _refusing { PAGI::Utils::_ProtocolHelpers::refusing($_[0]) }
-sub _answered_by_another { PAGI::Utils::_ProtocolHelpers::answered_by_another($_[0]) }
 
 # True while this helper may not drive the connection; _require_ownership
 # says why.

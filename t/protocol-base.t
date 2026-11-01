@@ -19,7 +19,7 @@ my @shared = qw(
     connection_state is_closed disconnect_detail
     on_close on_error finished
     try_send_json
-    _refusing _answered_by_another _set_state
+    _refusing _set_state
     _run_late_close_callback _run_close_callbacks _start_close_callbacks
     _keep
     is_connected disconnect_reason
