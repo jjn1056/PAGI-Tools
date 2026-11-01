@@ -11,7 +11,8 @@
     PAGI::Tools: PAGI::HTTPConnection->new($scope) in the house style of
     stash($request) and session($request), so the reader that cannot touch
     the body or socket is the easy one for middleware to reach for.
-    PAGI::Request, WebSocket and SSE still import nothing.
+    PAGI::Request, WebSocket and SSE still import nothing; asking them or a
+    subclass for a name now dies with Exporter's error, where it was ignored.
   - PAGI::HTTPConnection, Starlette's HTTPConnection: what can be known
     about an http, websocket or sse request without talking to it --
     path, headers, query, path parameters, cookies, client and application

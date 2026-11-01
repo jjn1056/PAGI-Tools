@@ -279,15 +279,17 @@ subtest "in Compose, handler is outside the application middleware: a plain Requ
 };
 
 subtest 'an Authentication backend gets a connection, the route the class, in either order' => sub {
-    my ($seen, $caught);
+    my ($seen, $caught, $backend_conn, $catch_conn);
     my $backend = sub {
         my ($conn) = @_;
+        $backend_conn = $conn;
         $seen = [ref $conn, $conn->isa('PAGI::Request') ? 'request' : 'no request'];
         die PAGI::Exception::HTTP->new(401, 'no') if $conn->header('x-deny');
         return unauth_result();
     };
     my $catch = { 'PAGI::Exception::HTTP' => sub {
         my ($conn) = @_;
+        $catch_conn = $conn;
         $caught = [ref $conn, $conn->isa('PAGI::Request') ? 'request' : 'no request'];
         return response('Text', 'denied', status => 401);
     } };
@@ -300,13 +302,14 @@ subtest 'an Authentication backend gets a connection, the route the class, in ei
             middleware => $middleware,
             routes     => [route('/' => $class_of)],
         ));
-        ($seen, $caught) = ();
+        ($seen, $caught, $backend_conn, $catch_conn) = ();
         my $res = $client->get('/');
         is([$res->status, $res->text, $seen], [200, 'Local::AppRequest', ['PAGI::HTTPConnection', 'no request']],
             "$label: the backend gets a connection, the route the class");
         $res = $client->get('/', headers => { 'X-Deny' => 1 });
         is([$res->status, $res->text, $caught], [401, 'denied', ['PAGI::HTTPConnection', 'no request']],
             "$label: the catch handler gets the same kind of object");
+        is($catch_conn, exact_ref($backend_conn), "$label: and the very object the backend got");
     }
 };
 
