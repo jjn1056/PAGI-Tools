@@ -2,16 +2,31 @@ package PAGI::State;
 
 use strict;
 use warnings;
+use Sub::Util ();
+use PAGI::Utils::_Exporter ();
+
+my (%EXPORTS, %TAGS, @DEFAULTS);
+BEGIN {
+    %EXPORTS = (
+        app_state => Sub::Util::set_subname('PAGI::State::app_state',
+            sub { return __PACKAGE__->new(@_) }),
+        singleton => Sub::Util::set_subname('PAGI::State::singleton',
+            sub :prototype(&) { return PAGI::State::Deferred::Singleton->new($_[0]) }),
+        per_request => Sub::Util::set_subname('PAGI::State::per_request',
+            sub :prototype(&) { return PAGI::State::Deferred::PerRequest->new($_[0]) }),
+        factory => Sub::Util::set_subname('PAGI::State::factory',
+            sub :prototype(&) { return PAGI::State::Deferred::Factory->new($_[0]) }),
+    );
+    %TAGS = (all => [sort keys %EXPORTS]);
+}
+sub import   { PAGI::Utils::_Exporter::export(__PACKAGE__, \%EXPORTS, \%TAGS, \@DEFAULTS, scalar caller, @_) }
+sub _exports { \%EXPORTS }
+
 use Carp qw(croak);
-use Exporter qw(import);
 use Scalar::Util qw(blessed);
 use PAGI::State::Deferred ();
 use PAGI::Utils::Scope ();
 use overload '%{}' => '_deprecated_hashref', fallback => 1;
-
-our @EXPORT = ();
-our @EXPORT_OK = qw(app_state singleton per_request factory);
-our %EXPORT_TAGS = (all => [@EXPORT_OK]);
 
 my %WARNED;
 
@@ -182,14 +197,6 @@ through the C<:all> tag. Nothing is exported by default.
 Each takes a builder (a block, C<sub {...}> or C<async sub {...}>) and returns
 a L<PAGI::State::Deferred> for lifespan startup to store; see L</LIFETIMES>.
 Opt-in exports, also in C<:all>; L<PAGI::Tools> does not re-export them.
-
-=cut
-
-sub app_state { return __PACKAGE__->new(@_) }
-
-sub singleton (&)   { return PAGI::State::Deferred::Singleton->new($_[0]) }
-sub per_request (&) { return PAGI::State::Deferred::PerRequest->new($_[0]) }
-sub factory (&)     { return PAGI::State::Deferred::Factory->new($_[0]) }
 
 =head1 CONSTRUCTOR
 

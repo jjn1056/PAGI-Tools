@@ -33,7 +33,7 @@ my $uppercase_tag_error;
     local $SIG{__WARN__} = sub { };
     $uppercase_tag_error = dies { PAGI::State->import(':ALL') };
 }
-like($uppercase_tag_error, qr/"?:?ALL"? is not defined|Can't continue/i,
+like($uppercase_tag_error, qr/\A":ALL" is not exported by PAGI::State at /,
     'uppercase :ALL is not an export tag');
 
 my $state_import_error;

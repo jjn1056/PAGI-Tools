@@ -1,14 +1,26 @@
 package PAGI::ContentNegotiation;
 use strict;
 use warnings;
+use Sub::Util ();
+use PAGI::Utils::_Exporter ();
+
+my (%EXPORTS, %TAGS, @DEFAULTS);
+BEGIN {
+    %EXPORTS = (
+        content_negotiation => Sub::Util::set_subname('PAGI::ContentNegotiation::content_negotiation',
+            sub { return __PACKAGE__->new(@_) }),
+        negotiated_type => Sub::Util::set_subname('PAGI::ContentNegotiation::negotiated_type',
+            sub { return __PACKAGE__->new(@_)->type }),
+        respond_to => \&respond_to,
+    );
+    %TAGS = (all => [sort keys %EXPORTS]);
+}
+sub import   { PAGI::Utils::_Exporter::export(__PACKAGE__, \%EXPORTS, \%TAGS, \@DEFAULTS, scalar caller, @_) }
+sub _exports { \%EXPORTS }
+
 use Carp qw(croak);
-use Exporter 'import';
 use Scalar::Util qw(blessed);
 use PAGI::Utils::Scope ();
-
-our @EXPORT = ();
-our @EXPORT_OK = qw(content_negotiation negotiated_type respond_to);
-our %EXPORT_TAGS = (all => [@EXPORT_OK]);
 
 =head1 NAME
 
@@ -382,13 +394,6 @@ C<< content_negotiation($request)->type >>.
 Calls the branch for the chosen type and returns its result. The same as
 the C<respond_to> method under L</METHODS>,
 C<< content_negotiation($request)->respond_to(...) >>.
-
-=cut
-
-sub content_negotiation { return __PACKAGE__->new(@_) }
-
-sub negotiated_type { return __PACKAGE__->new(@_)->type }
-
 
 =head1 CONSTRUCTOR
 

@@ -3,14 +3,41 @@ package PAGI::Pages;
 use strict;
 use warnings;
 
+use PAGI::Pages::_Catalog;
+use PAGI::Utils::_Exporter ();
+
+my (%EXPORTS, %TAGS, @DEFAULTS);
+BEGIN {
+    # Each named page factory is installed at compile time, so the export
+    # table below holds the sub itself.
+    for my $method (@{PAGI::Pages::_Catalog->_named_methods}) {
+        my $status = PAGI::Pages::_Catalog->_code_for_method($method);
+        no strict 'refs';
+        *{__PACKAGE__ . '::' . $method} = sub {
+            return _invoke_named($status, @_);
+        };
+    }
+    %EXPORTS = map { $_ => \&{__PACKAGE__ . "::$_"} } (
+        qw(welcome status redirect),
+        @{PAGI::Pages::_Catalog->_named_methods},
+    );
+    %TAGS = (
+        common => [qw(
+            welcome not_found unauthorized forbidden method_not_allowed conflict
+            too_many_requests internal_server_error bad_gateway service_unavailable
+        )],
+        all => [sort keys %EXPORTS],
+    );
+}
+sub import   { PAGI::Utils::_Exporter::export(__PACKAGE__, \%EXPORTS, \%TAGS, \@DEFAULTS, scalar caller, @_) }
+sub _exports { \%EXPORTS }
+
 use Carp qw(croak);
-use Exporter qw(import);
 use Future;
 use HTTP::Date ();
 use JSON::MaybeXS ();
 use Scalar::Util qw(blessed);
 
-use PAGI::Pages::_Catalog;
 use PAGI::Pages::Application ();
 use PAGI::HTTPConnection;
 use PAGI::ContentNegotiation;
@@ -22,19 +49,6 @@ use PAGI::Response::Problem ();
 use PAGI::Response::Text ();
 use PAGI::Utils ();
 use PAGI::Utils::Headers qw(merge_vary);
-
-our @EXPORT;
-our @EXPORT_OK = (
-    qw(welcome status redirect),
-    @{PAGI::Pages::_Catalog->_named_methods},
-);
-our %EXPORT_TAGS = (
-    common => [qw(
-        welcome not_found unauthorized forbidden method_not_allowed conflict
-        too_many_requests internal_server_error bad_gateway service_unavailable
-    )],
-    all => [@EXPORT_OK],
-);
 
 # Taken from Response's export table rather than imported, so a Pages
 # object does not answer it as a method.
@@ -1027,14 +1041,6 @@ sub _html_escape {
     return $value;
 }
 
-for my $method (@{PAGI::Pages::_Catalog->_named_methods}) {
-    my $status = PAGI::Pages::_Catalog->_code_for_method($method);
-    no strict 'refs';
-    *{__PACKAGE__ . '::' . $method} = sub {
-        return _invoke_named($status, @_);
-    };
-}
-
 1;
 
 __END__
@@ -1219,7 +1225,7 @@ class or configured-instance calls are the collision-free shared-package form.
 
 The five named redirect helpers are methods only. C<moved_permanently>,
 C<found>, C<see_other>, C<temporary_redirect>, and C<permanent_redirect> are
-not in C<@EXPORT_OK> or C<:all>.
+not exported, and not in C<:all>.
 
 Exported functions return app objects that can be placed directly:
 

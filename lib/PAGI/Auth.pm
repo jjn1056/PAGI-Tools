@@ -1,8 +1,19 @@
 package PAGI::Auth;
 use strict;
 use warnings;
+use PAGI::Utils::_Exporter ();
+
+my (%EXPORTS, %TAGS, @DEFAULTS);
+BEGIN {
+    %EXPORTS = map { $_ => \&{__PACKAGE__ . "::$_"} } qw(
+        auth auth_result unauth_result www_authenticate
+    );
+    %TAGS    = (all => [sort keys %EXPORTS]);
+}
+sub import   { PAGI::Utils::_Exporter::export(__PACKAGE__, \%EXPORTS, \%TAGS, \@DEFAULTS, scalar caller, @_) }
+sub _exports { \%EXPORTS }
+
 use Carp qw(croak);
-use Exporter qw(import);
 use Scalar::Util qw(blessed);
 use PAGI::Auth::Credentials ();
 use PAGI::Auth::Failure ();
@@ -10,9 +21,6 @@ use PAGI::Auth::Result ();
 use PAGI::Auth::UnauthenticatedUser ();
 use PAGI::Utils::Headers ();
 use PAGI::Utils::Scope ();
-
-our @EXPORT = ();
-our @EXPORT_OK = qw(auth auth_result unauth_result www_authenticate);
 
 sub new {
     my ($class, @args) = @_;

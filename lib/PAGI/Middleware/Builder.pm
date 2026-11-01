@@ -2,6 +2,31 @@ package PAGI::Middleware::Builder;
 
 use strict;
 use warnings;
+use Sub::Util ();
+use PAGI::Utils::_Exporter ();
+
+# The builder that enable, enable_if and mount add to: builder sets it for
+# the duration of its block.
+our $_current_builder;
+
+my (%EXPORTS, %TAGS, @DEFAULTS);
+BEGIN {
+    %EXPORTS = (
+        builder => Sub::Util::set_subname('PAGI::Middleware::Builder::builder',
+            sub :prototype(&) { _builder(@_) }),
+        enable => Sub::Util::set_subname('PAGI::Middleware::Builder::enable',
+            sub { _enable(@_) }),
+        enable_if => Sub::Util::set_subname('PAGI::Middleware::Builder::enable_if',
+            sub :prototype(&$;@) { _enable_if(@_) }),
+        mount => Sub::Util::set_subname('PAGI::Middleware::Builder::mount',
+            sub { _mount(@_) }),
+    );
+    @DEFAULTS = qw(builder enable enable_if mount);
+    %TAGS = (all => [sort keys %EXPORTS]);
+}
+sub import   { PAGI::Utils::_Exporter::export(__PACKAGE__, \%EXPORTS, \%TAGS, \@DEFAULTS, scalar caller, @_) }
+sub _exports { \%EXPORTS }
+
 use Future::AsyncAwait;
 use Carp 'croak';
 use PAGI::App::URLMap ();
@@ -32,9 +57,10 @@ PAGI::Middleware::Builder - DSL for composing PAGI middleware
 
     # Object-oriented interface
     my $builder = PAGI::Middleware::Builder->new;
-    $builder->enable('ContentLength');
-    $builder->enable('CORS', origins => ['*']);
-    $builder->mount('/admin', $admin_app);
+    $builder->add_middleware('ContentLength');
+    $builder->add_middleware('CORS', origins => ['*']);
+    $builder->add_middleware_if(sub { $_[0]->{path} =~ m{^/api/} }, 'RateLimit', limit => 100);
+    $builder->add_mount('/admin', $admin_app);
     my $app = $builder->to_app($my_app);
 
 =head1 DESCRIPTION
@@ -63,14 +89,6 @@ a PAGI application. It supports:
 
 =head1 EXPORTS
 
-=cut
-
-use Exporter 'import';
-our @EXPORT = qw(builder enable enable_if mount);
-
-# Current builder context for DSL
-our $_current_builder;
-
 =head2 builder
 
     my $app = builder { ... };
@@ -89,7 +107,7 @@ L<PAGI::Utils/to_app>. Return a native coderef or app object directly:
 
 =cut
 
-sub builder (&) {
+sub _builder {
     my ($block) = @_;
     local $_current_builder = PAGI::Middleware::Builder->new;
     my $app = $block->();
@@ -120,7 +138,7 @@ them is parsed as an indirect method call and dies with a confusing error.
 
 =cut
 
-sub enable {
+sub _enable {
     my ($name, %config) = @_;
     croak "enable() must be called inside builder {}" unless $_current_builder;
     $_current_builder->add_middleware($name, %config);
@@ -138,7 +156,7 @@ are an error.
 
 =cut
 
-sub enable_if (&$;@) {
+sub _enable_if {
     my ($condition, $name, %config) = @_;
     croak "enable_if() must be called inside builder {}" unless $_current_builder;
     $_current_builder->add_middleware_if($condition, $name, %config);
@@ -162,7 +180,7 @@ C<enable> and C<enable_if> middleware positions.
 
 =cut
 
-sub mount {
+sub _mount {
     my ($path, $app) = @_;
     croak "mount() must be called inside builder {}" unless $_current_builder;
     $_current_builder->add_mount($path, $app);
@@ -186,9 +204,9 @@ sub new {
     }, $class;
 }
 
-=head2 enable
+=head2 add_middleware
 
-    $builder->enable('MiddlewareName', %config);
+    $builder->add_middleware('MiddlewareName', %config);
 
 Add middleware to the stack (OO interface).
 
@@ -218,9 +236,9 @@ sub add_middleware {
     return $self;
 }
 
-=head2 enable_if
+=head2 add_middleware_if
 
-    $builder->enable_if(\&condition, 'MiddlewareName', %config);
+    $builder->add_middleware_if(\&condition, 'MiddlewareName', %config);
 
 Add conditional middleware to the stack (OO interface).
 
@@ -250,9 +268,9 @@ sub add_middleware_if {
     return $self;
 }
 
-=head2 mount
+=head2 add_mount
 
-    $builder->mount('/path', $app);
+    $builder->add_mount('/path', $app);
 
 Add a path-based mount point (OO interface).
 
