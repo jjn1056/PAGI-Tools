@@ -138,7 +138,7 @@ subtest 'PAGI::ContentNegotiation: the EXAMPLES application' => sub {
     };
     my ($section) = $pod =~ /^=head2 Content Negotiation in a PAGI App\n(.*?)^=head1 /ms;
     my $code = join "\n", map { s/^    //mgr } grep { /\A[ \t]/ } split /\n{2,}/, $section =~ s/\A\n+//r;
-    my $app = eval "package PAGITest::NegotiationExample; use Future::AsyncAwait; use feature 'signatures'; no warnings 'experimental::signatures'; $code; \\&app";
+    my $app = eval "package PAGITest::NegotiationExample; $code; \\&app";
     is $@, '', 'the example compiles and runs as published' or return;
     my $client = PAGI::Test::Client->new(app => $app);
     my %by_accept = (

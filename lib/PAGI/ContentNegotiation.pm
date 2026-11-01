@@ -546,10 +546,13 @@ sub _require_declared {
 
 =head2 Content Negotiation in a PAGI App
 
+    use Future::AsyncAwait;
     use PAGI::HTTPConnection qw(http_connection);
     use PAGI::ContentNegotiation;
 
-    async sub app ($scope, $receive, $send) {
+    async sub app {
+        my ($scope, $receive, $send) = @_;
+
         # Scope headers are an arrayref of [name, value] pairs, not a hash.
         # Read them through PAGI::HTTPConnection, not $scope->{headers}{...}.
         my $conn   = http_connection($scope);
