@@ -2,9 +2,15 @@ package PAGI::Utils::SecureCompare;
 
 use strict;
 use warnings;
-use Exporter 'import';
+use PAGI::Utils::_Exporter ();
 
-our @EXPORT_OK = qw(secure_compare);
+my (%EXPORTS, %TAGS, @DEFAULTS);
+BEGIN {
+    %EXPORTS = (secure_compare => \&secure_compare);
+    %TAGS    = (all => [sort keys %EXPORTS]);
+}
+sub import   { PAGI::Utils::_Exporter::export(__PACKAGE__, \%EXPORTS, \%TAGS, \@DEFAULTS, scalar caller, @_) }
+sub _exports { \%EXPORTS }
 
 sub secure_compare {
     my ($a, $b) = @_;

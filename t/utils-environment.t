@@ -89,7 +89,12 @@ subtest 'exports are optional and bundled' => sub {
     ok(Local::AllUtilsExports->can('app_path'),
         ':all retains existing Utils helpers');
 
-    is([sort @{$PAGI::Utils::EXPORT_TAGS{env}}], [sort @helpers],
+    my @env_imports = do {
+        no strict 'refs';
+        grep { defined &{"Local::EnvironmentExports::$_"} }
+            keys %Local::EnvironmentExports::;
+    };
+    is([sort @env_imports], [sort @helpers],
         ':env contains exactly the five environment helpers');
 };
 

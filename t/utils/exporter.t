@@ -16,8 +16,9 @@ use PAGI::Utils::_Exporter ();
         who   => sub { scalar caller },
     );
     my %TAGS = (
-        all   => [sort keys %EXPORTS],
-        greek => [qw(alpha beta)],
+        all    => [sort keys %EXPORTS],
+        greek  => [qw(alpha beta)],
+        broken => [qw(alpha nope)],
     );
     my @DEFAULTS = qw(alpha);
 
@@ -98,6 +99,15 @@ subtest 'an unknown name or tag croaks at the use line' => sub {
         'naming the tag and the use line');
 };
 
+subtest 'a tag listing an undeclared name croaks at the use line' => sub {
+    my ($package, $ok, $error) = in_fresh_package('use Local::Lib qw(:broken); 1');
+    ok(!$ok, 'the tag dies');
+    like($error,
+        qr/\A"nope" is not exported by Local::Lib at \(eval \d+\) line 1\.\n/,
+        'naming the undeclared name and the use line');
+    is(installed($package), [], 'and installs nothing');
+};
+
 # Called at run time on the code's second line, import has no BEGIN frame on
 # the same line above it, so only the frame that called import names line 2.
 subtest 'an error names the line that called import' => sub {
@@ -140,6 +150,54 @@ subtest 'importing the same name twice is silent' => sub {
 
 subtest 'the declaring module does not answer its exports as methods' => sub {
     ok(!Local::Lib->can($_), "Local::Lib cannot $_") for qw(alpha beta who);
+};
+
+# Local::Cycle::A loads Local::Cycle::B, which imports from Local::Cycle::A
+# while Local::Cycle::A is still compiling. The import only works if A's table
+# and import already exist when B is loaded; Perl skips an import that is not
+# defined yet, at most with a warning, so B would be left without the name.
+my %CYCLE_SOURCE = (
+    'Local/Cycle/A.pm' => <<'PERL',
+package Local::Cycle::A;
+use strict;
+use warnings;
+use PAGI::Utils::_Exporter ();
+
+my (%EXPORTS, %TAGS, @DEFAULTS);
+BEGIN {
+    %EXPORTS = (alpha => \&alpha);
+    %TAGS    = (all => [sort keys %EXPORTS]);
+}
+sub import { PAGI::Utils::_Exporter::export(__PACKAGE__, \%EXPORTS, \%TAGS, \@DEFAULTS, scalar caller, @_) }
+
+use Local::Cycle::B;
+
+sub alpha { 'alpha' }
+
+1;
+PERL
+    'Local/Cycle/B.pm' => <<'PERL',
+package Local::Cycle::B;
+use strict;
+use warnings;
+use Local::Cycle::A qw(alpha);
+
+sub beta { alpha() }
+
+1;
+PERL
+);
+
+subtest 'a dependency that imports back from a module still compiling' => sub {
+    local @INC = (sub {
+        my (undef, $file) = @_;
+        return unless exists $CYCLE_SOURCE{$file};
+        open my $fh, '<', \$CYCLE_SOURCE{$file} or die "cannot open $file: $!";
+        return $fh;
+    }, @INC);
+    ok(eval { require Local::Cycle::A; 1 }, 'the cycle loads') or diag($@);
+    ok(defined &Local::Cycle::B::alpha, 'the dependency has the name');
+    is(eval { Local::Cycle::B::beta() }, 'alpha', 'and calls it');
 };
 
 done_testing;

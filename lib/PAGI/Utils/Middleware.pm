@@ -2,14 +2,22 @@ package PAGI::Utils::Middleware;
 
 use strict;
 use warnings;
+use PAGI::Utils::_Exporter ();
+
+my (%EXPORTS, %TAGS, @DEFAULTS);
+BEGIN {
+    %EXPORTS = map { $_ => \&{__PACKAGE__ . "::$_"} }
+        qw(clone_scope wrap_send wrap_receive wrap_response_headers record_receive);
+    %TAGS = (all => [sort keys %EXPORTS]);
+}
+sub import   { PAGI::Utils::_Exporter::export(__PACKAGE__, \%EXPORTS, \%TAGS, \@DEFAULTS, scalar caller, @_) }
+sub _exports { \%EXPORTS }
+
 use Carp qw(croak);
-use Exporter qw(import);
 use Future;
 use Future::AsyncAwait;
 use Scalar::Util qw(blessed);
 use PAGI::Headers ();
-
-our @EXPORT_OK = qw(clone_scope wrap_send wrap_receive wrap_response_headers record_receive);
 
 sub clone_scope {
     my ($scope, $changes) = @_;

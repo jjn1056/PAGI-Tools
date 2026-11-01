@@ -43,6 +43,20 @@ my %SOURCE = (
     package Local::Facade::All;
     use PAGI::Tools qw(:all);
 }
+{
+    package Local::Facade::Routes;
+    use PAGI::Tools qw(:routes);
+}
+{
+    package Local::Facade::Urls;
+    use PAGI::Tools qw(:urls);
+}
+
+sub installed {
+    my ($package) = @_;
+    no strict 'refs';
+    return [sort grep { defined &{"${package}::$_"} } keys %{"${package}::"}];
+}
 
 subtest 'each name is its source module\'s own sub' => sub {
     for my $name (sort keys %SOURCE) {
@@ -53,7 +67,7 @@ subtest 'each name is its source module\'s own sub' => sub {
 
 subtest 'an unknown name dies at compile time' => sub {
     like(dies { eval q{ package Local::Facade::Unknown; use PAGI::Tools qw(nope); 1 } or die $@ },
-        qr/"nope" is not exported by the PAGI::Tools module/);
+        qr/\A"nope" is not exported by PAGI::Tools at /);
 };
 
 subtest 'a &Name provider resolves in the importing package' => sub {
@@ -72,9 +86,9 @@ subtest 'a &Name provider resolves in the importing package' => sub {
 };
 
 subtest 'the tags hold exactly the listed names' => sub {
-    is([sort @{ $PAGI::Tools::EXPORT_TAGS{routes} }], [sort qw(router route websocket sse mount)], ':routes');
-    is([sort @{ $PAGI::Tools::EXPORT_TAGS{urls} }], [sort qw(url path_for url_for)], ':urls');
-    is([sort @{ $PAGI::Tools::EXPORT_TAGS{all} }], [sort keys %SOURCE], ':all');
+    is(installed('Local::Facade::Routes'), [sort qw(router route websocket sse mount)], ':routes');
+    is(installed('Local::Facade::Urls'), [sort qw(url path_for url_for)], ':urls');
+    is(installed('Local::Facade::All'), [sort keys %SOURCE], ':all');
 };
 
 done_testing;

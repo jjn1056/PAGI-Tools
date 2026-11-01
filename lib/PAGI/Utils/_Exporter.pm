@@ -48,8 +48,9 @@ Installing the coderef a name already holds does nothing.
 A subclass exports nothing: when C<$invocant> is not C<$module>, nothing is
 installed, and a non-empty import list croaks
 C<< <invocant> exports nothing; import from <module> >>. An unknown name or
-tag croaks C<< "<name>" is not exported by <module> >>. Both messages end
-with the file and line of the user's C<use>.
+tag croaks C<< "<name>" is not exported by <module> >>, as does a tag listing
+a name C<\%exports> does not declare. Both messages end with the file and
+line of the user's C<use>.
 
 Returns nothing.
 
@@ -85,6 +86,8 @@ sub _expand {
     if ($item =~ /\A:(.+)\z/) {
         my $names = $tags->{$1}
             or _fail(3, qq{"$item" is not exported by $module});
+        $exports->{$_} or _fail(3, qq{"$_" is not exported by $module})
+            for @$names;
         return @$names;
     }
     _fail(3, qq{"$item" is not exported by $module}) unless $exports->{$item};

@@ -31,7 +31,8 @@ subtest 'exported on request and in :all' => sub {
         use PAGI::Utils qw(request_for_scope);
         main::is(ref(request_for_scope({ type => 'http', headers => [] }, $receive)), 'PAGI::Request', 'imported by name');
     }
-    ok((grep { $_ eq 'request_for_scope' } @{ $PAGI::Utils::EXPORT_TAGS{all} }), 'in :all');
+    is(eval q{ package Local::AllImporter; use PAGI::Utils qw(:all); defined(&request_for_scope) ? 1 : 0 },
+        1, 'in :all');
 };
 
 subtest 'no factory gives a plain PAGI::Request' => sub {

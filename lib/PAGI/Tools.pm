@@ -2,7 +2,7 @@ package PAGI::Tools;
 
 use strict;
 use warnings;
-use Exporter 'import';
+use PAGI::Utils::_Exporter ();
 use PAGI::Compose ();
 use PAGI::ContentNegotiation ();
 use PAGI::ErrorContext ();
@@ -18,9 +18,9 @@ use PAGI::Utils::Middleware ();
 
 our $VERSION = '0.003000';
 
-# Every name is the source module's own sub, aliased rather than wrapped:
-# route, websocket, sse and mount resolve &Name constraint providers in the
-# package that called them, and an alias keeps that the importing package.
+# Every name is installed as its source module's own coderef, never a
+# wrapper: route, websocket, sse and mount resolve &Name constraint providers
+# in the package that called them, which stays the importing package.
 my @SOURCES = (
     'PAGI::Compose'           => [qw(compose)],
     'PAGI::Response'          => [qw(response)],
@@ -37,20 +37,25 @@ my @SOURCES = (
                                      record_receive)],
 );
 
-our @EXPORT_OK;
+my (%EXPORTS, %TAGS, @DEFAULTS);
 for (my $i = 0; $i < @SOURCES; $i += 2) {
     my ($module, $names) = @SOURCES[$i, $i + 1];
     for my $name (@$names) {
         no strict 'refs';
-        *{"PAGI::Tools::$name"} = \&{"${module}::$name"};
-        push @EXPORT_OK, $name;
+        my $code = $module->can('_exports')
+            ? $module->_exports->{$name}
+            : defined &{"${module}::$name"} ? \&{"${module}::$name"} : undef;
+        die "PAGI::Tools: $module does not export $name\n" unless $code;
+        $EXPORTS{$name} = $code;
     }
 }
-our %EXPORT_TAGS = (
+%TAGS = (
     routes => [qw(router route websocket sse mount)],
     urls   => [qw(url path_for url_for)],
-    all    => [@EXPORT_OK],
+    all    => [sort keys %EXPORTS],
 );
+sub import   { PAGI::Utils::_Exporter::export(__PACKAGE__, \%EXPORTS, \%TAGS, \@DEFAULTS, scalar caller, @_) }
+sub _exports { \%EXPORTS }
 
 1;
 

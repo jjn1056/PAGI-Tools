@@ -195,9 +195,8 @@ subtest 'exports are opt-in and tag-specific' => sub {
         $error = dies { eval q{ package BadImports; use PAGI::Routing qw(:ALL); 1 } or die $@ };
     }
     like $error,
-        qr/Can't continue after import errors/, 'uppercase ALL is rejected';
-    like $stderr, qr/"ALL" is not defined in %PAGI::Routing::EXPORT_TAGS/,
-        'uppercase ALL diagnostic is captured';
+        qr/\A":ALL" is not exported by PAGI::Routing at /, 'uppercase ALL is rejected';
+    is $stderr, undef, 'with nothing on STDERR';
 };
 
 subtest 'public constructors retain their direct declaration package' => sub {

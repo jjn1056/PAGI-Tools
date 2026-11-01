@@ -2,27 +2,33 @@ package PAGI::Utils::Headers;
 
 use strict;
 use warnings;
+use PAGI::Utils::_Exporter ();
+
+my (%EXPORTS, %TAGS, @DEFAULTS);
+BEGIN {
+    %EXPORTS = map { $_ => \&{__PACKAGE__ . "::$_"} } qw(
+        parse_authorization_bearer
+        parse_authorization_basic
+        www_authenticate
+        parse_header_parameters
+        format_header_parameters
+        quote_header_value
+        content_disposition
+        parse_header_tokens
+        merge_vary
+        parse_etag
+        format_etag
+        parse_etag_list
+        etag_matches
+    );
+    %TAGS = (all => [sort keys %EXPORTS]);
+}
+sub import   { PAGI::Utils::_Exporter::export(__PACKAGE__, \%EXPORTS, \%TAGS, \@DEFAULTS, scalar caller, @_) }
+sub _exports { \%EXPORTS }
+
 use Carp qw(croak);
 use Encode qw(encode);
-use Exporter qw(import);
 use MIME::Base64 qw(decode_base64);
-
-our @EXPORT = ();
-our @EXPORT_OK = qw(
-    parse_authorization_bearer
-    parse_authorization_basic
-    www_authenticate
-    parse_header_parameters
-    format_header_parameters
-    quote_header_value
-    content_disposition
-    parse_header_tokens
-    merge_vary
-    parse_etag
-    format_etag
-    parse_etag_list
-    etag_matches
-);
 
 my $HTTP_TOKEN = qr/[!#\$%&'*+\-.\^_`|~0-9A-Za-z]+/;
 
