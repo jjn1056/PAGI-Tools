@@ -2,10 +2,28 @@ package PAGI::Response;
 
 use strict;
 use warnings;
+use Sub::Util ();
+use PAGI::Utils::_Exporter ();
+
+my $status_forbids_body;
+my (%EXPORTS, %TAGS, @DEFAULTS);
+BEGIN {
+    # RFC 9110: informational, 204, 205 and 304 responses carry no content.
+    $status_forbids_body = Sub::Util::set_subname('PAGI::Response::status_forbids_body', sub {
+        my ($status) = @_;
+        return $status >= 100 && $status < 200 || $status == 204 || $status == 205 || $status == 304;
+    });
+    %EXPORTS = (
+        response            => Sub::Util::set_subname('PAGI::Response::response', sub { goto &_response }),
+        status_forbids_body => $status_forbids_body,
+    );
+    %TAGS = (all => [sort keys %EXPORTS]);
+}
+sub import   { PAGI::Utils::_Exporter::export(__PACKAGE__, \%EXPORTS, \%TAGS, \@DEFAULTS, scalar caller, @_) }
+sub _exports { \%EXPORTS }
 
 use Carp qw(croak);
 use PAGI::Utils::_SetCookie ();
-use Exporter qw(import);
 use Future;
 use Future::AsyncAwait;
 use PAGI::Headers ();
@@ -53,8 +71,9 @@ Construct a class directly, or build it by name with L</response>:
     my $one = PAGI::Response::JSON->new({ ok => \1 });
     my $two = response('JSON', { ok => \1 });
 
-C<PAGI::Response> exports nothing by default; C<response> is its only export,
-on request or through C<:all>. The Response subclasses export nothing.
+C<PAGI::Response> exports nothing by default; C<response> and
+L</status_forbids_body> are exported on request or through C<:all>. They are
+functions, not methods, and the Response subclasses export nothing.
 C<response> resolves a name the way C<middleware()> and C<session_store()>
 resolve theirs, so a Response class from another distribution is built the
 same way, with a leading C<+>.
@@ -212,7 +231,7 @@ are encoded again.
 
 =back
 
-=head1 METHODS
+=head1 FUNCTIONS
 
 =head2 response
 
@@ -252,6 +271,8 @@ Returns true when an HTTP status forbids response content: 1xx, 204, 205
 and 304 (RFC 9110). Every response class applies this rule, refusing a body
 with bytes on those statuses; a framework deciding what to send can ask the
 same question. Takes an integer status.
+
+=head1 METHODS
 
 =head2 new
 
@@ -530,12 +551,10 @@ application.
 =cut
 
 my %KNOWN_OPTIONS = map { $_ => 1 } qw(status content_type headers);
-our @EXPORT_OK = qw(response status_forbids_body);
-our %EXPORT_TAGS = (all => \@EXPORT_OK);
 
 # Resolve NAME under PAGI::Response:: (or exactly, with a leading '+'), load
 # it, and construct it with the remaining arguments, unchanged.
-sub response {
+sub _response {
     my ($name, @arguments) = @_;
     croak 'response() requires a Response class name'
         unless defined($name) && !ref($name) && length($name);
@@ -579,7 +598,7 @@ sub render { $_[1] // '' }
 sub _body_default_content_type {
     my ($self) = @_;
     my $default = $self->default_content_type;
-    return undef if defined $self->{_status} && status_forbids_body($self->{_status});
+    return undef if defined $self->{_status} && $status_forbids_body->($self->{_status});
     return undef
         if defined $default && $default eq 'application/octet-stream'
         && $self->_has_empty_buffered_body;
@@ -599,7 +618,7 @@ sub status {
     return $self->{_status} // 200 if @_ == 1;
     _validate_status($code);
     croak "response body is forbidden for status $code"
-        if status_forbids_body($code) && !$self->_allows_body_forbidden_status;
+        if $status_forbids_body->($code) && !$self->_allows_body_forbidden_status;
     $self->{_status} = $code;
     return $self;
 }
@@ -834,12 +853,6 @@ sub _validate_status {
     croak 'Status must be a number between 100-599'
         unless defined $code && !ref($code) && $code =~ /\A\d+\z/ && $code >= 100 && $code <= 599;
     return;
-}
-
-# RFC 9110: informational, 204, 205 and 304 responses carry no content.
-sub status_forbids_body {
-    my ($status) = @_;
-    return $status >= 100 && $status < 200 || $status == 204 || $status == 205 || $status == 304;
 }
 
 # A buffered response with an empty body may carry a no-body status; a body

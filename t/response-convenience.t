@@ -6,9 +6,15 @@ use PAGI::Response ();
 subtest 'PAGI::Response exports one builder and one predicate, only on request' => sub {
     # response('Name', ...) is the one builder; status_forbids_body is a
     # predicate, not another way to build a response.
-    is([@PAGI::Response::EXPORT_OK], ['response', 'status_forbids_body'], 'the exports');
-    is([@{$PAGI::Response::EXPORT_TAGS{all}}], ['response', 'status_forbids_body'], ':all is both');
-    is([grep { /_response$/ } @PAGI::Response::EXPORT_OK], [], 'no NAME_response factory');
+    is([sort keys %{ PAGI::Response->_exports }], ['response', 'status_forbids_body'], 'the exports');
+    is([grep { /_response$/ } keys %{ PAGI::Response->_exports }], [], 'no NAME_response factory');
+    my $all = eval q{
+        package T::AllResponseImports;
+        use PAGI::Response qw(:all);
+        no strict 'refs';
+        [grep { defined &{"T::AllResponseImports::$_"} } qw(response status_forbids_body)];
+    };
+    is($all, ['response', 'status_forbids_body'], ':all is both');
     my $default = eval q{
         package T::NoDefaultResponseImports;
         use PAGI::Response;
@@ -27,8 +33,10 @@ subtest 'Response subclasses export nothing' => sub {
     for my $class (map { "PAGI::Response::$_" } qw(Text HTML JSON Problem Redirect Empty File Stream NDJSON)) {
         (my $file = "$class.pm") =~ s{::}{/}g;
         require $file;
-        no strict 'refs';
-        is([@{"${class}::EXPORT_OK"}], [], "$class exports nothing");
+        (my $package = "T::From::$class") =~ s/::/_/g;
+        ok(!eval "package $package; use $class qw(response); 1", "$class exports nothing");
+        like($@, qr/\A\Q$class\E exports nothing; import from PAGI::Response at /,
+            'and points at PAGI::Response');
     }
 };
 

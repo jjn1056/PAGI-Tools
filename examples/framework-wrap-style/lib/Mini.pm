@@ -7,7 +7,7 @@ package Mini;
 
 use v5.40;
 use Future::AsyncAwait;
-use PAGI::Response qw(response);
+use PAGI::Response ();
 use PAGI::Pages ();
 use PAGI::Middleware::ErrorHandler;
 
@@ -21,6 +21,12 @@ package Mini::Request {
         return $self;
     }
     sub mini ($self) { $self->{mini} }
+}
+
+# A package with no methods to hold response(), so neither Mini nor
+# Mini::Response answers it as a method.
+package Mini::_Fn {
+    use PAGI::Response qw(response);
 }
 
 # Seam (§3.4): staging on an empty PAGI::Response; Mini's merge policy is
@@ -40,7 +46,7 @@ package Mini::Response {
     # Empty, and undef content is an empty body for the base class.
     sub finalize ($s) {
         my $staged = $s->{staged};
-        return PAGI::Response::response($s->{type} // '+PAGI::Response', $s->{body},
+        return Mini::_Fn::response($s->{type} // '+PAGI::Response', $s->{body},
             ($staged->has_status ? (status => $staged->status) : ()),
             headers => $staged->headers);
     }

@@ -14,7 +14,7 @@ use PAGI::Pages::_Catalog;
 use PAGI::Pages::Application ();
 use PAGI::HTTPConnection;
 use PAGI::ContentNegotiation;
-use PAGI::Response ();
+use PAGI::Response qw(status_forbids_body);
 use PAGI::Response::Empty ();
 use PAGI::Response::HTML ();
 use PAGI::Response::JSON ();
@@ -700,7 +700,7 @@ sub _replace_header {
 sub _response_for {
     my ($self, $scope, $page) = @_;
     my $headers = $self->_assembled_headers($scope, $page);
-    if (PAGI::Response::status_forbids_body($page->{status})) {
+    if (status_forbids_body($page->{status})) {
         return PAGI::Response::Empty->new(
             status => $page->{status}, headers => $headers,
         );

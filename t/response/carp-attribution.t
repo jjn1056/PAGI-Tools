@@ -28,9 +28,10 @@ like($marked, qr/at \Q${\ __FILE__}\E line $marked_line\.$/m, "marked: its user'
 # A body Text or HTML cannot render is refused the same way.
 {
     package Local::Marked::Pages;
+    use PAGI::Response qw(response);
     $Carp::Internal{'Local::Marked::Pages'}++;
-    sub text { PAGI::Response::response('Text', $_[0]) }
-    sub html { PAGI::Response::response('HTML', $_[0]) }
+    sub text { response('Text', $_[0]) }
+    sub html { response('HTML', $_[0]) }
 }
 for my $class (qw(Text HTML)) {
     my $line = __LINE__ + 1;

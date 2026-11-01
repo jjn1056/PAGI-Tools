@@ -4,6 +4,7 @@ use warnings;
 use Test2::V0;
 
 use lib 'lib';
+use PAGI::HTTPConnection qw(http_connection);
 
 # http_connection($scope) is the function import for the safe reader: the
 # one middleware reaches for to read headers, query and path parameters
@@ -32,8 +33,7 @@ subtest 'PAGI::Tools exports it on request' => sub {
 };
 
 subtest 'a second argument croaks as new does' => sub {
-    require PAGI::HTTPConnection;
-    like dies { PAGI::HTTPConnection::http_connection($scope, sub { }) },
+    like dies { http_connection($scope, sub { }) },
         qr/requires exactly one scope argument/, 'the error is new\'s';
 };
 
@@ -55,8 +55,8 @@ subtest 'a subclass cannot export it' => sub {
         my $package = "Local::Asked::" . ($class =~ s/::/_/gr);
         my $ok = eval "package $package; use $class qw(http_connection); 1";
         ok !$ok, "use $class qw(http_connection) fails";
-        like $@, qr/"http_connection" is not exported by the \Q$class\E module/,
-            'and names the class asked';
+        like $@, qr/\A\Q$class\E exports nothing; import from PAGI::HTTPConnection at /,
+            'and names the class asked and the one that exports it';
         ok !$package->can('http_connection'), 'and imports nothing';
     }
 };

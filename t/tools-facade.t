@@ -60,8 +60,11 @@ sub installed {
 
 subtest 'each name is its source module\'s own sub' => sub {
     for my $name (sort keys %SOURCE) {
-        ok(\&{"Local::Facade::All::$name"} == \&{"$SOURCE{$name}::$name"},
-            "$name is $SOURCE{$name}::$name");
+        my $source = $SOURCE{$name};
+        my $exported = $source->can('_exports')
+            ? $source->_exports->{$name}
+            : \&{"${source}::$name"};
+        ok(\&{"Local::Facade::All::$name"} == $exported, "$name is ${source}'s $name");
     }
 };
 

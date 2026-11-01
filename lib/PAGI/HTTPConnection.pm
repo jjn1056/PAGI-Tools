@@ -1,16 +1,27 @@
 package PAGI::HTTPConnection;
 use strict;
 use warnings;
+use Sub::Util ();
+use PAGI::Utils::_Exporter ();
+
+my (%EXPORTS, %TAGS, @DEFAULTS);
+BEGIN {
+    %EXPORTS = (
+        http_connection => Sub::Util::set_subname('PAGI::HTTPConnection::http_connection',
+            sub { PAGI::HTTPConnection->new(@_) }),
+    );
+    %TAGS = (all => [sort keys %EXPORTS]);
+}
+sub import   { PAGI::Utils::_Exporter::export(__PACKAGE__, \%EXPORTS, \%TAGS, \@DEFAULTS, scalar caller, @_) }
+sub _exports { \%EXPORTS }
+
 use Carp qw(croak);
-use Exporter 'import';
 use Hash::MultiValue;
 use PAGI::Exception::HTTP ();
 use PAGI::Headers ();
 use PAGI::Utils::Scope ();
 use PAGI::Utils::URI ();
 use Scalar::Util qw(blessed);
-
-our @EXPORT_OK = qw(http_connection);
 
 # A croak from a helper a reader calls names the caller's line.
 our @CARP_NOT = qw(PAGI::Utils::Scope PAGI::Utils::URI);
@@ -23,8 +34,6 @@ sub new {
     PAGI::Utils::Scope::_require_connection_type($class, $scope);
     return bless { scope => $scope }, $class;
 }
-
-sub http_connection { PAGI::HTTPConnection->new(@_) }
 
 sub scope        { shift->{scope} }
 sub connection   { shift->{scope}{'pagi.connection'} }
@@ -342,11 +351,11 @@ Nothing is exported by default. C<http_connection> is exported on request:
 
     use PAGI::HTTPConnection qw(http_connection);
 
-Only C<PAGI::HTTPConnection> itself exports it. L<PAGI::Request>,
-L<PAGI::WebSocket> and L<PAGI::SSE> inherit the import mechanism, but their
-export list is empty: C<use PAGI::Request;> imports nothing, and
-C<use PAGI::Request qw(http_connection)> dies with Exporter's
-C<"http_connection" is not exported by the PAGI::Request module>.
+Only C<PAGI::HTTPConnection> itself exports it, and it is a function, not a
+method. L<PAGI::Request>, L<PAGI::WebSocket> and L<PAGI::SSE> export
+nothing: C<use PAGI::Request;> imports nothing, and
+C<use PAGI::Request qw(http_connection)> dies with
+C<PAGI::Request exports nothing; import from PAGI::HTTPConnection>.
 L<PAGI::Tools> re-exports it too.
 
 =head2 http_connection

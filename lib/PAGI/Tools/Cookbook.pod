@@ -103,11 +103,11 @@ guessing:
   use strict;
   use warnings;
   use Future::AsyncAwait;
-  use PAGI::Response;
+  use PAGI::Response qw(response);
 
   async sub home {
       my ($request) = @_;
-      return PAGI::Response::response('HTML', '<h1>Home</h1>');
+      return response('HTML', '<h1>Home</h1>');
   }
 
   1;
@@ -2617,7 +2617,7 @@ good.
 =back
 
   # Tell EventSource to stop reconnecting: a bare 204.
-  await $sse->decline(PAGI::Response::response('Empty', status => 204));
+  await $sse->decline(response('Empty', status => 204));
   return;
 
 A normally completed decline is a clean end, not an abnormal disconnect. The
@@ -2819,7 +2819,7 @@ without naming an event loop.
   use warnings;
   use Future::AsyncAwait;
   use PAGI::Request;
-  use PAGI::Response;
+  use PAGI::Response qw(response);
   use PAGI::Utils qw(invoke_app);
 
   async sub app {
@@ -2834,12 +2834,12 @@ without naming an event loop.
 
           # Validate and process...
           await invoke_app(
-              PAGI::Response::response('Redirect', '/dashboard'),
+              response('Redirect', '/dashboard'),
               $scope, $receive, $send,
           );
       }
       else {
-          my $response = PAGI::Response::response('HTML', <<'HTML');
+          my $response = response('HTML', <<'HTML');
   <form method="POST">
       <input name="username" placeholder="Username">
       <input name="password" type="password" placeholder="Password">
@@ -2858,7 +2858,7 @@ without naming an event loop.
   use warnings;
   use Future::AsyncAwait;
   use PAGI::Request;
-  use PAGI::Response;
+  use PAGI::Response qw(response);
   use PAGI::Utils qw(invoke_app);
 
   async sub app {
@@ -2885,14 +2885,14 @@ without naming an event loop.
           }
 
           await invoke_app(
-              PAGI::Response::response('JSON', {
+              response('JSON', {
                   uploaded => scalar(@files),
               }),
               $scope, $receive, $send,
           );
       }
       else {
-          my $response = PAGI::Response::response('HTML', <<'HTML');
+          my $response = response('HTML', <<'HTML');
   <form method="POST" enctype="multipart/form-data">
       <input type="file" name="file" multiple>
       <button type="submit">Upload</button>
@@ -3223,8 +3223,8 @@ tests or one-liners:
       -e 'PAGI::App::File->new(root => ".")->to_app'
 
   # Quick redirect
-  pagi-server -MPAGI::Response \
-      -e 'PAGI::Response::response('Redirect', "https://example.com")->to_app'
+  pagi-server -MPAGI::Response::Redirect \
+      -e 'PAGI::Response::Redirect->new("https://example.com")->to_app'
 
 =head2 Loading Modules with -M
 
@@ -3489,13 +3489,14 @@ A normal handler returns the value:
   async sub create_item {
       my ($request) = @_;
       my $item = await create_from($request);
-      return PAGI::Response::response('JSON', $item, status => 201);
+      return response('JSON', $item, status => 201);
   }
 
 A native application owns the full triplet and one explicit delegation:
 
+  use PAGI::Response qw(response);
   use PAGI::Utils qw(invoke_app);
-  my $res = PAGI::Response::response('JSON', $data, status => 200);
+  my $res = response('JSON', $data, status => 200);
   await invoke_app($res, $scope, $receive, $send);
 
 Do not emit inside a normal Request handler and then return the same value to
