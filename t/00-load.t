@@ -80,6 +80,7 @@ my @load_modules = qw(
     PAGI::Utils::TextDecoder
     PAGI::Utils::URI
     PAGI::Utils::_SendValidation
+    PAGI::Utils::_Exporter
     PAGI::Test::Client
     PAGI::Test::Response
 );

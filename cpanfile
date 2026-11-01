@@ -33,6 +33,10 @@ recommends 'Cpanel::JSON::XS', '4.19';
 # PAGI::Utils::Random's source of secure random bytes
 requires 'Crypt::URandom', '0.36';
 
+# Names the coderefs PAGI::Utils::_Exporter installs. Ships with core Perl
+# (Scalar-List-Utils 1.41, perl 5.22); declared so the dependency is explicit.
+requires 'Sub::Util', '1.41';
+
 # Testing
 on 'test' => sub {
     requires 'Test2::V0', '0.000159';
