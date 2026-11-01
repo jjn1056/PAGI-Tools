@@ -8,11 +8,20 @@ use Future::AsyncAwait;
 use Future;
 use JSON::MaybeXS ();
 use PAGI::Utils::_ProtocolHelpers ();
-use Scalar::Util qw(blessed);
 
 
 sub _scope_type { 'sse' }
 sub _initial_state { 'pending' }  # pending -> started -> closed
+sub _open_state { 'started' }
+
+# on_close callbacks receive ($sse, $reason, $detail); on_error callbacks
+# receive ($sse, $error).
+sub _close_callback_args {
+    my ($self) = @_;
+    return ($self, $self->disconnect_reason, $self->disconnect_detail);
+}
+sub _error_callback_args { my ($self, $error) = @_; return ($self, $error) }
+sub _on_error_warning_name { 'PAGI::SSE' }
 
 sub _refresh_connection {
     my ($self) = @_;
@@ -26,46 +35,17 @@ sub _refresh_connection {
     return;
 }
 
-# This helper answered: its start completed, or it was issued -- still
-# pending, or rejected by the server (D6: the helper keeps its claim and is
-# still treated as the answerer). Either way it drives the connection as a
-# started stream and never issues a second sse.start; the server keeps a
-# scope's sends in call order. Once the connection has ended, no helper has
-# answered it.
-sub _answered {
-    my ($self) = @_;
-    return $self->is_started
-        || (($self->{_claim} // '') eq 'answering' && $self->connection_state eq 'pending');
-}
-
-# A keepalive saved for a start this helper may not make is dropped.
+# A keepalive saved for a start this helper may not make is dropped; a
+# helper that may drive the connection keeps it for its start.
 sub _require_ownership {
     my ($self) = @_;
-    my $refused = PAGI::Utils::_ProtocolHelpers::ownership_refusal($self);
-    return unless $refused;
-    delete $self->{_pending_keepalive};
-    croak $refused;
+    delete $self->{_pending_keepalive} if $self->_may_not_drive;
+    return $self->SUPER::_require_ownership;
 }
 
 sub is_started {
     my $self = shift;
     return $self->connection_state eq 'started';
-}
-
-# True while the stream is live (started and not yet closed/disconnected).
-# Synchronous connection facts take precedence over local protocol progress.
-sub is_connected {
-    my $self = shift;
-    return $self->connection_state eq 'started';
-}
-
-# Disconnect reason - why the connection closed
-# Common values: 'client_closed', 'write_error', 'write_timeout', 'idle_timeout',
-# 'read_error', 'protocol_error', 'server_shutdown', 'server_error'
-sub disconnect_reason {
-    my $self = shift;
-    $self->_refresh_connection;
-    return $self->{_disconnect_reason};
 }
 
 # Start the SSE stream
@@ -249,7 +229,7 @@ sub try_send { my $self = shift; return $self->_keep($self->_try_send(@_)) }
 
 async sub _try_send {
     my ($self, $data) = @_;
-    return 0 if $self->_refusing || $self->_answered_by_another || $self->is_closed || $self->connection_state eq 'closing';
+    return 0 if $self->_may_not_drive || $self->is_closed || $self->connection_state eq 'closing';
 
     eval {
         defined($data = PAGI::Utils::_string_value($data))
@@ -269,7 +249,7 @@ async sub _try_send {
 
 async sub _try_send_json {
     my ($self, $data) = @_;
-    return 0 if $self->_refusing || $self->_answered_by_another || $self->is_closed || $self->connection_state eq 'closing';
+    return 0 if $self->_may_not_drive || $self->is_closed || $self->connection_state eq 'closing';
 
     eval {
         await $self->start unless $self->is_started;
@@ -309,7 +289,7 @@ sub try_send_comment { my $self = shift; return $self->_keep($self->_try_send_co
 
 async sub _try_send_comment {
     my ($self, $comment) = @_;
-    return 0 if $self->_refusing || $self->_answered_by_another || $self->is_closed || $self->connection_state eq 'closing';
+    return 0 if $self->_may_not_drive || $self->is_closed || $self->connection_state eq 'closing';
 
     eval {
         defined($comment = PAGI::Utils::_string_value($comment))
@@ -331,7 +311,7 @@ sub try_send_event { my $self = shift; return $self->_keep($self->_try_send_even
 
 async sub _try_send_event {
     my ($self, %opts) = @_;
-    return 0 if $self->_refusing || $self->_answered_by_another || $self->is_closed || $self->connection_state eq 'closing';
+    return 0 if $self->_may_not_drive || $self->is_closed || $self->connection_state eq 'closing';
 
     eval {
         my $event = _send_event_for(%opts);
@@ -368,40 +348,6 @@ sub _send_event_for {
     return $event;
 }
 
-# Internal: trigger error callbacks
-async sub _trigger_error {
-    my ($self, $error) = @_;
-
-    for my $cb (@{$self->{_on_error}}) {
-        eval {
-            my $r = $cb->($self, $error);
-            if (blessed($r) && $r->isa('Future')) {
-                await $r;
-            }
-        };
-        if ($@) {
-            warn "PAGI::SSE on_error callback error: $@";
-        }
-    }
-}
-
-# A late callback's failure fails finished while the handler can still see
-# it; once finished has resolved there is nothing left to fail, so it warns.
-async sub _late_close_worker {
-    my ($self, $previous, $callback) = @_;
-    # The callbacks before it report their own failures.
-    eval { await $previous->without_cancel };
-    my $ok = eval {
-        my $result = $callback->($self, $self->disconnect_reason, $self->disconnect_detail);
-        await $result if blessed($result) && $result->isa('Future');
-        1;
-    };
-    return if $ok;
-    die $@ unless $self->{_finished};
-    warn ref($self) . " on_close callback failed after the handler finished: $@";
-    return;
-}
-
 # Generic event dispatcher - dispatches to on_close or on_error
 sub on {
     my ($self, $event, $callback) = @_;
@@ -414,29 +360,6 @@ sub on {
     else {
         croak "Unknown event type: $event (expected close or error)";
     }
-}
-
-async sub _close_callbacks_worker {
-    my ($self) = @_;
-    my @failures;
-    for my $cb (@{$self->{_on_close}}) {
-        my $ok = eval {
-            my $result = $cb->($self, $self->disconnect_reason, $self->disconnect_detail);
-            await $result if blessed($result) && $result->isa('Future');
-            1;
-        };
-        push @failures, $@ unless $ok;
-    }
-    $self->{_on_close} = [];
-    $self->{_on_error} = [];
-    # Every callback has run; the first failure is the helper's to report.
-    die $failures[0] if @failures;
-    return;
-}
-
-sub _ends_without_application {
-    my ($self) = @_;
-    return $self->connection_state ne 'pending';
 }
 
 # Close the connection

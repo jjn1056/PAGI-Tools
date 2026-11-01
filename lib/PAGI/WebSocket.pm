@@ -23,6 +23,16 @@ sub new {
 
 sub _scope_type { 'websocket' }
 sub _initial_state { 'connecting' }  # connecting -> connected -> closed
+sub _open_state { 'connected' }
+
+# on_close callbacks receive ($code, $reason, $detail); on_error callbacks
+# receive ($error).
+sub _close_callback_args {
+    my ($self) = @_;
+    return ($self->close_code, $self->close_reason, $self->disconnect_detail);
+}
+sub _error_callback_args { my ($self, $error) = @_; return ($error) }
+sub _on_error_warning_name { 'PAGI::WebSocket' }
 
 sub _refresh_connection {
     my ($self) = @_;
@@ -35,77 +45,19 @@ sub _refresh_connection {
     return;
 }
 
-# This helper answered: its accept completed, or it was issued -- still
-# pending, or rejected by the server (D6: the helper keeps its claim and is
-# still treated as the answerer, as Starlette's WebSocket marks itself
-# connected before awaiting the accept). Either way it drives the connection
-# as an accepted socket; the server keeps a scope's sends in call order.
-# Once the connection has ended, no helper has answered it.
-sub _answered {
-    my ($self) = @_;
-    return $self->is_connected
-        || (($self->{_claim} // '') eq 'answering' && $self->connection_state eq 'connecting');
-}
-
-sub _require_ownership {
-    my ($self) = @_;
-    my $refused = PAGI::Utils::_ProtocolHelpers::ownership_refusal($self);
-    croak $refused if $refused;
-    return;
-}
-
 # What the scope holds is read through PAGI::HTTPConnection; the
 # subprotocols the client offered are WebSocket's own.
 sub subprotocols { shift->{scope}{subprotocols} // [] }
 
-sub is_connected {
-    my $self = shift;
-    return $self->connection_state eq 'connected';
-}
-
 sub close_code { my $self = shift; $self->_refresh_connection; return $self->{_close_code} }
 sub close_reason { my $self = shift; $self->_refresh_connection; return $self->{_close_reason} }
-sub disconnect_reason { my $self = shift; $self->_refresh_connection; return $self->{_disconnect_reason} }
 
-# A late callback's failure fails finished while the handler can still see
-# it; once finished has resolved there is nothing left to fail, so it warns.
-async sub _late_close_worker {
-    my ($self, $previous, $callback) = @_;
-    # The callbacks before it report their own failures.
-    eval { await $previous->without_cancel };
-    my $ok = eval {
-        my $result = $callback->($self->close_code, $self->close_reason, $self->disconnect_detail);
-        await $result if blessed($result) && $result->isa('Future');
-        1;
-    };
-    return if $ok;
-    die $@ unless $self->{_finished};
-    warn ref($self) . " on_close callback failed after the handler finished: $@";
-    return;
-}
-
-async sub _close_callbacks_worker {
+# Message callbacks are released with the others.
+sub _release_callbacks {
     my ($self) = @_;
-    my @failures;
-    for my $cb (@{$self->{_on_close}}) {
-        my $ok = eval {
-            my $result = $cb->($self->close_code, $self->close_reason, $self->disconnect_detail);
-            await $result if blessed($result) && $result->isa('Future');
-            1;
-        };
-        push @failures, $@ unless $ok;
-    }
-    $self->{_on_close} = [];
-    $self->{_on_error} = [];
+    $self->SUPER::_release_callbacks;
     $self->{_on_message} = [];
-    # Every callback has run; the first failure is the helper's to report.
-    die $failures[0] if @failures;
     return;
-}
-
-sub _ends_without_application {
-    my ($self) = @_;
-    return $self->connection_state ne 'connecting';
 }
 
 # Internal: a disconnect event arrived off the wire. The connection already
@@ -139,23 +91,6 @@ sub on {
     }
     else {
         croak "Unknown event type: $event (expected message, close, or error)";
-    }
-}
-
-# Internal: trigger error callbacks
-async sub _trigger_error {
-    my ($self, $error) = @_;
-
-    for my $cb (@{$self->{_on_error}}) {
-        eval {
-            my $r = $cb->($error);
-            if (blessed($r) && $r->isa('Future')) {
-                await $r;
-            }
-        };
-        if ($@) {
-            warn "PAGI::WebSocket on_error callback error: $@";
-        }
     }
 }
 
@@ -324,7 +259,7 @@ sub try_send_text { my $self = shift; return $self->_keep($self->_try_send_text(
 
 async sub _try_send_text {
     my ($self, $text) = @_;
-    return 0 if $self->is_closed || $self->_refusing || $self->_answered_by_another || !$self->_answered;
+    return 0 if $self->is_closed || $self->_may_not_drive || !$self->_answered;
 
     eval {
         defined($text = PAGI::Utils::_string_value($text))
@@ -353,7 +288,7 @@ sub try_send_bytes { my $self = shift; return $self->_keep($self->_try_send_byte
 
 async sub _try_send_bytes {
     my ($self, $bytes) = @_;
-    return 0 if $self->is_closed || $self->_refusing || $self->_answered_by_another || !$self->_answered;
+    return 0 if $self->is_closed || $self->_may_not_drive || !$self->_answered;
 
     eval {
         defined($bytes = PAGI::Utils::_string_value($bytes))
@@ -382,7 +317,7 @@ async sub _try_send_bytes {
 
 async sub _try_send_json {
     my ($self, $data) = @_;
-    return 0 if $self->is_closed || $self->_refusing || $self->_answered_by_another || !$self->_answered;
+    return 0 if $self->is_closed || $self->_may_not_drive || !$self->_answered;
 
     my $json = JSON::MaybeXS::encode_json($data);
     eval {

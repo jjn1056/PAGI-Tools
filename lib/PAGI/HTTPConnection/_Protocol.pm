@@ -7,11 +7,21 @@ use Future::AsyncAwait;
 use Future;
 use PAGI::Utils::_ProtocolHelpers ();
 use PAGI::FutureOwner;
+use Scalar::Util qw(blessed);
 
 
-# A subclass supplies _scope_type (the scope type it serves) and
-# _initial_state (its first connection state); _refresh_connection is its
-# own and runs once the shared fields exist.
+# A subclass supplies the methods the shared code calls:
+#   _scope_type             the scope type it serves
+#   _initial_state          its connection state before it answers
+#   _open_state             its connection state once it answered
+#   _refresh_connection     copies what it reads from pagi.connection; runs
+#                           once the shared fields exist
+#   _close_callback_args    what its on_close callbacks receive
+#   _error_callback_args    what its on_error callbacks receive, given the error
+#   _on_error_warning_name  the class a failing on_error callback's warning
+#                           names, for its subclasses too
+#   _try_send_json          the send behind try_send_json
+# and may refine _require_ownership and _release_callbacks, calling SUPER::.
 sub new {
     my ($class, $scope, $receive, $send) = @_;
 
@@ -56,6 +66,43 @@ sub new {
 # helper answered the open connection, it fails locally.
 sub _refusing { PAGI::Utils::_ProtocolHelpers::refusing($_[0]) }
 sub _answered_by_another { PAGI::Utils::_ProtocolHelpers::answered_by_another($_[0]) }
+
+# True while this helper may not drive the connection; _require_ownership
+# says why.
+sub _may_not_drive { defined PAGI::Utils::_ProtocolHelpers::ownership_refusal($_[0]) }
+
+sub _require_ownership {
+    my ($self) = @_;
+    my $refused = PAGI::Utils::_ProtocolHelpers::ownership_refusal($self);
+    croak $refused if $refused;
+    return;
+}
+
+# This helper answered: its accept or start completed, or it was issued --
+# still pending, or rejected by the server (D6: the helper keeps its claim and
+# is still treated as the answerer, as Starlette's WebSocket marks itself
+# connected before awaiting the accept). Either way it drives the connection
+# as an accepted socket or a started stream, and never answers it twice; the
+# server keeps a scope's sends in call order. Once the connection has ended,
+# no helper has answered it.
+sub _answered {
+    my ($self) = @_;
+    return $self->is_connected
+        || (($self->{_claim} // '') eq 'answering' && $self->connection_state eq $self->_initial_state);
+}
+
+# True while the connection is open: answered, and not yet closing, closed or
+# disconnected. Synchronous connection facts take precedence over local
+# protocol progress.
+sub is_connected {
+    my $self = shift;
+    return $self->connection_state eq $self->_open_state;
+}
+
+# Disconnect reason - why the connection closed
+# Common values: 'client_closed', 'write_error', 'write_timeout', 'idle_timeout',
+# 'read_error', 'protocol_error', 'server_shutdown', 'server_error'
+sub disconnect_reason { my $self = shift; $self->_refresh_connection; return $self->{_disconnect_reason} }
 
 sub disconnect_detail {
     my ($self) = @_;
@@ -139,6 +186,49 @@ sub _run_late_close_callback {
     return $self;
 }
 
+# A late callback's failure fails finished while the handler can still see
+# it; once finished has resolved there is nothing left to fail, so it warns.
+async sub _late_close_worker {
+    my ($self, $previous, $callback) = @_;
+    # The callbacks before it report their own failures.
+    eval { await $previous->without_cancel };
+    my $ok = eval {
+        my $result = $callback->($self->_close_callback_args);
+        await $result if blessed($result) && $result->isa('Future');
+        1;
+    };
+    return if $ok;
+    die $@ unless $self->{_finished};
+    warn ref($self) . " on_close callback failed after the handler finished: $@";
+    return;
+}
+
+async sub _close_callbacks_worker {
+    my ($self) = @_;
+    my @failures;
+    for my $cb (@{$self->{_on_close}}) {
+        my $ok = eval {
+            my $result = $cb->($self->_close_callback_args);
+            await $result if blessed($result) && $result->isa('Future');
+            1;
+        };
+        push @failures, $@ unless $ok;
+    }
+    $self->_release_callbacks;
+    # Every callback has run; the first failure is the helper's to report.
+    die $failures[0] if @failures;
+    return;
+}
+
+# Once the close callbacks have run, the helper holds no callbacks, nor what
+# they hold.
+sub _release_callbacks {
+    my ($self) = @_;
+    $self->{_on_close} = [];
+    $self->{_on_error} = [];
+    return;
+}
+
 # Internal: run all on_close callbacks exactly once, as work the helper owns
 sub _run_close_callbacks {
     my ($self) = @_;
@@ -181,6 +271,28 @@ sub on_error {
     return $self;
 }
 
+# Internal: trigger error callbacks
+async sub _trigger_error {
+    my ($self, $error) = @_;
+
+    for my $cb (@{$self->{_on_error}}) {
+        eval {
+            my $r = $cb->($self->_error_callback_args($error));
+            if (blessed($r) && $r->isa('Future')) {
+                await $r;
+            }
+        };
+        if ($@) {
+            warn $self->_on_error_warning_name . " on_error callback error: $@";
+        }
+    }
+}
+
+sub _ends_without_application {
+    my ($self) = @_;
+    return $self->connection_state ne $self->_initial_state;
+}
+
 # Keeps a Future the helper returned to its caller until it settles, so
 # finished waits for it. Its failure is the caller's to see: the owner keeps
 # only its completion. The callback also holds the caller's Future, so a
@@ -210,10 +322,12 @@ The state and lifetime L<PAGI::WebSocket> and L<PAGI::SSE> share, between
 them and L<PAGI::HTTPConnection>: the constructor's argument checks and the
 fields it builds (the send and receive coderefs, the connection state, the
 on_close and on_error callbacks, the owner of the helper's work and the
-Futures that settle C<finished>), the methods that read them, and the
-C<pagi.transport> flow-control readers. Each subclass supplies its scope
-type, its first connection state and how it refreshes from
-C<pagi.connection>. The public methods are documented in each subclass.
+Futures that settle C<finished>), the methods that read them, whether a
+helper may drive its connection, and the C<pagi.transport> flow-control
+readers. Each subclass supplies its scope type, its connection states before
+and after it answers, how it refreshes from C<pagi.connection>, what its
+C<on_close> and C<on_error> callbacks receive, and the send behind
+C<try_send_json>. The public methods are documented in each subclass.
 
 This class is a private implementation detail. Application code must not
 depend on its name or interface; it may change without a compatibility
