@@ -82,11 +82,11 @@ connection-local subscriber state with the stream that owns it; the route's
 The JSON-validation middleware reads the request through
 `PAGI::HTTPConnection`, which reads the scope without touching the body, so
 the endpoint still gets the whole body. `content_type` is the parsed media
-type -- lowercased, parameters dropped, and undef when the Content-Type field
+type -- lowercased, parameters dropped, and `''` when the Content-Type field
 is missing or sent twice -- so the check is an exact comparison:
 
 ```perl
-my $type = PAGI::HTTPConnection->new($scope)->headers->content_type // '';
+my $type = PAGI::HTTPConnection->new($scope)->content_type;
 unless ($type eq 'application/json') { ... }
 ```
 

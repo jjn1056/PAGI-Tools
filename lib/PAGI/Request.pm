@@ -4,7 +4,7 @@ use warnings;
 use parent 'PAGI::HTTPConnection';
 use Hash::MultiValue;
 use PAGI::Headers ();
-use PAGI::Authority ();
+use PAGI::Utils::Scope ();
 use Encode qw(find_encoding FB_CROAK FB_DEFAULT LEAVE_SRC);
 use Future::AsyncAwait;
 use JSON::MaybeXS qw(decode_json);
@@ -12,7 +12,6 @@ use Carp qw(croak);
 use PAGI::Request::MultiPartHandler;
 use PAGI::Request::Upload;
 use PAGI::ContentNegotiation;
-use PAGI::Exception::HTTP ();
 use PAGI::Exception::RequestBody;
 use PAGI::Request::BodyStream;
 use PAGI::Request::_BodyInput ();
@@ -37,7 +36,7 @@ sub raw          { shift->{scope} }
 # client's error, a PAGI::Exception::RequestBody (400) rather than a croak.
 sub _decode_body_utf8 {
     my ($str, $strict) = @_;
-    my $text = eval { PAGI::HTTPConnection::_decode_utf8($str, $strict) };
+    my $text = eval { PAGI::Utils::Scope::_decode_utf8($str, $strict) };
     return $text unless $@;
     PAGI::Exception::RequestBody->throw(
         reason => 'invalid_encoding',
@@ -74,30 +73,6 @@ sub _decode_body_text {
     );
 }
 
-sub host {
-    my ($self) = @_;
-    return PAGI::Authority->host_from_scope($self->{scope});
-}
-
-# Content-Type shortcut
-sub content_type {
-    my ($self, @opts) = @_;
-    return $self->_client_header('content_type', 'Content-Type', @opts) // '';
-}
-
-# The Content-Type charset parameter, as sent (undef when there is none)
-sub charset {
-    my $self = shift;
-    my $parameters = $self->headers->content_type_parameters or return undef;
-    return $parameters->{charset};
-}
-
-# Content-Length shortcut
-sub content_length {
-    my $self = shift;
-    return $self->headers->get_single('content-length');
-}
-
 # Method predicates
 sub is_get     { uc(shift->method // '') eq 'GET' }
 sub is_post    { uc(shift->method // '') eq 'POST' }
@@ -106,6 +81,12 @@ sub is_patch   { uc(shift->method // '') eq 'PATCH' }
 sub is_delete  { uc(shift->method // '') eq 'DELETE' }
 sub is_head    { uc(shift->method // '') eq 'HEAD' }
 sub is_options { uc(shift->method // '') eq 'OPTIONS' }
+
+# Set by XMLHttpRequest and by libraries that mimic it; a repeated field is
+# not the single value, so it is not an XHR.
+sub is_xhr {
+    return lc($_[0]->header('x-requested-with') // '') eq 'xmlhttprequest' ? 1 : 0;
+}
 
 sub is_disconnected {
     my $self = shift;
@@ -152,32 +133,6 @@ sub preferred_type {
     my @accept_values = $self->header_all('accept');
     my $accept = join(', ', @accept_values);
     return PAGI::ContentNegotiation->best_match(\@types, $accept);
-}
-
-# Extract Bearer token from Authorization header
-sub bearer_token {
-    my ($self, @opts) = @_;
-    return $self->_client_header('authorization_bearer', 'Authorization', @opts);
-}
-
-# Extract Basic auth credentials
-sub basic_auth {
-    my ($self, @opts) = @_;
-    return $self->_client_header('authorization_basic', 'Authorization', @opts);
-}
-
-# Reads one of the client's header fields through PAGI::Headers' $method.
-# What raise_on_error refuses -- a duplicate or malformed field -- is the
-# client's error, so it is an HTTP 400, as a body the client got wrong is.
-# The options are checked first, so an option error stays a croak.
-sub _client_header {
-    my ($self, $method, $field, @opts) = @_;
-    my $raise = PAGI::Headers::_read_options($method, @opts);
-    return $self->headers->$method(@opts) unless $raise;
-    my @value;
-    return wantarray ? @value : $value[0]
-        if eval { @value = $self->headers->$method(@opts); 1 };
-    PAGI::Exception::HTTP->throw(400, "The $field header could not be parsed.");
 }
 
 sub _require_body_scope {
@@ -355,24 +310,8 @@ async sub form_params {
 
     # URL-encoded form
     my $body = await $self->body;
-    my @pairs;
-
-    for my $part (split /[&;]/, $body) {
-        next unless length $part;
-        my ($key, $val) = split /=/, $part, 2;
-        $key //= '';
-        $val //= '';
-
-        # URL decode (handles + as space)
-        my $key_decoded = PAGI::HTTPConnection::_url_decode($key);
-        my $val_decoded = PAGI::HTTPConnection::_url_decode($val);
-
-        # UTF-8 decode unless raw mode
-        my $key_final = $raw ? $key_decoded : _decode_body_utf8($key_decoded, $strict);
-        my $val_final = $raw ? $val_decoded : _decode_body_utf8($val_decoded, $strict);
-
-        push @pairs, $key_final, $val_final;
-    }
+    my @pairs = PAGI::Utils::Scope::_query_pairs($body, raw => 1);
+    @pairs = map { _decode_body_utf8($_, $strict) } @pairs unless $raw;
 
     $self->{$cache_key} = Hash::MultiValue->new(@pairs);
     return $self->{$cache_key};
@@ -487,7 +426,7 @@ PAGI::Request - Convenience wrapper for PAGI request scope
         # Basic properties
         my $method = $req->method;        # GET, POST, etc.
         my $path   = $req->path;          # /users/42
-        my $host   = $req->host;          # example.com
+        my $host   = $req->host;          # example.com (no port)
 
         # Query parameters (Hash::MultiValue)
         my $page = $req->query_param('page');
@@ -536,7 +475,7 @@ A PAGI::Request is a L<PAGI::HTTPConnection>: what can be read from the scope
 alone -- path, headers, query and path parameters, cookies, client,
 application state -- comes from the methods it inherits (see
 L</INHERITED FROM PAGI::HTTPConnection>). This class adds the method, the
-Host and Content-Type readers, the body, forms and uploads.
+body, forms and uploads.
 
 HTTP, WebSocket, and SSE scopes are supported for metadata access. Request
 body input is available for HTTP and SSE scopes using each protocol's native
@@ -575,41 +514,6 @@ Request method (GET, POST, PUT, etc.). A WebSocket scope may omit this value,
 in which case C<method> returns C<undef>; it does not guess GET for an extended
 CONNECT request.
 
-=head2 host
-
-Returns the complete validated Host field, including an explicit port. Returns
-C<undef> only when Host is absent, and croaks when Host is malformed or occurs
-more than once. To read the field without validation, use
-L<PAGI::HTTPConnection/header> with C<'host'>: the raw value, or every value
-joined C<", "> when Host is repeated.
-
-=head2 content_type
-
-The normalized media type from one valid Content-Type field, without
-parameters. Returns C<''> when the field is absent, duplicated, or malformed.
-With C<raise_on_error =E<gt> 1> a duplicate or malformed field throws a
-L<PAGI::Exception::HTTP> 400, C<The Content-Type header could not be parsed.>:
-the client sent it, so it is the client's error, which a Compose application
-answers by itself (see L</AUTH HELPERS>).
-Use C<< $request->header('Content-Type') >> for the raw joined lookup;
-parsing does not alter the stored field.
-
-=head2 charset
-
-    my $charset = $request->charset;    # 'ISO-8859-1', or undef
-
-The C<charset> parameter of the Content-Type field, exactly as the client
-sent it (unquoted), or C<undef> when the field has none or is absent,
-duplicated or malformed. Nothing is decoded because of it: pass it on when
-you decide to read the body as text, for example
-C<< body_stream(decode => $request->charset // 'UTF-8') >> (see
-L</body_stream>).
-
-=head2 content_length
-
-Content-Length header value. A Content-Length sent twice reads as absent
-(C<undef>).
-
 =head2 raw
 
 Deferred alias for L<PAGI::HTTPConnection/scope>; returns the raw scope hashref without interpreting
@@ -623,9 +527,10 @@ These methods read the scope and are documented in L<PAGI::HTTPConnection>:
 
 =item * Scope properties: C<scope>, C<connection>, C<client>, C<server>,
 C<scheme>, C<http_version>, C<path>, C<raw_path>, C<raw_path_info>,
-C<request_uri>, C<query_string>
+C<request_uri>, C<host>, C<query_string>, C<uri>, C<base_uri>
 
-=item * Headers: C<headers>, C<header>, C<header_all>
+=item * Headers: C<headers>, C<header>, C<header_all>, C<content_type>,
+C<charset>, C<content_length>, C<bearer_token>, C<basic_auth>
 
 =item * Query parameters: C<query_params>, C<query_param>,
 C<raw_query_params>, C<raw_query_param>
@@ -813,7 +718,7 @@ so they fail the same way.
     my $text = await $req->text(strict => 1);   # invalid bytes are a 400
 
 Read the body as text, decoded with the charset the client declared in
-Content-Type (see L</charset>), or as UTF-8 when it declared none. A charset
+Content-Type (see L<PAGI::HTTPConnection/charset>), or as UTF-8 when it declared none. A charset
 L<Encode> does not know throws a L<PAGI::Exception::RequestBody> (415). With
 C<< strict => 1 >>, bytes invalid in the charset throw one (400); without it
 they become U+FFFD. See L</BAD REQUEST BODIES>.
@@ -947,11 +852,21 @@ C<application/problem+json>, ...).
 
 =head2 is_form
 
-True if Content-Type is form-urlencoded or multipart.
+True if Content-Type is C<application/x-www-form-urlencoded> or
+C<multipart/form-data> (it is true for multipart; see L</is_multipart>).
 
 =head2 is_multipart
 
 True if Content-Type is C<multipart/form-data>.
+
+=head2 is_xhr
+
+    if ($req->is_xhr) { ... }
+
+True (C<1>) when the C<X-Requested-With> header is C<XMLHttpRequest>, in any
+case; C<0> when it is absent, has another value or is repeated. jQuery and
+similar libraries send it; C<fetch()> does not, so a C<fetch()> request is not
+an XHR by this test.
 
 =head2 accepts
 
@@ -961,6 +876,15 @@ True if Content-Type is C<multipart/form-data>.
 Check Accept header (supports wildcards and shortcuts). Returns true if the
 client accepts the given MIME type.
 
+For a route that answers by Accept, put L<PAGI::Middleware::ContentNegotiation>
+on it and answer with L<PAGI::ContentNegotiation/respond_to>: the middleware
+writes C<Vary: Accept> and the 406 for you. A handler that calls C<accepts>
+itself must set C<Vary: Accept> on every answer it gives from it:
+
+    return response('JSON', $body, headers => ['Vary' => 'Accept'])
+        if $req->accepts('json');
+    return response('HTML', $page, headers => ['Vary' => 'Accept']);
+
 =head2 preferred_type
 
     my $type = $req->preferred_type('json', 'html', 'xml');
@@ -969,12 +893,16 @@ Returns the best matching content type from the provided list based on the
 client's Accept header and quality values. Returns undef if none are acceptable.
 Supports shortcuts (json, html, xml, etc).
 
-A response chosen this way depends on the request's Accept header, so every
-answer the handler gives from it -- the 406 and the no-Accept default
-included -- should carry C<Vary: Accept>, and the handler writes it. To have
-it written for you, along with the 406, put
+A response chosen this way depends on the request's Accept header. Put
 L<PAGI::Middleware::ContentNegotiation> on the route and answer with
-L<PAGI::ContentNegotiation/respond_to>.
+L<PAGI::ContentNegotiation/respond_to>, which writes C<Vary: Accept> on every
+answer, the 406 and the no-Accept default included. A handler that calls
+C<preferred_type> itself writes it:
+
+    my $type = $req->preferred_type('json', 'html') // 'html';
+    return response('JSON', $body, headers => ['Vary' => 'Accept'])
+        if $type eq 'json';
+    return response('HTML', $page, headers => ['Vary' => 'Accept']);
 
 =head1 CONNECTION STATE METHODS
 
@@ -1004,36 +932,13 @@ integration truly requires the server's raw transport handle.
 
 =head1 AUTH HELPERS
 
-=head2 bearer_token
+C<bearer_token>, C<basic_auth>, C<content_type> and the other header readers are
+inherited from L<PAGI::HTTPConnection> (see L</INHERITED FROM
+PAGI::HTTPConnection>); with C<raise_on_error =E<gt> 1> they throw a
+L<PAGI::Exception::HTTP> 400 for a field the client got wrong.
 
-    my $token = $req->bearer_token(raise_on_error => 1);
-
-Returns an RFC 6750 Bearer token only when exactly one Authorization field is
-present. Missing fields and another identifiable scheme return C<undef>.
-Malformed Bearer credentials, including the former permissive whitespace and
-partial-token forms, and duplicate fields, return C<undef> by default; with
-C<raise_on_error =E<gt> 1> they throw a L<PAGI::Exception::HTTP> 400, C<The
-Authorization header could not be parsed.> Unknown options are errors (a
-croak, not a 400).
-
-=head2 basic_auth
-
-    my ($user, $pass) = $req->basic_auth(raise_on_error => 1);
-
-Returns Basic C<(username, password)> bytes in list context only when exactly
-one Authorization field contains a valid conventional padded Base64 credential.
-It splits at the first colon and does not decode character encodings or verify
-credentials. Missing, another scheme, duplicates, and malformed input return
-C<(undef, undef)> by default; with C<raise_on_error =E<gt> 1> duplicates and
-malformed Basic credentials throw a L<PAGI::Exception::HTTP> 400, C<The
-Authorization header could not be parsed.> Unknown options are errors (a
-croak, not a 400).
-
-The 400 is the client's error, not the application's: a Compose application
-answers it by itself, at a route or in an authentication backend (see
-L<PAGI::Middleware::Authentication>), and does not log it. Its message never
-carries the credential. The L<PAGI::Headers> readers these call raise plain
-errors instead, since they parse any header list, not only a request's.
+The 400 and the Compose application's handling of it are described under
+L<PAGI::HTTPConnection/basic_auth>.
 
 =head2 Constructing responses
 

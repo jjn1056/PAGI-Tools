@@ -152,11 +152,14 @@ sub run_cli {
 subtest 'the grammar' => sub {
     my $app = Local::Echo->new;
     is [(PAGI::App::_parse_request('/echo'))[0, 1]], ['GET', '/echo'], 'the method defaults to GET';
+    # A query or form body writes a space as '+', as a browser's form encoding does.
     my ($m, $p, %o) = PAGI::App::_parse_request(GET => '/echo?a=1', 'X-Thing:', 'v', 'b=2 3');
-    is [$m, $p, $o{headers}], ['GET', '/echo?a=1&b=2%203', [['X-Thing', 'v']]], 'a header; a field joins the query';
+    is [$m, $p, $o{headers}], ['GET', '/echo?a=1&b=2+3', [['X-Thing', 'v']]], 'a header; a field joins the query';
     (undef, undef, %o) = PAGI::App::_parse_request(POST => '/echo', 'b=2 3');
-    is [$o{body}, $o{headers}], ['b=2%203', [['Content-Type', 'application/x-www-form-urlencoded']]],
+    is [$o{body}, $o{headers}], ['b=2+3', [['Content-Type', 'application/x-www-form-urlencoded']]],
         'a field is a urlencoded body for POST';
+    (undef, undef, %o) = PAGI::App::_parse_request(POST => '/echo', "n=caf\xC3\xA9 +");
+    is $o{body}, 'n=caf%C3%A9+%2B', 'a field of bytes is escaped once, not UTF-8 encoded again';
     (undef, undef, %o) = PAGI::App::_parse_request(POST => '/raw', 'Content:', 'hi');
     is $o{body}, 'hi', 'Content: is the body';
     (undef, $p, %o) = PAGI::App::_parse_request('ann:pw@/echo');

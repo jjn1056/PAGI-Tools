@@ -16,6 +16,38 @@
     every parse on the object. A scope with no path dies where the path is
     read; cookies come from every Cookie field, split on ';' only, quotes
     removed, never percent-decoded, the last of a repeated name winning.
+  - PAGI::HTTPConnection reads the header facts, so WebSocket and SSE get
+    them too: content_type, charset, content_length, bearer_token and
+    basic_auth moved up from PAGI::Request with their behaviour unchanged,
+    and raise_on_error still throws the HTTP 400. Calling code needs no change.
+  - PAGI::Request::is_xhr, true when X-Requested-With is XMLHttpRequest (any
+    case). fetch() does not send the header.
+  - PAGI::Utils::URI, the request's URL as an immutable value, on every
+    connection as $conn->uri (and $conn->base_uri, the application's root
+    URL), kept on the connection, never in the scope: scheme, authority,
+    host, port (only an explicit one), path (decoded, with the root path),
+    raw_path, query_string, query_params and raw_query_params. The host is
+    the client's Host read as Mojolicious reads it (percent-decoded),
+    unvalidated, and percent-encoded again in the string form, so a hostile
+    Host cannot change the path or query; an
+    unedited URL is scheme://authority followed by the path and query,
+    escaped as request_uri escapes them. eq compares
+    the string forms byte for byte. Edits return a new value:
+    with_query(@pairs) (each named key's pairs replaced at the end, undef
+    deletes, an arrayref repeats), without_query(@keys), replace(%parts)
+    (scheme, authority or host and port, path or raw_path, query_params or
+    query_string, fragment; a new path keeps the query) and
+    resolve($reference) (RFC 3986 5.2), the way to make an absolute URL
+    from path_for's path. A query edit writes every pair form-encoded (a
+    space is +); the path is kept as sent, a leading // included, and
+    only path_query holds it to one /. Query names, values and path
+    segments are text; an object whose class overloads "" counts as its
+    string, and any other reference dies. Also
+    add_query(@pairs) (appends, removes nothing), join_path(@segments),
+    replace(path_segments => \@text) (a / inside a segment stays %2F),
+    path_query, path_segments, is_secure, origin, and is_equivalent($other):
+    RFC 3986 6.2.2 on scheme, authority and path, then the decoded
+    query_params compared in order (eq stays byte for byte).
   - PAGI::Middleware::Stash (middleware('Stash')) gives every layer below
     it one shared stash, so a middleware sees what a handler stored, after
     the handler returns, through any scope copies between them.
@@ -304,6 +336,8 @@
     SameSite=None and secure.
 
   [Changed]
+  - url_for and path_for write a space in a query as "+" (path segments and
+    the fragment keep "%20").
   - PAGI::WebSocket and PAGI::SSE hand each send to the server at once and
     rely on it to keep a connection's sends in call order, as
     PAGI::Spec::Www 0.7 requires. A handler with several producers needs no
@@ -448,9 +482,14 @@
   - GZip compresses streaming responses.
   - Cascade advances only on a status in catch; a child that sends
     nothing is an error, not a miss.
-  - Host data is validated strictly: Request authority, TrustedHosts and
-    HTTPSRedirect answer 400 for malformed or duplicate Host; ReverseProxy
-    accepts one trusted X-Forwarded-Host.
+  - Host data is validated strictly by TrustedHosts and HTTPSRedirect, which
+    answer 400 for malformed or duplicate Host; ReverseProxy accepts one
+    trusted X-Forwarded-Host.
+  - host is on PAGI::HTTPConnection, so $ws->host and $sse->host exist.
+    url_for takes its scheme://authority from the request's URL,
+    percent-encoding the authority, so a malformed Host no longer croaks and
+    cannot change the URL's path or query. Use TrustedHosts to accept only
+    the hosts the application serves.
   - Accept matching uses the most specific quality (an exact q=0 wins).
   - XSendfile mappings match path components, most specific first.
   - The Session middleware re-sends the cookie on a read once half of
@@ -510,6 +549,20 @@
     Tutorial link to one statement of each rule instead of restating it.
 
   [Breaking -- see UPGRADING.md]
+  - $request->host is the uri's host: the Host as sent, without its port
+    ("example.com" for "Host: example.com:8080"; use $request->uri->authority
+    for host:port or $request->uri->port), never validated, and the server
+    address where there is no Host, where it was undef. Code that builds
+    "http://" . $request->host . $path loses the port.
+  - PAGI::Test::Client's query => and form => (shipped in 0.002002) write a
+    space as "+", where they wrote "%20"; a literal "+" is "%2B".
+  - ReverseProxy covers WebSocket and SSE scopes, as it does HTTP, where it
+    passed them through: the same trusted-proxy gate, X-Forwarded-For and
+    X-Real-IP set the client, X-Forwarded-Proto sets the scheme (wss for a
+    WebSocket behind https, https for SSE) and X-Forwarded-Host replaces
+    Host, so $ws->uri and $sse->uri read the proxied values. A trusted
+    WebSocket or SSE request with a repeated or malformed X-Forwarded-Host
+    is refused as an HTTP request is. TrustedHosts stays HTTP-only.
   - PAGI::Headers->get, PAGI::Request->header, PAGI::WebSocket->header,
     PAGI::SSE->header and PAGI::Response->header join a repeated field
     ", " in order (RFC 9110 5.3; as Mojo::Headers, PSGI and Plack::Request

@@ -528,11 +528,12 @@ subtest 'mounted application runtime boundaries retain root frames and decoded p
         raw_path => '/tenants/caf%C3%A9%2050%25/items/one',
         root_path => '/edge root')), 'tenant',
         'a decoded dynamic Mount prefix reaches its child');
+    # A query writes a space as '+', as a browser's form encoding does.
     is(\@tenant_seen, [{
         scope_root => "/edge root/tenants/$tenant_value",
         frame_root => '/edge root',
         captures => { tenant => $tenant_value, id => 'one' },
-        reverse => '/edge%20root/tenants/caf%C3%A9%2050%25/items/a%20b%25?q=caf%C3%A9%20%25',
+        reverse => '/edge%20root/tenants/caf%C3%A9%2050%25/items/a%20b%25?q=caf%C3%A9+%25',
     }], 'the child receives decoded placement data before reverse output encodes it once');
 };
 

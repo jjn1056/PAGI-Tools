@@ -764,17 +764,12 @@ sub _request_target {
         $raw_path = Encode::encode('UTF-8', $raw_path);
         $raw_path =~ s/([\x80-\xff])/sprintf('%%%02X', ord $1)/eg;
     }
-    my $path = $raw_path;
-    if ($path =~ /%/) {
-        (my $bytes = $path) =~ s/%([0-9A-Fa-f]{2})/chr hex $1/eg;
-        $path = eval { Encode::decode('UTF-8', $bytes, Encode::FB_CROAK) } // $bytes;
-    }
-    return ($raw_path, $query_string, $path);
+    return ($raw_path, $query_string, PAGI::Utils::Scope::_decode_path($raw_path));
 }
 
 # A form or query value is characters, sent UTF-8 percent-encoded as a
-# browser sends it, like the path and json =>.
-sub _url_encode { return PAGI::Utils::Scope::_encode_component(@_) }
+# browser sends it, a space as "+", like the path and json =>.
+sub _url_encode { return PAGI::Utils::Scope::_encode_form_component(@_) }
 
 # HTTP/1.1 connection-specific header stripping (PAGI spec: "Over HTTP/1.1
 # the server must ignore or strip application-supplied Transfer-Encoding and
@@ -1331,7 +1326,8 @@ Query string parameters. Supports multiple formats:
 Keys and values are characters, sent UTF-8 percent-encoded, as a browser
 sends them and as the path is: C<< query => { q => "caf\x{e9}" } >> sends
 C<q=caf%C3%A9>, and the application reads C<"caf\x{e9}">. Pass characters, not
-encoded bytes: a byte string is encoded again.
+encoded bytes: a byte string is encoded again. A space is sent C<+> and a
+literal C<+> C<%2B>, as form encoding writes them.
 
 B<Note:> Query params are B<appended> to any existing query string in the path.
 To avoid duplicates, put all params either in the path or in the query option,
@@ -1345,8 +1341,9 @@ JSON request body. Automatically sets Content-Type to application/json.
 
 Form-encoded request body. Sets Content-Type to application/x-www-form-urlencoded.
 Keys and values are characters, sent UTF-8 percent-encoded as a browser sends
-a form (and as C<json> is UTF-8); for bytes of your own, pass C<body> and a
-Content-Type. Supports multiple formats:
+a form (and as C<json> is UTF-8), a space as C<+> and a literal C<+> as
+C<%2B>; for bytes of your own, pass C<body> and a Content-Type. Supports
+multiple formats:
 
     # Simple hash
     form => { user => 'admin', pass => 'secret' }

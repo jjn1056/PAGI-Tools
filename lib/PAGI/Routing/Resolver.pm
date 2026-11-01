@@ -4,7 +4,7 @@ use strict;
 use warnings;
 use Carp qw(croak);
 use Scalar::Util qw(blessed refaddr);
-use PAGI::Authority ();
+use PAGI::Utils::URI ();
 use PAGI::Routing::Mount ();
 use PAGI::Routing::Pattern ();
 use PAGI::Utils::Scope ();
@@ -417,9 +417,9 @@ sub _url_for_rendered_scope {
         $url_scheme = $scheme_for{$scope_scheme};
     }
 
-    my $authority = PAGI::Authority->from_scope($scope);
+    my $origin = PAGI::Utils::URI->from_scope($scope)->replace(scheme => $url_scheme)->origin;
     my $path = _join_root_path($root_path, $rendered->{path});
-    return "$url_scheme://$authority$path";
+    return "$origin$path";
 }
 
 sub _render_reverse {
@@ -489,7 +489,7 @@ sub _render_resolved_reverse {
         my $value = $arguments->{query}{$key};
         croak "query parameter '$key' must be a scalar" if ref($value);
         $value = '' unless defined $value;
-        push @pairs, _encode_component($key) . '=' . _encode_component($value);
+        push @pairs, _encode_form_component($key) . '=' . _encode_form_component($value);
     }
     $path .= '?' . join('&', @pairs) if @pairs;
     $path .= '#' . _encode_component($arguments->{fragment})
@@ -616,6 +616,9 @@ sub _is_canonical_namespace {
     return 1;
 }
 
+# The path below root_path, handed out on its own: a wildcard value such as
+# "/evil.com/p" can make it start with "//", which a browser reads as another
+# host, so the result keeps one leading slash.
 sub _join_root_path {
     my ($root_path, $path) = @_;
     $root_path = '' unless defined $root_path;
@@ -628,10 +631,11 @@ sub _join_root_path {
     }
     chop $root_path if length($root_path) && substr($root_path, -1) eq '/'
         && length($path) && substr($path, 0, 1) eq '/';
-    return $root_path . $path . $suffix;
+    return PAGI::Utils::Scope::_one_leading_slash($root_path . $path . $suffix);
 }
 
 sub _encode_component { return PAGI::Utils::Scope::_encode_component(@_) }
+sub _encode_form_component { return PAGI::Utils::Scope::_encode_form_component(@_) }
 
 sub named_routes {
     my ($self) = @_;
@@ -726,12 +730,12 @@ and query components are UTF-8 percent-encoded; the fragment is UTF-8 encoded
 as one component after the query.
 
 C<path_for> validates values and returns an application-relative string.
-C<url_for_scope> additionally reads one request scope, delegates authority to
-L<PAGI::Authority>, applies the compiled-router C<root_path> boundary, and
+C<url_for_scope> additionally reads one request scope, takes the authority from
+L<PAGI::Utils::URI>, applies the compiled-router C<root_path> boundary, and
 returns an absolute string. It resolves the target once and maps the indexed
 route kind to the URL scheme; for example, suffix ordering is
-C<https://example.test/items/7?q=two%20words#details> for HTTP/SSE and
-C<wss://example.test/socket/7?q=two%20words#details> for WebSocket. Neither
+C<https://example.test/items/7?q=two+words#details> for HTTP/SSE and
+C<wss://example.test/socket/7?q=two+words#details> for WebSocket. Neither
 reverse method invokes receive/send callbacks or emits protocol events. The decoded Unicode boundary
 is escaped component-wise before it is joined to the already escaped generated
 path. Both return a string or croak; neither redirects or mutates a response.
@@ -758,7 +762,7 @@ snapshot before explicit params are overlaid. Absolute scope-bound references
 and all public Router calls remain inheritance-free. Query and fragment values
 are never read from captures. The existing Pattern renderer remains
 responsible for missing, extra, scalar, and constraint validation. URL mode
-adds the request scheme and L<PAGI::Authority> only after target resolution;
+adds the request scheme and L<PAGI::Utils::URI> authority only after target resolution;
 neither mode performs protocol I/O.
 
 Relative capture inheritance is a URL-construction convenience. It does not

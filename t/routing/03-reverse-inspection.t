@@ -175,9 +175,10 @@ subtest 'mounted Router applications publish placement-specific reverse paths' =
     is($unnamed->path_for('/show', { id => 9 }), '/people/9',
         'an unnamed placement retains the current namespace');
     is(
+        # A query writes a space as '+', as a browser's form encoding does.
         $root->path_for('/left/show', { id => 7 },
             { q => 'two words' }, 'details'),
-        '/left/7?q=two%20words#details',
+        '/left/7?q=two+words#details',
         'a mounted descendant retains query and fragment rendering',
     );
     is(refaddr($root->route_named('/left/show')), refaddr($show),
@@ -403,25 +404,26 @@ subtest 'Router path_for accepts equivalent compact and named reverse arguments'
         route('/items' => sub { }, name => 'index'),
     ]);
 
+    # A query writes a space as '+', as a browser's form encoding does.
     my @cases = (
         ['defaults', ['/index'], '/items'],
         ['compact params', ['/show', { id => 7 }], '/items/7'],
         ['compact query', ['/show', { id => 7 }, { q => 'two words' }],
-            '/items/7?q=two%20words'],
+            '/items/7?q=two+words'],
         ['compact fragment', ['/show', { id => 7 }, { q => 'two words' }, 'details'],
-            '/items/7?q=two%20words#details'],
+            '/items/7?q=two+words#details'],
         ['named full', ['/show', params => { id => 7 },
             query => { q => 'two words' }, fragment => 'details'],
-            '/items/7?q=two%20words#details'],
+            '/items/7?q=two+words#details'],
         ['compact query only', ['/index', {}, { q => 'two words' }],
-            '/items?q=two%20words'],
+            '/items?q=two+words'],
         ['compact fragment only', ['/index', {}, {}, 'two words'],
             '/items#two%20words'],
         ['named reordered', ['/show', fragment => 'details',
             params => { id => 7 }, query => { q => 'two words' }],
-            '/items/7?q=two%20words#details'],
+            '/items/7?q=two+words#details'],
         ['named query first', ['/show', query => { q => 'two words' },
-            params => { id => 7 }], '/items/7?q=two%20words'],
+            params => { id => 7 }], '/items/7?q=two+words'],
         ['compact undef fragment', ['/show', { id => 7 }, {}, undef], '/items/7'],
         ['named undef fragment', ['/show', params => { id => 7 }, fragment => undef],
             '/items/7'],
@@ -695,12 +697,13 @@ subtest 'reverse rendering validates complete ancestry and escapes values' => su
     ]);
 
     is(
+        # A query writes a space as '+', as a browser's form encoding does.
         $routing->path_for(
             '/account/show',
             { account => "caf\x{e9} space", item => 'right' },
             { z => 'last', 'a key' => 'A&B', empty => undef },
         ),
-        '/accounts/caf%C3%A9%20space/items/right?a%20key=A%26B&empty=&z=last',
+        '/accounts/caf%C3%A9%20space/items/right?a+key=A%26B&empty=&z=last',
         'outer and leaf values render before a sorted escaped query',
     );
     is(

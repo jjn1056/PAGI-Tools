@@ -104,6 +104,9 @@ a larger framework:
 =item * L<PAGI::HTTPConnection> for reading a request's headers, query and cookies
 from the scope alone, in middleware or across HTTP, WebSocket and SSE
 
+=item * L<PAGI::Utils::URI>, the request's URL as an immutable value
+(C<< $request->uri >>), for links built from the current URL
+
 =item * L<PAGI::Routing> and L<PAGI::Routing::URL>
 
 =item * L<PAGI::Routing::OpenAPI> for an OpenAPI document from an application's routes

@@ -424,7 +424,8 @@ subtest 'query parameter encoding' => sub {
 
     # Test special characters are encoded
     my $res = $client->get('/test', query => { 'key with spaces' => 'value&with=special' });
-    like $res->text, qr/key%20with%20spaces/, 'key is URL encoded';
+    # A query writes a space as '+', as a browser's form encoding does.
+    like $res->text, qr/key\+with\+spaces/, 'key is URL encoded';
     like $res->text, qr/value%26with%3Dspecial/, 'value is URL encoded';
 
     # Test query params merge with path query

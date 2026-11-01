@@ -93,6 +93,7 @@ subtest 'path_for renders sorted query and one escaped fragment' => sub {
         route('/search/{term}' => handler(), name => 'search'),
     ]);
 
+    # A query writes a space as '+', as a browser's form encoding does.
     is(
         $routing->path_for(
             '/search',
@@ -100,7 +101,7 @@ subtest 'path_for renders sorted query and one escaped fragment' => sub {
             { page => 2, 'a key' => 'A&B' },
             'result details',
         ),
-        '/search/two%20words?a%20key=A%26B&page=2#result%20details',
+        '/search/two%20words?a+key=A%26B&page=2#result%20details',
         'path, query, and fragment use shared component encoding',
     );
     is(

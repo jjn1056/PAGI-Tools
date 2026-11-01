@@ -288,4 +288,49 @@ subtest 'an object built on a rewritten copy sees the rewrite' => sub {
     is $original->header('x-added'), undef, 'the original headers are unaffected';
 };
 
+subtest 'header facts: content_type, charset, content_length, bearer_token, basic_auth' => sub {
+    my $on = sub {
+        my ($type, @headers) = @_;
+        return PAGI::HTTPConnection->new({ type => $type, headers => [@headers] });
+    };
+    for my $type (qw(http websocket sse)) {
+        my $c = $on->($type,
+            ['Content-Type', 'Text/HTML; charset="ISO-8859-1"'], ['Content-Length', '12']);
+        is $c->content_type, 'text/html', "$type: content_type is the media type";
+        is $c->charset, 'ISO-8859-1', "$type: charset is the parameter";
+        is $c->content_length, '12', "$type: content_length";
+
+        my $bare = $on->($type);
+        is $bare->content_type, '', "$type: content_type is '' when absent";
+        is $bare->charset, undef, "$type: charset is undef when absent";
+        is $bare->content_length, undef, "$type: content_length is undef when absent";
+        is $bare->bearer_token, undef, "$type: no bearer_token without Authorization";
+
+        is $on->($type, ['Authorization', 'Bearer abc123'])->bearer_token, 'abc123',
+            "$type: bearer_token";
+        is [$on->($type, ['Authorization', 'Basic dXNlcjpwYXNz'])->basic_auth],
+            ['user', 'pass'], "$type: basic_auth gives (user, pass)";
+        is $on->($type, ['Content-Length', '1'], ['Content-Length', '1'])->content_length,
+            undef, "$type: a repeated Content-Length reads as absent";
+    }
+
+    my $malformed = $on->('http', ['Authorization', 'Bearer']);
+    is $malformed->bearer_token, undef, 'a malformed Bearer reads as undef';
+    my $error = dies { $malformed->bearer_token(raise_on_error => 1) };
+    isa_ok $error, ['PAGI::Exception::HTTP'], 'raise_on_error throws';
+    is $error->status_code, 400, 'the malformed bearer is a 400';
+    is $error->client_message, 'The Authorization header could not be parsed.', 'its message';
+
+    my $basic = $on->('websocket', ['Authorization', 'Basic !!!']);
+    my $basic_error = dies { $basic->basic_auth(raise_on_error => 1) };
+    is $basic_error->status_code, 400, 'a malformed Basic is a 400 on a websocket';
+
+    like dies { $malformed->bearer_token(bogus => 1) }, qr/bogus/,
+        'an unknown option is a croak, not a 400';
+    my $dup = $on->('http', ['Content-Type', 'a/b'], ['Content-Type', 'c/d']);
+    is $dup->content_type, '', 'a repeated Content-Type reads as absent';
+    my $dup_error = dies { $dup->content_type(raise_on_error => 1) };
+    is $dup_error->status_code, 400, 'content_type(raise_on_error) throws the 400';
+};
+
 done_testing;
