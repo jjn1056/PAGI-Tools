@@ -130,6 +130,28 @@ subtest 'PAGI::ContentNegotiation' => sub {
     }
 };
 
+subtest 'PAGI::ContentNegotiation: the EXAMPLES application' => sub {
+    my $pod = do {
+        open my $fh, '<', "$FindBin::Bin/../../lib/PAGI/ContentNegotiation.pm" or die $!;
+        local $/;
+        <$fh>;
+    };
+    my ($section) = $pod =~ /^=head2 Content Negotiation in a PAGI App\n(.*?)^=head1 /ms;
+    my $code = join "\n", map { s/^    //mgr } grep { /\A[ \t]/ } split /\n{2,}/, $section =~ s/\A\n+//r;
+    my $app = eval "package PAGITest::NegotiationExample; use Future::AsyncAwait; use feature 'signatures'; no warnings 'experimental::signatures'; $code; \\&app";
+    is $@, '', 'the example compiles and runs as published' or return;
+    my $client = PAGI::Test::Client->new(app => $app);
+    my %by_accept = (
+        'application/json' => 'application/json',
+        'text/html'        => 'text/html',
+        'application/xml'  => 'application/xml',
+    );
+    for my $accept (sort keys %by_accept) {
+        my $res = $client->get('/', headers => { Accept => $accept });
+        is $res->header('Content-Type'), $by_accept{$accept}, "$accept is answered in kind";
+    }
+};
+
 subtest 'PAGI::SSE: a client that leaves as the stream starts' => sub {
     my $app = synopsis_app('SSE', 'PAGITest::SSESynopsisLeaving') or return;
     my $client = PAGI::Test::Client->new(app => leaves_at_handshake($app));

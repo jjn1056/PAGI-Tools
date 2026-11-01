@@ -2,12 +2,15 @@ package PAGI::HTTPConnection;
 use strict;
 use warnings;
 use Carp qw(croak);
+use Exporter 'import';
 use Hash::MultiValue;
 use PAGI::Exception::HTTP ();
 use PAGI::Headers ();
 use PAGI::Utils::Scope ();
 use PAGI::Utils::URI ();
 use Scalar::Util qw(blessed);
+
+our @EXPORT_OK = qw(http_connection);
 
 # A croak from a helper a reader calls names the caller's line.
 our @CARP_NOT = qw(PAGI::Utils::Scope PAGI::Utils::URI);
@@ -20,6 +23,8 @@ sub new {
     PAGI::Utils::Scope::_require_connection_type($class, $scope);
     return bless { scope => $scope }, $class;
 }
+
+sub http_connection { PAGI::HTTPConnection->new(@_) }
 
 sub scope        { shift->{scope} }
 sub connection   { shift->{scope}{'pagi.connection'} }
@@ -262,6 +267,10 @@ PAGI::HTTPConnection - Read an HTTP, WebSocket or SSE request without touching i
 
     my $conn = PAGI::HTTPConnection->new($scope);
 
+    # or, as a function
+    use PAGI::HTTPConnection qw(http_connection);
+    my $conn = http_connection($scope);
+
     my $path    = $conn->path;                 # /users/42
     my $token   = $conn->header('Authorization');
     my $page    = $conn->query_param('page');
@@ -290,7 +299,7 @@ answer a socket the application owns. Starlette's own Authentication and
 Session middleware read requests through C<HTTPConnection(scope)> this way.
 
     use Future::AsyncAwait;
-    use PAGI::HTTPConnection;
+    use PAGI::HTTPConnection qw(http_connection);
 
     # valid_key is the application's own check.
     sub require_api_key {
@@ -300,7 +309,7 @@ Session middleware read requests through C<HTTPConnection(scope)> this way.
             return await $app->($scope, $receive, $send)
                 unless $scope->{type} eq 'http';
 
-            my $conn = PAGI::HTTPConnection->new($scope);
+            my $conn = http_connection($scope);
             my $key = $conn->header('X-API-Key') // $conn->query_param('api_key');
             return await $app->($scope, $receive, $send) if valid_key($key);
 
@@ -326,6 +335,30 @@ with both HTTP and WebSockets".
             // return undef;
         return $conn->state->get('tenants')->{$name};
     }
+
+=head1 EXPORTS
+
+Nothing is exported by default. C<http_connection> is exported on request:
+
+    use PAGI::HTTPConnection qw(http_connection);
+
+Only C<PAGI::HTTPConnection> itself exports it. L<PAGI::Request>,
+L<PAGI::WebSocket> and L<PAGI::SSE> inherit the import mechanism, but their
+export list is empty: C<use PAGI::Request;> imports nothing, and
+C<use PAGI::Request qw(http_connection)> dies with Exporter's
+C<"http_connection" is not exported by the PAGI::Request module>.
+L<PAGI::Tools> re-exports it too.
+
+=head2 http_connection
+
+    my $conn = http_connection($scope);
+
+Builds a PAGI::HTTPConnection over C<$scope>, exactly as L</new> does, and
+croaks as it does -- a second argument included. It is the function form for
+middleware that only reads a request, in the way C<stash($request)> and
+C<session($request)> are for their state. The name is C<http_connection>
+rather than C<connection> because L</connection> is the server's
+C<pagi.connection>.
 
 =head1 CONSTRUCTOR
 

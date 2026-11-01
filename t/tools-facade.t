@@ -25,6 +25,7 @@ my %SOURCE = (
     url_for               => 'PAGI::Routing::URL',
     openapi               => 'PAGI::Routing::OpenAPI',
     error_context         => 'PAGI::ErrorContext',
+    http_connection       => 'PAGI::HTTPConnection',
     app_state             => 'PAGI::State',
     stash                 => 'PAGI::Stash',
     session               => 'PAGI::Session',

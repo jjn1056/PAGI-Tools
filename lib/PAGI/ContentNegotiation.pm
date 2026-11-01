@@ -546,14 +546,14 @@ sub _require_declared {
 
 =head2 Content Negotiation in a PAGI App
 
-    use PAGI::Request;
+    use PAGI::HTTPConnection qw(http_connection);
     use PAGI::ContentNegotiation;
 
     async sub app ($scope, $receive, $send) {
         # Scope headers are an arrayref of [name, value] pairs, not a hash.
         # Read them through PAGI::HTTPConnection, not $scope->{headers}{...}.
-        my $req    = PAGI::Request->new($scope, $receive);
-        my $accept = $req->header('accept') // '*/*';
+        my $conn   = http_connection($scope);
+        my $accept = $conn->header('accept') // '*/*';
 
         my $format = PAGI::ContentNegotiation->best_match(
             ['json', 'html', 'xml'],

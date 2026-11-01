@@ -973,9 +973,9 @@ L<PAGI::Middleware::ErrorHandler> handler, say). Code that only reads what the
 scope holds -- a header, a cookie, the query, the path -- needs no Request
 and no class; it builds a L<PAGI::HTTPConnection>:
 
-    use PAGI::HTTPConnection;
+    use PAGI::HTTPConnection qw(http_connection);
 
-    my $token = PAGI::HTTPConnection->new($scope)->header('Authorization');
+    my $token = http_connection($scope)->header('Authorization');
 
 Know what C<request_for_scope> is not:
 

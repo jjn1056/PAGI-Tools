@@ -6,6 +6,7 @@ use Exporter 'import';
 use PAGI::Compose ();
 use PAGI::ContentNegotiation ();
 use PAGI::ErrorContext ();
+use PAGI::HTTPConnection ();
 use PAGI::Response ();
 use PAGI::Routing ();
 use PAGI::Routing::OpenAPI ();
@@ -27,6 +28,7 @@ my @SOURCES = (
     'PAGI::Routing::URL'      => [qw(url path_for url_for)],
     'PAGI::Routing::OpenAPI'  => [qw(openapi)],
     'PAGI::ErrorContext'      => [qw(error_context)],
+    'PAGI::HTTPConnection'    => [qw(http_connection)],
     'PAGI::State'             => [qw(app_state)],
     'PAGI::Stash'             => [qw(stash)],
     'PAGI::Session'           => [qw(session)],
@@ -217,6 +219,7 @@ package that imported them from C<PAGI::Tools>.
     url path_for url_for                          PAGI::Routing::URL
     openapi                                       PAGI::Routing::OpenAPI
     error_context                                 PAGI::ErrorContext
+    http_connection                               PAGI::HTTPConnection
     app_state                                     PAGI::State
     stash                                         PAGI::Stash
     session                                       PAGI::Session

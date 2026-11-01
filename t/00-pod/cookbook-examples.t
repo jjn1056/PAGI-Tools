@@ -174,6 +174,9 @@ subtest 'published standalone recipes compile and construct their values' => sub
     );
     my $xsendfile = first_code_block(
         $cookbook, '=head3 Custom Download Handler');
+    like $xsendfile, qr/use PAGI::HTTPConnection qw\(http_connection\)/,
+        'the download recipe imports the reader';
+    unlike $xsendfile, qr/PAGI::Request/, 'and builds no Request for a path parameter';
     perl_script_runs(
         'custom XSendfile download',
         $xsendfile

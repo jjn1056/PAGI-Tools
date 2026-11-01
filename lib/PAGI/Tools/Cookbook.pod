@@ -3358,8 +3358,8 @@ For more control (authentication, logging, custom headers):
   use Future;
   use Future::AsyncAwait;
   use PAGI::Middleware::Builder;
+  use PAGI::HTTPConnection qw(http_connection);
   use PAGI::Pages;
-  use PAGI::Request;
   use PAGI::Routing qw(route router);
   use PAGI::Utils qw(as_app_object invoke_app path_from_root);
 
@@ -3369,9 +3369,9 @@ For more control (authentication, logging, custom headers):
   my $router = router(routes => [
   route('/download/{filename}' => as_app_object(async sub {
       my ($scope, $receive, $send) = @_;
-      my $req = PAGI::Request->new($scope, $receive);
+      my $conn = http_connection($scope);
 
-      my $filename = $req->path_param('filename');
+      my $filename = $conn->path_param('filename');
       my $filepath = path_from_root('/var/www/files', $filename);
       unless (defined $filepath) {
           my $response = PAGI::Pages->forbidden;
