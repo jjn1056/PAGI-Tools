@@ -387,4 +387,58 @@ subtest 'the full table where undef has its own meaning' => sub {
     }
 };
 
+subtest 'PAGI::Utils::URI edits' => sub {
+    require PAGI::Utils::URI;
+    my $uri = PAGI::Utils::URI->parse('http://h/p?x=1');
+    my $value_refused = qr/the value of query '\w+' must be defined text or an arrayref of it/;
+    my $name_refused  = qr/a query name must be defined text, not a reference/;
+    my $segment_refused = qr/a path segment must be defined text, not a reference/;
+
+    # A plain undef deletes the key (with_query) or adds nothing (add_query,
+    # replace): t/utils/uri-edit.t tests those meanings.
+    PAGITest::Stringy::check_site(
+        name => 'with_query value', skip_undef => 1,
+        run => sub { $uri->with_query(k => $_[0])->query_params->get('k') },
+        refused => $value_refused,
+    );
+    PAGITest::Stringy::check_site(
+        name => 'with_query arrayref value',
+        run => sub { ($uri->with_query(k => [$_[0]])->query_params->get_all('k'))[0] },
+        refused => $value_refused,
+    );
+    PAGITest::Stringy::check_site(
+        name => 'add_query value', skip_undef => 1,
+        run => sub { $uri->add_query(k => $_[0])->query_params->get('k') },
+        refused => $value_refused,
+    );
+    PAGITest::Stringy::check_site(
+        name => 'replace query_params value', skip_undef => 1,
+        run => sub { $uri->replace(query_params => [k => $_[0]])->query_params->get('k') },
+        refused => $value_refused,
+    );
+    PAGITest::Stringy::check_site(
+        name => 'with_query name',
+        run => sub { (grep { $_ ne 'x' } $uri->with_query($_[0] => 'v')->query_params->keys)[0] },
+        refused => $name_refused,
+    );
+    PAGITest::Stringy::check_site(
+        name => 'without_query name',
+        run => sub {
+            my $kept = PAGI::Utils::URI->parse('http://h/p?ok=1&x=2')->without_query($_[0]);
+            return $kept->query_params->get('ok') ? 'kept' : 'ok';
+        },
+        refused => $name_refused,
+    );
+    PAGITest::Stringy::check_site(
+        name => 'join_path segment',
+        run => sub { ($uri->join_path($_[0])->path_segments)[-1] },
+        refused => $segment_refused,
+    );
+    PAGITest::Stringy::check_site(
+        name => 'replace path_segments segment',
+        run => sub { ($uri->replace(path_segments => [$_[0]])->path_segments)[-1] },
+        refused => $segment_refused,
+    );
+};
+
 done_testing;

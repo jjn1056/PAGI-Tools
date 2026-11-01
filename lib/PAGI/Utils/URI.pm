@@ -8,6 +8,7 @@ use Hash::MultiValue;
 use Scalar::Util qw(blessed);
 use PAGI::Authority ();
 use PAGI::Headers ();
+use PAGI::Utils ();
 use PAGI::Utils::Scope ();
 
 use overload '""' => 'to_string', fallback => 1;
@@ -256,7 +257,8 @@ sub with_query {
     my @pairs = $self->_raw_query_pairs;
     while (@edits) {
         my ($name, $value) = splice @edits, 0, 2;
-        _require_query_pair('with_query', $name, $value);
+        $name  = _query_name_text('with_query', $name);
+        $value = _query_value_text('with_query', $name, $value);
         @pairs = (
             _without_names(\@pairs, _utf8($name)),
             _query_bytes($name => $value),
@@ -271,7 +273,8 @@ sub add_query {
     my @pairs = $self->_raw_query_pairs;
     while (@additions) {
         my ($name, $value) = splice @additions, 0, 2;
-        _require_query_pair('add_query', $name, $value);
+        $name  = _query_name_text('add_query', $name);
+        $value = _query_value_text('add_query', $name, $value);
         push @pairs, _query_bytes($name => $value);
     }
     return $self->_clone(_query_fields(@pairs));
@@ -279,7 +282,7 @@ sub add_query {
 
 sub without_query {
     my ($self, @names) = @_;
-    _require_query_name('without_query', $_) for @names;
+    @names = map { _query_name_text('without_query', $_) } @names;
     my @pairs = _without_names([$self->_raw_query_pairs],
         map { _utf8($_) } @names);
     return $self->_clone(_query_fields(@pairs));
@@ -340,16 +343,17 @@ sub replace {
     }
     if (exists $parts{path_segments}) {
         croak 'path_segments must be an arrayref of text' unless ref $parts{path_segments} eq 'ARRAY';
-        _require_segment('replace', $_) for @{ $parts{path_segments} };
+        my @segments = map { _segment_text('replace', $_) } @{ $parts{path_segments} };
         $changes{raw_path} = _path_from_segments(map { PAGI::Utils::Scope::_encode_component($_) }
-            @{ $parts{path_segments} });
+            @segments);
     }
     if (exists $parts{query_params}) {
         my @params = _query_param_list($parts{query_params});
         my @pairs;
         while (@params) {
             my ($name, $value) = splice @params, 0, 2;
-            _require_query_pair('replace', $name, $value);
+            $name  = _query_name_text('replace', $name);
+            $value = _query_value_text('replace', $name, $value);
             push @pairs, _query_bytes($name => $value);
         }
         %changes = (%changes, _query_fields(@pairs));
@@ -391,7 +395,7 @@ sub resolve {
 
 sub join_path {
     my ($self, @segments) = @_;
-    _require_segment('join_path', $_) for @segments;
+    @segments = map { _segment_text('join_path', $_) } @segments;
     my @kept = _raw_segments($self->{raw_path});
     pop @kept if @kept && $kept[-1] eq '';
     return $self->_clone(raw_path => _path_from_segments(@kept,
@@ -471,33 +475,44 @@ sub _without_names {
     return @kept;
 }
 
-# The checks every edit shares. An edit takes plain text, so a ref or an
-# undef is refused rather than written as "HASH(0x...)" or as an empty
-# string. A value may also be an arrayref of text, or undef, which gives no
-# pair (and deletes the name in with_query).
-sub _require_query_name {
+# The checks every edit shares. An edit takes text: an object whose class
+# overloads "" stands for its string, stringified once here so the edit
+# works on that string; any other reference, or an undef name or segment,
+# is refused in the caller's name rather than written as "HASH(0x...)" or
+# as an empty string. A value may also be an arrayref of text, or undef,
+# which gives no pair (and deletes the name in with_query).
+
+# A query name as text.
+sub _query_name_text {
     my ($who, $name) = @_;
+    my $text = PAGI::Utils::_string_value($name);
     croak "$who: a query name must be defined text, not a reference"
-        unless defined $name && !ref $name;
-    return;
+        unless defined $text;
+    return $text;
 }
 
-sub _require_query_pair {
+# A query value as text, an arrayref of text, or undef (which each edit
+# gives its own meaning).
+sub _query_value_text {
     my ($who, $name, $value) = @_;
-    _require_query_name($who, $name);
-    return unless defined $value;
-    for my $text (ref $value eq 'ARRAY' ? @$value : $value) {
+    return undef unless defined $value;
+    my $list = ref $value eq 'ARRAY';
+    my @texts = map {
+        my $text = PAGI::Utils::_string_value($_);
         croak "$who: the value of query '$name' must be defined text or an arrayref of it"
-            unless defined $text && !ref $text;
-    }
-    return;
+            unless defined $text;
+        $text;
+    } $list ? @$value : ($value);
+    return $list ? \@texts : $texts[0];
 }
 
-sub _require_segment {
+# A path segment as text.
+sub _segment_text {
     my ($who, $segment) = @_;
+    my $text = PAGI::Utils::_string_value($segment);
     croak "$who: a path segment must be defined text, not a reference"
-        unless defined $segment && !ref $segment;
-    return;
+        unless defined $text;
+    return $text;
 }
 
 # One name and its value, text, as pairs of UTF-8 bytes: an arrayref gives
@@ -835,8 +850,9 @@ is C</x>.
     my $uri = $request->uri->with_query(sort => 'name', tag => [qw(a b)], x => undef);
 
 Takes name => value pairs. A name must be defined text, and a value text, an
-arrayref of text or C<undef>; anything else (a reference, an C<undef> in an
-arrayref) dies, naming the caller, as does every query edit below. For each
+arrayref of text or C<undef>. An object whose class overloads C<""> counts as
+its string. Anything else (another reference, an C<undef> in an arrayref) dies,
+naming the caller, as does every query edit below. For each
 name, in call order, every pair with
 that name is removed and the new value appended at the end: an arrayref gives
 the name once per value, and C<undef> removes the name. Pairs with other
@@ -966,7 +982,7 @@ always has one. Userinfo dies as in L</parse>.
 
 The segments, text, appended to the path, each UTF-8 encoded and
 percent-encoded as a whole (a C</> in one is written C<%2F>); a segment must
-be defined text, or it dies. A trailing
+be defined text, or an object whose class overloads C<"">, or it dies. A trailing
 slash on the path is not doubled, the query and fragment are kept, and a
 leading C<//> of the path is kept (C<//a> becomes C<//a/42>). The path's own
 segments are kept exactly as they were.

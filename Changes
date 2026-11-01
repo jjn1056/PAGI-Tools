@@ -40,7 +40,9 @@
     resolve($reference) (RFC 3986 5.2), the way to make an absolute URL
     from path_for's path. A query edit writes every pair form-encoded (a
     space is +); the path is kept as sent, a leading // included, and
-    only path_query holds it to one /. Also
+    only path_query holds it to one /. Query names, values and path
+    segments are text; an object whose class overloads "" counts as its
+    string, and any other reference dies. Also
     add_query(@pairs) (appends, removes nothing), join_path(@segments),
     replace(path_segments => \@text) (a / inside a segment stays %2F),
     path_query, path_segments, is_secure, origin, and is_equivalent($other):
