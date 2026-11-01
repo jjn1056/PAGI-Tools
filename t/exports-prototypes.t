@@ -139,6 +139,10 @@ subtest "Builder's SYNOPSIS runs" => sub {
             ok(lives { $response = $client->get($path) }, "$form: GET $path lives")
                 or note($@);
             is($response && $response->status, 200, "$form: GET $path answers 200");
+            is($response && $response->header('X-Frame-Options'),
+                $path eq '/api/x' ? 'DENY' : undef,
+                "$form: GET $path " . ($path eq '/api/x'
+                    ? 'carries' : 'does not carry') . ' the conditional middleware\'s header');
         }
     }
 };

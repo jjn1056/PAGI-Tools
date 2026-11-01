@@ -281,17 +281,59 @@ for my $module (@MODULES) {
     };
 }
 
-# PAGI::Lifespan and PAGI::Utils load each other; loading Lifespan first must
-# still leave both names importable.
-subtest 'PAGI::Lifespan loaded first leaves PAGI::Utils importable' => sub {
-    my $code = 'use PAGI::Lifespan; package T; use PAGI::Utils qw(to_app handle_lifespan);'
-        . ' print defined &T::to_app && defined &T::handle_lifespan ? "ok" : "missing"';
-    open my $child, '-|', $^X, "-I$lib", "-I$server_lib", '-we', $code
-        or die "cannot start child perl: $!";
-    my $output = do { local $/; <$child> };
-    close $child;
-    is($?, 0, 'the process loads cleanly');
-    is($output, 'ok', 'both names are defined');
+# A module's imports are installed when its `use` line runs, so two modules
+# that load each other leave the name undefined in whichever one loads second.
+# Perl does not always warn about it (before 5.40 a missing import method is
+# silent), so this checks the result: the module under test is loaded first,
+# then every other lib module, and each name a lib module imports from PAGI
+# must be defined in the importing package, with nothing printed to stderr.
+sub lib_imports {
+    my @imports;
+    for my $module (lib_modules()) {
+        open my $fh, '<', $module->[1] or die "cannot read $module->[1]: $!";
+        my $source = do { local $/; <$fh> };
+        close $fh;
+        $source =~ s/\A(.*?)^__(?:END|DATA)__\n.*\z/$1/ms;
+        $source =~ s/^=[a-zA-Z]\w*.*?^=cut\b[^\n]*$//msg;
+        my $package = 'main';
+        while ($source =~ /^[ \t]*(?:package\s+([\w:]+)|use\s+PAGI::[\w:]+\s+(?:qw\s*\(([^)]*)\)|'([^']*)'))/mg) {
+            if (defined $1) { $package = $1; next }
+            push @imports, [$package, $_] for grep { !/^[:!]/ } split ' ', $2 // $3;
+        }
+    }
+    return @imports;
+}
+
+my $load_check = <<'CHECK';
+open STDERR, '>&', \*STDOUT or die "cannot dup stderr: $!";
+my ($first, @pairs) = @ARGV;
+my @modules = split /,/, shift @pairs;
+for my $module ($first, grep { $_ ne $first } @modules) {
+    (my $file = "$module.pm") =~ s{::}{/}g;
+    eval { require $file; 1 } or print "LOAD FAILED $module: $@";
+}
+for my $pair (@pairs) {
+    my ($package, $name) = split /\t/, $pair;
+    no strict 'refs';
+    print "MISSING ${package}::$name\n" unless defined &{"${package}::$name"};
+}
+CHECK
+
+subtest 'no lib module load order leaves an import undefined' => sub {
+    plan skip_all => 'set RELEASE_TESTING to run one process per lib module'
+        unless $ENV{RELEASE_TESTING};
+
+    my @modules = map { $_->[0] } lib_modules();
+    my @pairs = map { "$_->[0]\t$_->[1]" } lib_imports();
+    ok(scalar @pairs, 'lib imports from PAGI modules');
+    for my $first (@modules) {
+        open my $child, '-|', $^X, "-I$lib", "-I$server_lib", '-we', $load_check,
+            $first, join(',', @modules), @pairs
+            or die "cannot start child perl: $!";
+        my $output = do { local $/; <$child> };
+        close $child;
+        is($output, '', "$first loaded first: every import defined, no output");
+    }
 };
 
 subtest 'route and mount resolve &Name in the importing package' => sub {

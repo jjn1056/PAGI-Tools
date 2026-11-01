@@ -32,7 +32,6 @@ use Carp 'croak';
 use PAGI::App::URLMap ();
 use PAGI::Utils ();
 use Scalar::Util qw(blessed);
-use PAGI::Utils ();
 
 =encoding UTF-8
 
@@ -48,7 +47,7 @@ PAGI::Middleware::Builder - DSL for composing PAGI middleware
     my $app = builder {
         enable 'ContentLength';
         enable 'CORS', origins => ['*'];
-        enable_if { $_[0]->{path} =~ m{^/api/} } 'RateLimit', requests_per_second => 100;
+        enable_if { $_[0]->{path} =~ m{^/api/} } 'SecurityHeaders', x_frame_options => 'DENY';
         mount '/static' => $static_app;
         $my_app;
     };
@@ -57,7 +56,7 @@ PAGI::Middleware::Builder - DSL for composing PAGI middleware
     my $builder = PAGI::Middleware::Builder->new;
     $builder->add_middleware('ContentLength');
     $builder->add_middleware('CORS', origins => ['*']);
-    $builder->add_middleware_if(sub { $_[0]->{path} =~ m{^/api/} }, 'RateLimit', requests_per_second => 100);
+    $builder->add_middleware_if(sub { $_[0]->{path} =~ m{^/api/} }, 'SecurityHeaders', x_frame_options => 'DENY');
     $builder->add_mount('/admin', $admin_app);
     my $oo_app = $builder->to_app($my_app);
 
