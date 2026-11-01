@@ -24,6 +24,7 @@ sub new {
 sub _scope_type { 'websocket' }
 sub _initial_state { 'connecting' }  # connecting -> connected -> closed
 sub _open_state { 'connected' }
+sub _is_open { $_[0]->is_connected }
 
 # on_close callbacks receive ($code, $reason, $detail); on_error callbacks
 # receive ($error).

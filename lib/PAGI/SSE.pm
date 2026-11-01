@@ -13,6 +13,7 @@ use PAGI::Utils::_ProtocolHelpers ();
 sub _scope_type { 'sse' }
 sub _initial_state { 'pending' }  # pending -> started -> closed
 sub _open_state { 'started' }
+sub _is_open { $_[0]->is_started }
 
 # on_close callbacks receive ($sse, $reason, $detail); on_error callbacks
 # receive ($sse, $error).

@@ -14,6 +14,8 @@ use Scalar::Util qw(blessed);
 #   _scope_type             the scope type it serves
 #   _initial_state          its connection state before it answers
 #   _open_state             its connection state once it answered
+#   _is_open                whether it reads as answered: the public method
+#                           for that state (is_connected, is_started)
 #   _refresh_connection     copies what it reads from pagi.connection; runs
 #                           once the shared fields exist
 #   _close_callback_args    what its on_close callbacks receive
@@ -86,7 +88,7 @@ sub _require_ownership {
 # no helper has answered it.
 sub _answered {
     my ($self) = @_;
-    return $self->is_connected
+    return $self->_is_open
         || (($self->{_claim} // '') eq 'answering' && $self->connection_state eq $self->_initial_state);
 }
 
@@ -324,9 +326,11 @@ on_close and on_error callbacks, the owner of the helper's work and the
 Futures that settle C<finished>), the methods that read them, whether a
 helper may drive its connection, and the C<pagi.transport> flow-control
 readers. Each subclass supplies its scope type, its connection states before
-and after it answers, how it refreshes from C<pagi.connection>, what its
-C<on_close> and C<on_error> callbacks receive, and the send behind
-C<try_send_json>. The public methods are documented in each subclass.
+and after it answers, the public method that reports it answered, how it
+refreshes from C<pagi.connection>, what its C<on_close> and C<on_error>
+callbacks receive, the class its failing C<on_error> callbacks' warning
+names, and the send behind C<try_send_json>. It may refine
+C<_require_ownership> and C<_release_callbacks>, calling C<SUPER::>. The public methods are documented in each subclass.
 
 This class is a private implementation detail. Application code must not
 depend on its name or interface; it may change without a compatibility
