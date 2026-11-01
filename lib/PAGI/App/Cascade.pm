@@ -2,6 +2,7 @@ package PAGI::App::Cascade;
 
 use strict;
 use warnings;
+use namespace::autoclean;
 use Future;
 use Future::AsyncAwait;
 use PAGI::Exception::IncompleteResponse ();

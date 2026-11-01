@@ -2,6 +2,7 @@ package PAGI::Response::File::Plan;
 
 use strict;
 use warnings;
+use namespace::autoclean;
 
 use Carp qw(croak);
 use Digest::MD5 qw(md5_hex);

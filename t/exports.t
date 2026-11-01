@@ -1,6 +1,7 @@
 use strict;
 use warnings;
 use Test2::V0;
+use B ();
 use Cwd qw(getcwd);
 use File::Find ();
 use File::Spec;
@@ -135,44 +136,46 @@ subtest 'the function modules export through the installer' => sub {
     ok($IS_EXPORTING{$_}, "$_ is found") for @FUNCTION_MODULES;
 };
 
-# A class's export is a function, not a method anywhere: no PAGI package
-# but a function module holds one in its stash, as an import would put it.
-# A kept method is a method of its own class, so its owner holds it and
-# nobody else does.
-subtest 'no PAGI package holds a class export as a sub' => sub {
-    my (%class_export, %kept_method);
-    for my $module (grep { !$IS_FUNCTION_MODULE{$_} } @MODULES) {
-        my %kept = map { $_ => 1 } @{ kept_methods($module) };
-        my $exports = $module->_exports;
-        for my $name (keys %$exports) {
-            my $id = 0 + $exports->{$name};
-            if ($kept{$name}) {
-                $kept_method{$id} = [$module, "${module}'s $name"];
-            }
-            else {
-                $class_export{$id} = "${module}'s $name";
-            }
-        }
-    }
-    ok(scalar(keys %class_export), 'there are class exports to look for');
-    ok(scalar(keys %kept_method), 'there are kept methods to look for');
-
-    my @held;
+# An imported function is a sub in the importer's stash, so a class that
+# imports one answers it as a method, and so does every subclass. A lib
+# class (a package declared in lib that answers new) holds no sub defined
+# in another package; overload's entries, whose names start with "(", are
+# not methods.
+sub imported_subs {
+    my ($package) = @_;
+    my @imported;
     no strict 'refs';
-    for my $package (grep { !$IS_FUNCTION_MODULE{$_} } @PAGI_PACKAGES) {
-        for my $name (sort keys %{"${package}::"}) {
-            next unless defined &{"${package}::$name"};
-            my $id = 0 + \&{"${package}::$name"};
-            if (my $export = $class_export{$id}) {
-                push @held, "${package}::$name is $export";
-            }
-            elsif (my $kept = $kept_method{$id}) {
-                push @held, "${package}::$name is $kept->[1]"
-                    unless $package eq $kept->[0];
-            }
-        }
+    for my $name (sort keys %{"${package}::"}) {
+        next if $name =~ /\A\(/;
+        my $code = *{"${package}::$name"}{CODE} or next;
+        my $gv = B::svref_2object($code)->GV;
+        next if $gv->isa('B::SPECIAL');
+        my $home = $gv->STASH->NAME;
+        push @imported, "$name from $home" unless $home eq $package;
     }
-    is(\@held, [], 'none is held');
+    return @imported;
+}
+
+subtest 'no lib class holds an imported sub' => sub {
+    {
+        package Local::Exports::Imports;
+        use Carp qw(croak);
+        use overload '""' => sub { 'imports' };
+        sub new { return bless {}, shift }
+    }
+    is([imported_subs('Local::Exports::Imports')], ['croak from Carp'],
+        'an import is found; a sub of its own and overload are not');
+
+    my %declared;
+    for my $module (@LIB_MODULES) {
+        my $code = code_of($module->[1]);
+        $declared{$1} = 1 while $code =~ /^\s*package\s+([\w:]+)/mg;
+    }
+    my @classes = grep { $declared{$_} && $_->can('new') } @PAGI_PACKAGES;
+    ok(scalar(@classes), 'there are lib classes to look at');
+
+    my @held = map { my $class = $_; map { "$class holds $_" } imported_subs($class) } @classes;
+    is(\@held, [], 'none does');
 };
 
 # Loaded first in its own process, so no other test or module has loaded
@@ -304,7 +307,12 @@ sub lib_imports {
     return @imports;
 }
 
+# namespace::autoclean removes a class's imports once the class is compiled,
+# so the child loads the modules with it doing nothing, leaving each import
+# where the check can see it.
 my $load_check = <<'CHECK';
+$INC{'namespace/autoclean.pm'} = __FILE__;
+sub namespace::autoclean::import { }
 open STDERR, '>&', \*STDOUT or die "cannot dup stderr: $!";
 my ($first, @pairs) = @ARGV;
 my @modules = split /,/, shift @pairs;

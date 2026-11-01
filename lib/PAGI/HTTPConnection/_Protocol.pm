@@ -1,6 +1,7 @@
 package PAGI::HTTPConnection::_Protocol;
 use strict;
 use warnings;
+use namespace::autoclean;
 use parent 'PAGI::HTTPConnection';
 use Carp qw(croak);
 use Future::AsyncAwait;

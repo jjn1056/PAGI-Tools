@@ -2,6 +2,7 @@ package PAGI::Response::NDJSON;
 
 use strict;
 use warnings;
+use namespace::autoclean;
 
 use Carp qw(croak);
 use JSON::MaybeXS ();

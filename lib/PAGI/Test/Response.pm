@@ -2,6 +2,7 @@ package PAGI::Test::Response;
 
 use strict;
 use warnings;
+use namespace::autoclean;
 use Carp 'croak';
 
 # Maximum bytes of response body to include in JSON decode error messages

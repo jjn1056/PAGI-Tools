@@ -2,6 +2,7 @@ package PAGI::Response::Text;
 
 use strict;
 use warnings;
+use namespace::autoclean;
 
 use Carp ();
 

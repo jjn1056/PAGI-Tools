@@ -2,6 +2,7 @@ package PAGI::Endpoint::SSE;
 
 use strict;
 use warnings;
+use namespace::autoclean;
 
 use Future;
 use Future::AsyncAwait;

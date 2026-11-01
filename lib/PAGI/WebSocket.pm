@@ -1,6 +1,7 @@
 package PAGI::WebSocket;
 use strict;
 use warnings;
+use namespace::autoclean;
 use parent 'PAGI::HTTPConnection::_Protocol';
 use Carp qw(croak);
 use Scalar::Util ();

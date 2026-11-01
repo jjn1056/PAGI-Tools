@@ -2,6 +2,7 @@ package PAGI::Auth::SimpleUser;
 
 use strict;
 use warnings;
+use namespace::autoclean;
 
 use Carp qw(croak);
 

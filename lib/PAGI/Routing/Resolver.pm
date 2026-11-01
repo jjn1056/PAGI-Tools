@@ -2,6 +2,7 @@ package PAGI::Routing::Resolver;
 
 use strict;
 use warnings;
+use namespace::autoclean;
 use Carp qw(croak);
 use Scalar::Util qw(blessed refaddr);
 use PAGI::Utils::URI ();

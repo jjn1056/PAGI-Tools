@@ -2,6 +2,7 @@ package PAGI::Middleware::RequestClass;
 
 use strict;
 use warnings;
+use namespace::autoclean;
 use parent 'PAGI::Middleware';
 use Carp qw(croak);
 use Future::AsyncAwait;

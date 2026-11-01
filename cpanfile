@@ -37,6 +37,9 @@ requires 'Crypt::URandom', '0.36';
 # (Scalar-List-Utils 1.41, perl 5.22); declared so the dependency is explicit.
 requires 'Sub::Util', '1.41';
 
+# Removes each class's imported functions, so its objects never answer one as a method
+requires 'namespace::autoclean', '0.31';
+
 # Testing
 on 'test' => sub {
     requires 'Test2::V0', '0.000159';

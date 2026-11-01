@@ -167,33 +167,37 @@ subtest 'bare HTTP defaults are Request handlers whose results are applications'
         'a Future-backed Response result is invoked for HTTP NONE');
 
     my ($native_request, $adapter_receive, $adapter_send, @native_triplets);
-    my $native_default = router(
-        routes => [],
-        http_default => sub {
-            $native_request = $_[0];
-            return async sub {
-                push @native_triplets, [@_];
-                await Future->wrap(PAGI::Response::Text->new('native default')->to_app->(@_));
-                return;
-            };
-        },
-    )->to_app;
     my $native_scope = scope(path => '/native', raw_path => '/native');
     my $native_receive = sub { return receive() };
     my @native_events;
     my $native_send = sub { push @native_events, $_[0]; return Future->done };
-    my $original_invoke_app = \&PAGI::Routing::RequestResponse::invoke_app;
     {
+        # Records the receive and send the route hands the Request adapter.
+        my $original_to_app = \&PAGI::Routing::RequestResponse::to_app;
         no warnings 'redefine';
-        local *PAGI::Routing::RequestResponse::invoke_app = sub {
-            my ($value, $request_scope, $receive, $send) = @_;
-            ($adapter_receive, $adapter_send) = ($receive, $send);
-            return $original_invoke_app->(@_);
+        local *PAGI::Routing::RequestResponse::to_app = sub {
+            my $adapter = $original_to_app->(@_);
+            return sub {
+                (undef, $adapter_receive, $adapter_send) = @_;
+                return $adapter->(@_);
+            };
         };
+        my $native_default = router(
+            routes => [],
+            http_default => sub {
+                $native_request = $_[0];
+                return async sub {
+                    push @native_triplets, [@_];
+                    await Future->wrap(PAGI::Response::Text->new('native default')->to_app->(@_));
+                    return;
+                };
+            },
+        )->to_app;
         Future->wrap($native_default->(
             $native_scope, $native_receive, $native_send,
         ))->get;
     }
+    ok(defined $adapter_receive && defined $adapter_send, 'the Request adapter was called');
     is(response_body(\@native_events), 'native default',
         'a native CODE result is invoked for HTTP NONE');
     is(refaddr($native_triplets[0][0]), refaddr($native_request->raw),

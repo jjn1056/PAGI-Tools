@@ -2,6 +2,7 @@ package PAGI::Middleware::AccessLog;
 
 use strict;
 use warnings;
+use namespace::autoclean;
 use parent 'PAGI::Middleware';
 use Future::AsyncAwait;
 use Time::HiRes qw(time);

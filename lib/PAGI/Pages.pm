@@ -2,6 +2,7 @@ package PAGI::Pages;
 
 use strict;
 use warnings;
+use namespace::autoclean;
 
 use PAGI::Pages::_Catalog;
 use PAGI::Utils::_Exporter ();

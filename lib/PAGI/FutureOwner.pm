@@ -1,6 +1,7 @@
 package PAGI::FutureOwner;
 use strict;
 use warnings;
+use namespace::autoclean;
 use Carp qw(croak);
 use Future;
 use Scalar::Util qw(blessed refaddr);

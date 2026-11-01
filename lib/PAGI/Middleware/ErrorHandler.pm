@@ -2,6 +2,7 @@ package PAGI::Middleware::ErrorHandler;
 
 use strict;
 use warnings;
+use namespace::autoclean;
 use parent 'PAGI::Middleware';
 use Carp qw(croak);
 use Encode qw(encode);

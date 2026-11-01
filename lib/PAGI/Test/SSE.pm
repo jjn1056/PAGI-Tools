@@ -2,6 +2,7 @@ package PAGI::Test::SSE;
 
 use strict;
 use warnings;
+use namespace::autoclean;
 use Future::AsyncAwait;
 use Future;
 use Carp qw(croak);

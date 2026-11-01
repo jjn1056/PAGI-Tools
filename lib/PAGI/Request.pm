@@ -1,6 +1,7 @@
 package PAGI::Request;
 use strict;
 use warnings;
+use namespace::autoclean;
 use parent 'PAGI::HTTPConnection';
 use Hash::MultiValue;
 use PAGI::Headers ();

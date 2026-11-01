@@ -1,6 +1,7 @@
 package PAGI::Auth;
 use strict;
 use warnings;
+use namespace::autoclean;
 use PAGI::Utils::_Exporter ();
 
 my (%EXPORTS, %TAGS, @DEFAULTS);

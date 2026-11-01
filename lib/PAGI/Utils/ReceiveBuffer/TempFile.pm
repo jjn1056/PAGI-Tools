@@ -2,6 +2,7 @@ package PAGI::Utils::ReceiveBuffer::TempFile;
 
 use strict;
 use warnings;
+use namespace::autoclean;
 use Carp qw(croak);
 use File::Temp qw(tempfile);
 use Future;

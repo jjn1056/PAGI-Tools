@@ -2,6 +2,7 @@ package PAGI::Middleware::RateLimit;
 
 use strict;
 use warnings;
+use namespace::autoclean;
 use parent 'PAGI::Middleware';
 use Future;
 use Future::AsyncAwait;

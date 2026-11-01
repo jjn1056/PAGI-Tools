@@ -2,6 +2,7 @@ package PAGI::Utils::TextDecoder;
 
 use strict;
 use warnings;
+use namespace::autoclean;
 use Carp qw(croak);
 use Encode qw(find_encoding FB_CROAK FB_DEFAULT STOP_AT_PARTIAL);
 

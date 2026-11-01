@@ -1,6 +1,7 @@
 package PAGI::HTTPConnection;
 use strict;
 use warnings;
+use namespace::autoclean;
 use Sub::Util ();
 use PAGI::Utils::_Exporter ();
 
