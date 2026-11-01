@@ -343,8 +343,9 @@ construct it only when they choose the Request API; construction requires an
 HTTP, WebSocket, or SSE scope. The receive coderef is what it reads the body
 through: a Request built without one (C<< PAGI::Request->new($scope) >>)
 reads the scope -- headers, query, cookies, path -- and its body methods die.
-To read only the scope, as middleware does, build a L<PAGI::HTTPConnection>,
-which Request extends. WebSocket body methods fail before reading protocol
+To read only the scope, as middleware does, build a L<PAGI::HTTPConnection>
+with C<http_connection($scope)> (C<use PAGI::HTTPConnection qw(http_connection)>);
+Request extends it. WebSocket body methods fail before reading protocol
 events.
 
 =head3 Basic Properties
@@ -1252,7 +1253,7 @@ Create reusable middleware by extending L<PAGI::Middleware>:
   package MyApp::Middleware::Auth;
   use parent 'PAGI::Middleware';
   use Future::AsyncAwait;
-  use PAGI::HTTPConnection;
+  use PAGI::HTTPConnection qw(http_connection);
 
   sub new {
       my ($class, %args) = @_;
@@ -1271,7 +1272,7 @@ Create reusable middleware by extending L<PAGI::Middleware>:
 
           # Check the bearer token. PAGI::HTTPConnection reads the scope
           # without touching the body, which stays the application's to read.
-          my $token = PAGI::HTTPConnection->new($scope)->bearer_token;
+          my $token = http_connection($scope)->bearer_token;
 
           if (defined $token) {
               my $user = verify_token($token, $self->{secret});

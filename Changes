@@ -347,7 +347,9 @@
   - A subclass of PAGI::WebSocket or PAGI::SSE names itself in new's
     errors ("MyApp::WebSocket requires receive coderef", "... requires
     pagi.connection capabilities ..."), where they named PAGI::WebSocket
-    or PAGI::SSE.
+    or PAGI::SSE. The two classes share their common code through one
+    internal base, PAGI::HTTPConnection::_Protocol, which is not API;
+    nothing else in their behaviour changes.
   - PAGI::WebSocket and PAGI::SSE hand each send to the server at once and
     rely on it to keep a connection's sends in call order, as
     PAGI::Spec::Www 0.7 requires. A handler with several producers needs no

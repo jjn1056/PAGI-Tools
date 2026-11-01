@@ -859,10 +859,12 @@ error.
 
 =head1 WHICH HELPER ANSWERS
 
-A connection has one answer, and a helper drives only the answer it gave.
-Building a second helper over the same scope (C<new> always builds a new
-object) gives a helper that did not answer, so which helper answered
-decides what each can do.
+A connection has one helper, and that helper gives the connection's one
+answer. The route or endpoint builds it; pass it to the code that needs it.
+C<new> builds a new object on every call, so build no other over the same
+scope. Middleware reads the request through L<PAGI::HTTPConnection>
+(C<http_connection($scope)>), or wraps the raw C<$receive> and C<$send>, as
+Starlette's middleware does.
 
 B<This helper answered.> From the moment this helper issues its C<accept>,
 before the server's send completes, it owns the connection: sends, receives,
@@ -873,10 +875,7 @@ at its C<await>; the helper keeps the claim it recorded when it sent the
 accept and is still treated as the connection's answerer, as Starlette's
 WebSocket is: its sends, C<try_send_*>, C<keepalive>, C<close> and
 C<close_or_deny> go to the server as on an accepted socket (which the
-server may reject in turn), and code that keeps using it gets no protection
-from the rules below. After a failed accept, build a new helper if the
-connection is still live and unanswered, or use the helper that answered if
-another did.
+server may reject in turn).
 
 B<This helper is refusing.> Once the response of this helper's L</deny> has
 started and the connection is still open, the refusal is its answer. Its
@@ -888,17 +887,15 @@ C<keepalive> return quietly. The refusal itself completes as usual. A
 refusal that settles with no response started answered nothing, and the
 helper may try again.
 
-B<Another helper answered.> While the connection is open and its response
-was started by another helper, every operation of this one croaks
-C<this connection was answered by another helper; use that one>, sending
-nothing and reading nothing, except C<try_send_*>, which return 0. That
-includes C<close>, C<close_or_deny> and C<keepalive>: closing a socket
-another helper owns is that helper's call. A middleware that must act on
-the connection's data wraps C<$send> or C<$receive> instead.
-
-B<The connection has ended.> Every helper behaves as it does for an ended
+B<The connection has ended.> The helper behaves as it does for an ended
 connection: sends croak C<Cannot send on closed WebSocket>, C<receive>
 returns C<undef>, and C<accept>, C<close> and C<keepalive> do nothing.
+
+A second helper over the same connection is misuse: while the connection
+is open and another helper started its response, every operation of the
+second croaks
+C<this connection was answered by another helper; use that one>, except
+C<try_send_*>, which return 0.
 
 =head1 STATE ACCESSORS
 
@@ -1403,7 +1400,10 @@ Returns C<$self> for chaining.
 
 =head1 SUBCLASSING
 
-A framework may subclass PAGI::WebSocket (Thunderhorse does). The contract:
+A framework may subclass PAGI::WebSocket (Thunderhorse does). The code it
+shares with L<PAGI::SSE> lives in an internal base class,
+C<PAGI::HTTPConnection::_Protocol>, which is not API: depend on neither
+its name nor its private methods. The contract:
 
 =over 4
 

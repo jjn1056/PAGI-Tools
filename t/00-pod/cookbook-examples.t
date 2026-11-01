@@ -181,7 +181,18 @@ subtest 'published standalone recipes compile and construct their values' => sub
         'custom XSendfile download',
         $xsendfile
             . "die 'expected Router' unless ref(\$router) eq 'PAGI::Routing::Router';\n"
-            . "die 'expected wrapped application' unless ref(\$app) eq 'CODE';\n",
+            . "die 'expected wrapped application' unless ref(\$app) eq 'CODE';\n"
+            . <<'PERL',
+my @checked;
+sub authenticate { return { id => 1 } }
+sub can_download { push @checked, $_[1]; return 1 }
+use PAGI::Test::Client;
+my $response = PAGI::Test::Client->new(app => $app)->get('/download/report.txt');
+die 'expected 404 for a missing file, got ' . $response->status
+    unless $response->status == 404;
+die "expected the path parameter's file to be checked, got '@checked'"
+    unless "@checked" eq '/var/www/files/report.txt';
+PERL
     );
 };
 
