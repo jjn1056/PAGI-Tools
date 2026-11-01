@@ -31,12 +31,8 @@ ok($named_imported && Local::Session::Named->can('session'),
 ok($all_imported && Local::Session::All->can('session'),
     'lowercase :all exports session');
 
-my $uppercase_tag_error;
-{
-    local $SIG{__WARN__} = sub { };
-    $uppercase_tag_error = dies { PAGI::Session->import(':ALL') };
-}
-like($uppercase_tag_error, qr/"?:?ALL"? is not defined|Can't continue/i,
+my $uppercase_tag_error = dies { PAGI::Session->import(':ALL') };
+like($uppercase_tag_error, qr/\A":ALL" is not exported by PAGI::Session at /,
     'uppercase :ALL is not an export tag');
 
 # ===================

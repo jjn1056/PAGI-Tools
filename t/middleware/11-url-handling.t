@@ -683,8 +683,9 @@ subtest 'HTTPSRedirect never redirects to a target that is not a path' => sub {
 
 subtest 'HTTPSRedirect keeps the mount prefix and the client encoding' => sub {
     require PAGI::Compose; require PAGI::Routing; require PAGI::Test::Client;
+    PAGI::Compose->import('compose');
     my $inner = PAGI::Middleware::HTTPSRedirect->new->wrap(async sub { die "not reached\n" });
-    my $client = PAGI::Test::Client->new(app => PAGI::Compose::compose(
+    my $client = PAGI::Test::Client->new(app => compose(
         routes => [PAGI::Routing::mount('/secure', app => $inner)]));
     my %location = map {
         $_ => $client->get($_)->header('Location')

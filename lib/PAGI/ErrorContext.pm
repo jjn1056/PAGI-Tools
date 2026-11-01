@@ -2,15 +2,24 @@ package PAGI::ErrorContext;
 
 use strict;
 use warnings;
+use Sub::Util ();
+use PAGI::Utils::_Exporter ();
+
+my (%EXPORTS, %TAGS, @DEFAULTS);
+BEGIN {
+    %EXPORTS = (
+        error_context => Sub::Util::set_subname('PAGI::ErrorContext::error_context',
+            sub { return __PACKAGE__->new(@_) }),
+    );
+    %TAGS = (all => [sort keys %EXPORTS]);
+}
+sub import   { PAGI::Utils::_Exporter::export(__PACKAGE__, \%EXPORTS, \%TAGS, \@DEFAULTS, scalar caller, @_) }
+sub _exports { \%EXPORTS }
+
 use Carp qw(croak);
-use Exporter 'import';
 use Scalar::Util qw(blessed);
 use PAGI::Response::Text ();
 use PAGI::Utils::Scope ();
-
-our @EXPORT = ();
-our @EXPORT_OK = qw(error_context);
-our %EXPORT_TAGS = (all => [@EXPORT_OK]);
 
 # Reason phrases for 400-599 from the IANA HTTP Status Code Registry
 # (RFC 9110 and the RFCs it lists).
@@ -36,8 +45,6 @@ my %REASON = (
     506 => 'Variant Also Negotiates',      507 => 'Insufficient Storage',
     508 => 'Loop Detected',                511 => 'Network Authentication Required',
 );
-
-sub error_context { return __PACKAGE__->new(@_) }
 
 # The reason phrase for a 400-599 status; PAGI::Exception::HTTP shares it.
 sub _reason_phrase {

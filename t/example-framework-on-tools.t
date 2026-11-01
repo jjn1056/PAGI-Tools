@@ -4,7 +4,7 @@ use Test2::V0;
 use FindBin qw($Bin);
 use lib "$Bin/../lib", "$Bin/../examples/framework-on-tools/lib";    # Tiny, as installed
 use PAGI::Test::Client;
-use PAGI::Compose ();
+use PAGI::Compose qw(compose);
 use PAGI::Routing ();
 
 # Tiny, the small framework in examples/framework-on-tools/lib, built on
@@ -181,7 +181,7 @@ subtest 'the OpenAPI document refuses colliding paths and keeps operationIds uni
         PAGI::Routing::route('/show' => sub { }, name => 'show', methods => ['GET', 'POST']),
     ]);
     my $t = Tiny->new('OpenAPIProbe2');
-    $t->{compose} = PAGI::Compose::compose(routes => [
+    $t->{compose} = compose(routes => [
         PAGI::Routing::mount('/api', app => $child, name => 'api'),
         PAGI::Routing::mount('/v2',  app => $child, name => 'v2'),
     ]);

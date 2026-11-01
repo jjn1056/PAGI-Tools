@@ -2,14 +2,31 @@ package PAGI::Routing::OpenAPI;
 
 use strict;
 use warnings;
+use Sub::Util ();
+use PAGI::Utils::_Exporter ();
+
+my (%EXPORTS, %TAGS, @DEFAULTS);
+BEGIN {
+    %EXPORTS = (
+        openapi => Sub::Util::set_subname('PAGI::Routing::OpenAPI::openapi', sub {
+            my ($source, @options) = @_;
+            return __PACKAGE__->new(@options)->apply($source);
+        }),
+        openapi_document => Sub::Util::set_subname('PAGI::Routing::OpenAPI::openapi_document', sub {
+            my ($source, @options) = @_;
+            return __PACKAGE__->new(@options)->document($source);
+        }),
+    );
+    %TAGS = (all => [sort keys %EXPORTS]);
+}
+sub import   { PAGI::Utils::_Exporter::export(__PACKAGE__, \%EXPORTS, \%TAGS, \@DEFAULTS, scalar caller, @_) }
+sub _exports { \%EXPORTS }
+
 use Carp qw(croak);
-use Exporter qw(import);
 use Scalar::Util qw(blessed);
 use PAGI::Compose ();
 use PAGI::Response::JSON ();
 use PAGI::Routing ();
-
-our @EXPORT_OK = qw(openapi openapi_document);
 
 my %OPTION = map { $_ => 1 } qw(title version description security_scheme components path);
 
@@ -32,16 +49,6 @@ sub _sse_responses {
             content     => { 'text/event-stream' => { schema => { type => 'string' } } },
         },
     };
-}
-
-sub openapi {
-    my ($source, @options) = @_;
-    return __PACKAGE__->new(@options)->apply($source);
-}
-
-sub openapi_document {
-    my ($source, @options) = @_;
-    return __PACKAGE__->new(@options)->document($source);
 }
 
 sub new {

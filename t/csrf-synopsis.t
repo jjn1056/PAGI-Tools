@@ -23,7 +23,7 @@ subtest 'the middleware handles it' => sub {
 
 subtest 'csrf_protect is gone: the middleware checks every form' => sub {
     like(dies { eval 'use PAGI::CSRF qw(csrf_protect); 1' or die $@ },
-        qr/"csrf_protect" is not exported by the PAGI::CSRF module/, 'importing it fails');
+        qr/\A"csrf_protect" is not exported by PAGI::CSRF at /, 'importing it fails');
 };
 
 subtest 'the middleware reads the form' => sub {

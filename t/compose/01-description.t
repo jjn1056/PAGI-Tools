@@ -26,17 +26,12 @@ use PAGI::Routing qw(router route middleware);
 ok(!ComposeNoImports->can('compose'), 'nothing exports by default');
 ok(ComposeAllImports->can('compose'), 'lowercase all exports compose');
 
-my ($uppercase_error, $uppercase_stderr);
-{
-    local *STDERR;
-    open STDERR, '>', \$uppercase_stderr or die "capture STDERR: $!";
-    $uppercase_error = dies {
-        eval q{ package ComposeBadImports; use PAGI::Compose qw(:ALL); 1 }
-            or die $@;
-    };
-}
-like($uppercase_error, qr/Can't continue after import errors/, 'uppercase tag is rejected');
-like($uppercase_stderr, qr/"ALL" is not defined/, 'diagnostic names the invalid tag');
+my $uppercase_error = dies {
+    eval q{ package ComposeBadImports; use PAGI::Compose qw(:ALL); 1 }
+        or die $@;
+};
+like($uppercase_error, qr/\A":ALL" is not exported by PAGI::Compose at /,
+    'uppercase tag is rejected, naming the tag');
 
 my $leaf = route('/' => sub {
     return PAGI::Response::Text->new('home');

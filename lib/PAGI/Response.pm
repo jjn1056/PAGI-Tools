@@ -14,7 +14,7 @@ BEGIN {
         return $status >= 100 && $status < 200 || $status == 204 || $status == 205 || $status == 304;
     });
     %EXPORTS = (
-        response            => Sub::Util::set_subname('PAGI::Response::response', sub { goto &_response }),
+        response            => Sub::Util::set_subname('PAGI::Response::response', sub { _response(@_) }),
         status_forbids_body => $status_forbids_body,
     );
     %TAGS = (all => [sort keys %EXPORTS]);

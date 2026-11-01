@@ -4,14 +4,14 @@ use Test2::V0;
 use Future::AsyncAwait;
 
 use PAGI::Request;
-use PAGI::Stash;
+use PAGI::Stash qw(stash);
 use PAGI::WebSocket;
 use PAGI::SSE;
 use lib 't/lib';
 use PAGITest::Connected qw(ws_scope sse_scope);
 
 my $receive = sub { Future->done({ type => 'http.request', body => '' }) };
-my $stash_factory = PAGI::Stash->can('stash') ? \&PAGI::Stash::stash : undef;
+my $stash_factory = \&stash;
 
 subtest 'class and factory accept PAGI::Request sources' => sub {
     my $scope = {
@@ -25,7 +25,6 @@ subtest 'class and factory accept PAGI::Request sources' => sub {
 
     my $req = PAGI::Request->new($scope, $receive);
     my $class_stash = PAGI::Stash->new($req);
-    ok($stash_factory, 'stash factory is available') or return;
     my $factory_stash = $stash_factory->($req);
 
     is($factory_stash->data, {}, 'factory returns an empty stash by default');
@@ -44,7 +43,6 @@ subtest 'stash lives in scope' => sub {
     };
 
     my $req = PAGI::Request->new($scope, $receive);
-    ok($stash_factory, 'stash factory is available') or return;
     my $stash = $stash_factory->($req);
 
     $stash->set(db => 'connection', config => { debug => 1 });
@@ -66,7 +64,6 @@ subtest 'stash shared via scope enables middleware data sharing' => sub {
 
     # Simulate middleware setting a value
     my $req1 = PAGI::Request->new($scope, $receive);
-    ok($stash_factory, 'stash factory is available') or return;
     $stash_factory->($req1)->set(user => { id => 42, role => 'admin' });
 
     # Simulate handler reading middleware-set value (same scope)

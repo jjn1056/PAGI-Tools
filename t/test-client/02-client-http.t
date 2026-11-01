@@ -523,8 +523,9 @@ subtest 'a streaming producer that awaits real I/O completes' => sub {
     require PAGI::Response;
     require PAGI::Routing;
     PAGI::Response->import('response');
+    PAGI::Compose->import('compose');
 
-    my $app = PAGI::Compose::compose(routes => [
+    my $app = compose(routes => [
         PAGI::Routing::route('/stream' => async sub {
             my ($request) = @_;
             return response('Stream', async sub {

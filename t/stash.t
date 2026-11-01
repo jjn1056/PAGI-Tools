@@ -30,12 +30,8 @@ ok($named_imported && Local::Stash::Named->can('stash'),
 ok($all_imported && Local::Stash::All->can('stash'),
     'lowercase :all exports stash');
 
-my $uppercase_tag_error;
-{
-    local $SIG{__WARN__} = sub { };
-    $uppercase_tag_error = dies { PAGI::Stash->import(':ALL') };
-}
-like($uppercase_tag_error, qr/"?:?ALL"? is not defined|Can't continue/i,
+my $uppercase_tag_error = dies { PAGI::Stash->import(':ALL') };
+like($uppercase_tag_error, qr/\A":ALL" is not exported by PAGI::Stash at /,
     'uppercase :ALL is not an export tag');
 
 # ===================

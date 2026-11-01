@@ -29,12 +29,8 @@ ok(!Local::CSRF::NoDefault->can('csrf'), 'csrf is not exported by default');
 ok(Local::CSRF::Named->can('csrf'), 'csrf is available as a named export');
 ok(Local::CSRF::All->can('csrf'), 'lowercase :all exports csrf');
 
-my $uppercase_tag_error;
-{
-    local $SIG{__WARN__} = sub { };
-    $uppercase_tag_error = dies { PAGI::CSRF->import(':ALL') };
-}
-like($uppercase_tag_error, qr/"?:?ALL"? is not defined|Can't continue/i,
+my $uppercase_tag_error = dies { PAGI::CSRF->import(':ALL') };
+like($uppercase_tag_error, qr/\A":ALL" is not exported by PAGI::CSRF at /,
     'uppercase :ALL is not an export tag');
 
 subtest 'scope and direct protocol sources expose the exact token' => sub {

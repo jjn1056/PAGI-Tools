@@ -126,23 +126,39 @@ subtest 'the function modules export through the installer' => sub {
 
 # A class's export is a function, not a method anywhere: no PAGI package
 # but a function module holds one in its stash, as an import would put it.
+# A kept method is a method of its own class, so its owner holds it and
+# nobody else does.
 subtest 'no PAGI package holds a class export as a sub' => sub {
-    my %class_export;
+    my (%class_export, %kept_method);
     for my $module (grep { !$IS_FUNCTION_MODULE{$_} } @MODULES) {
         my %kept = map { $_ => 1 } @{ kept_methods($module) };
         my $exports = $module->_exports;
-        $class_export{ 0 + $exports->{$_} } = "${module}'s $_"
-            for grep { !$kept{$_} } keys %$exports;
+        for my $name (keys %$exports) {
+            my $id = 0 + $exports->{$name};
+            if ($kept{$name}) {
+                $kept_method{$id} = [$module, "${module}'s $name"];
+            }
+            else {
+                $class_export{$id} = "${module}'s $name";
+            }
+        }
     }
     ok(scalar(keys %class_export), 'there are class exports to look for');
+    ok(scalar(keys %kept_method), 'there are kept methods to look for');
 
     my @held;
     no strict 'refs';
     for my $package (grep { !$IS_FUNCTION_MODULE{$_} } @PAGI_PACKAGES) {
         for my $name (sort keys %{"${package}::"}) {
             next unless defined &{"${package}::$name"};
-            my $export = $class_export{ 0 + \&{"${package}::$name"} } or next;
-            push @held, "${package}::$name is $export";
+            my $id = 0 + \&{"${package}::$name"};
+            if (my $export = $class_export{$id}) {
+                push @held, "${package}::$name is $export";
+            }
+            elsif (my $kept = $kept_method{$id}) {
+                push @held, "${package}::$name is $kept->[1]"
+                    unless $package eq $kept->[0];
+            }
         }
     }
     is(\@held, [], 'none is held');

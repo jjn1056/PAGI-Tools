@@ -5,7 +5,7 @@ use Test2::V0;
 use lib 'lib';
 use PAGI::Utils ();
 use PAGI::Response qw(response);
-use PAGI::Middleware::Session ();
+use PAGI::Middleware::Session qw(session_store);
 
 # Every loader that takes a short name resolves it with _resolve_class:
 # a leading '+' names a package exactly, a name inside the namespace is kept,
@@ -36,7 +36,7 @@ subtest "a failed :: name suggests the leading +" => sub {
     like($error, qr/for the package No::Such::Thing itself, write '\+No::Such::Thing'/, 'the hint');
     unlike($error, qr/\@INC entries checked/, 'without the @INC dump');
 
-    $error = dies { PAGI::Middleware::Session::session_store('No::Such::Store') };
+    $error = dies { session_store('No::Such::Store') };
     like($error, qr/write '\+No::Such::Store'/, 'session_store too');
 
     like(dies { response('NoSuchThing', 'x') }, qr/Can't locate PAGI\/Response\/NoSuchThing\.pm/,
