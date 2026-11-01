@@ -14,7 +14,7 @@ use PAGI::Pages::_Catalog;
 use PAGI::Pages::Application ();
 use PAGI::HTTPConnection;
 use PAGI::ContentNegotiation;
-use PAGI::Response qw(status_forbids_body);
+use PAGI::Response ();
 use PAGI::Response::Empty ();
 use PAGI::Response::HTML ();
 use PAGI::Response::JSON ();
@@ -35,6 +35,10 @@ our %EXPORT_TAGS = (
     )],
     all => [@EXPORT_OK],
 );
+
+# Taken from Response's export table rather than imported, so a Pages
+# object does not answer it as a method.
+my $status_forbids_body = PAGI::Response->_exports->{status_forbids_body};
 
 my %REPRESENTATION = map { $_ => 1 } qw(auto html json text);
 my %DEFAULT_REPRESENTATION = map { $_ => 1 } qw(html json text);
@@ -700,7 +704,7 @@ sub _replace_header {
 sub _response_for {
     my ($self, $scope, $page) = @_;
     my $headers = $self->_assembled_headers($scope, $page);
-    if (status_forbids_body($page->{status})) {
+    if ($status_forbids_body->($page->{status})) {
         return PAGI::Response::Empty->new(
             status => $page->{status}, headers => $headers,
         );

@@ -124,6 +124,30 @@ subtest 'the function modules export through the installer' => sub {
     ok($IS_EXPORTING{$_}, "$_ is found") for @FUNCTION_MODULES;
 };
 
+# A class's export is a function, not a method anywhere: no PAGI package
+# but a function module holds one in its stash, as an import would put it.
+subtest 'no PAGI package holds a class export as a sub' => sub {
+    my %class_export;
+    for my $module (grep { !$IS_FUNCTION_MODULE{$_} } @MODULES) {
+        my %kept = map { $_ => 1 } @{ kept_methods($module) };
+        my $exports = $module->_exports;
+        $class_export{ 0 + $exports->{$_} } = "${module}'s $_"
+            for grep { !$kept{$_} } keys %$exports;
+    }
+    ok(scalar(keys %class_export), 'there are class exports to look for');
+
+    my @held;
+    no strict 'refs';
+    for my $package (grep { !$IS_FUNCTION_MODULE{$_} } @PAGI_PACKAGES) {
+        for my $name (sort keys %{"${package}::"}) {
+            next unless defined &{"${package}::$name"};
+            my $export = $class_export{ 0 + \&{"${package}::$name"} } or next;
+            push @held, "${package}::$name is $export";
+        }
+    }
+    is(\@held, [], 'none is held');
+};
+
 # Loaded first in its own process, so no other test or module has loaded
 # anything before it, each name imports into a fresh package and is defined
 # there. The child prints each failure and each warning; none is expected.
