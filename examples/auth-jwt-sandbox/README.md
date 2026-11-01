@@ -74,7 +74,7 @@ its executable extension companions cover the remaining Auth interfaces.
 ## Backend callback or object
 
 The `backend` option accepts exactly a coderef or an object implementing
-`authenticate($request)`. Both sandbox variants pass their JWT callback
+`authenticate($conn)`. Both sandbox variants pass their JWT callback
 directly:
 
 ```perl
@@ -106,7 +106,7 @@ middleware('Authentication',
 ```
 
 `MyApp::JWTBackend` is illustrative, not a bundled verifier. Its `authenticate`
-method receives the same PAGI::Request as the callback, in
+method receives the same PAGI::HTTPConnection as the callback, in
 addition to its normal invocant. Both forms return the same Auth result, directly
 or through a Future, and propagate operational errors normally. No PAGI base
 class is required.
@@ -115,7 +115,7 @@ There is no `backend()` generator, backend descriptor, class-name lookup, or
 implicit construction. The application owns its closures, instances, and sharing.
 The existing `middleware(...)` descriptor retains its normal behavior.
 
-The sole argument is the existing PAGI::Request, with raw scope available via
+The sole argument is a PAGI::HTTPConnection, with raw scope available via
 `->scope`. The backend calls `bearer_token(raise_on_error => 1)` to read exactly
 one well-formed Bearer value before JWT verification. Missing headers and
 unsupported schemes return a guest without failure; malformed Bearer

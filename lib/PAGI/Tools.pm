@@ -122,7 +122,7 @@ from the scope alone, in middleware or across HTTP, WebSocket and SSE
 
 =item * L<PAGI::Auth> for authentication results, installed context, and challenge formatting
 
-=item * L<PAGI::Middleware::Authentication> for request-based application authentication backends
+=item * L<PAGI::Middleware::Authentication> for application authentication backends, which read a PAGI::HTTPConnection
 
 =item * L<PAGI::Middleware::Requires> to declare the scopes a route, mount or application requires
 

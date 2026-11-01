@@ -311,11 +311,13 @@ subtest 'an Authentication backend gets a connection, the route the class, in ei
 };
 
 subtest 'an ErrorHandler catch entry answering the backend\'s error gets the Request class' => sub {
+    my $app_class = middleware('RequestClass', class => 'Local::AppRequest');
     for my $case (
-        ['with RequestClass',    'Local::AppRequest', [middleware('RequestClass', class => 'Local::AppRequest')]],
-        ['without RequestClass', 'PAGI::Request',     []],
+        ['RequestClass outside the ErrorHandler', 'Local::AppRequest', [$app_class], []],
+        ['RequestClass inside the ErrorHandler',  'Local::AppRequest', [], [$app_class]],
+        ['without RequestClass',                  'PAGI::Request',     [], []],
     ) {
-        my ($label, $expected, $before) = @$case;
+        my ($label, $expected, $before, $between) = @$case;
         my ($backend_saw, $entry_saw);
         my $backend = sub {
             $backend_saw = ref $_[0];
@@ -329,7 +331,8 @@ subtest 'an ErrorHandler catch entry answering the backend\'s error gets the Req
                     return response('Text', 'denied', status => 401);
                 } }),
             ],
-            routes => [route('/' => $class_of, middleware => [middleware('Authentication', backend => $backend)])],
+            routes => [route('/' => $class_of,
+                middleware => [@$between, middleware('Authentication', backend => $backend)])],
         ));
         my $res = $client->get('/');
         is([$res->status, $backend_saw, $entry_saw], [401, 'PAGI::HTTPConnection', $expected],
