@@ -135,11 +135,12 @@
     PAGI::Exception::HTTP (with no headers), so one catch entry for
     PAGI::Exception::HTTP answers a bad body too.
   - PAGI::Auth (auth, auth_result, unauth_result, www_authenticate)
-    and PAGI::Middleware::Authentication. Its backend reads the request's
-    headers and cookies, never the body (as Starlette's backend gets an
-    HTTPConnection); a request signed over its body is checked in the
-    handler. What the backend throws is handled as the same value thrown
-    from a route is (as Starlette answers a backend's AuthenticationError):
+    and PAGI::Middleware::Authentication. Its backend, and its catch
+    entries, get a PAGI::HTTPConnection, whatever Request class RequestClass
+    sets (as Starlette's backend gets an HTTPConnection): it reads the
+    headers, cookies, query and session, never the body; a request signed
+    over its body is checked in the handler. What the backend throws is
+    handled as the same value thrown from a route is (as Starlette answers a backend's AuthenticationError):
     an HTTP error, a class with a catch entry, or a page is answered, by the
     ErrorHandler the route is inside or with the built-in answer, and a
     WebSocket or SSE is refused with it; anything else is a server error.
@@ -250,7 +251,7 @@
   - PAGI::Middleware::RequestClass: middleware('RequestClass', class =>
     'MyApp::Request') gives every handler below it (routes, Endpoint::HTTP
     methods, refuse, deny and decline handlers, an ErrorHandler catch
-    entry, Authentication backends listed after it) that Request class instead
+    entry) that Request class instead
     of PAGI::Request, through the scope key pagi.request.factory;
     request_response's request_factory still wins for its one handler.
   - examples/request-class: an application's Request class set once by
@@ -661,7 +662,6 @@
     sse scope: an untyped hash dies. Session gives no session to scope
     types other than http, websocket and sse (it gave a read-only one to
     any type with headers): such a scope passes to the app untouched.
-    Authentication's backend and
     ErrorHandler's handler and catch entries get request_for_scope($scope):
     reading their Request's body dies "this Request was built from the
     scope alone; it has no body", where each had its own message.

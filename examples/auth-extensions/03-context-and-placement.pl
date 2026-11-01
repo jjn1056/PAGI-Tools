@@ -43,8 +43,8 @@ my $outer = sub ($next) {
     };
 };
 
-my $inner_auth = PAGI::Middleware::Authentication->new(backend => sub ($request) {
-    my $grant = ($request->header('Authorization') // '') eq 'Demo inner'
+my $inner_auth = PAGI::Middleware::Authentication->new(backend => sub ($conn) {
+    my $grant = ($conn->header('Authorization') // '') eq 'Demo inner'
         ? ['notes:edit'] : ['notes:read'];
     return auth_result(
         user => PAGI::Auth::SimpleUser->new(identity => 'inner'),

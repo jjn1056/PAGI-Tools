@@ -10,9 +10,9 @@ use PAGI::Routing qw(middleware route);
 
 # The authentication backend: turns a Bearer token into a user and grants.
 sub token_backend ($tokens) {
-    return async sub ($request) {
+    return async sub ($conn) {
         my $token;
-        try { $token = $request->bearer_token(raise_on_error => 1) }
+        try { $token = $conn->bearer_token(raise_on_error => 1) }
         catch ($e) {
             return unauth_result(failure => {
                 code => 'malformed_authorization',

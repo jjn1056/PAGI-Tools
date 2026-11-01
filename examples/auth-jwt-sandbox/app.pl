@@ -16,9 +16,9 @@ my $secret = 'learning-only-secret-not-for-production-0123456789';
 my $page = app_path('public', 'index.html');
 
 # Pass this callback directly, or supply an object with authenticate instead.
-sub jwt_backend ($request) {
+sub jwt_backend ($conn) {
     my $token;
-    try { $token = $request->bearer_token(raise_on_error => 1) }
+    try { $token = $conn->bearer_token(raise_on_error => 1) }
     catch ($e) {
         return unauth_result(failure => {
             code => 'malformed_authorization',

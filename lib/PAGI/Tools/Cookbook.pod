@@ -1947,8 +1947,8 @@ and C<route_table> shows it in each protected route's C<middleware>.
   my %grants = (reader => ['notes:read'], editor => ['notes:read', 'notes:write']);
 
   my $app = compose(
-      middleware => [middleware('Authentication', backend => sub ($request) {
-          my $token = $request->bearer_token;
+      middleware => [middleware('Authentication', backend => sub ($conn) {
+          my $token = $conn->bearer_token;
           return unauth_result() unless defined $token && $grants{$token};
           return auth_result(
               user   => PAGI::Auth::SimpleUser->new(identity => $token),
@@ -2296,10 +2296,10 @@ that hashref with a convenient (and typo-catching) API.
 
   my $app = builder {
       enable 'Authentication', backend => sub {
-          my ($request) = @_;
+          my ($conn) = @_;
           my ($username, $password);
           my $parsed = eval {
-              ($username, $password) = $request->basic_auth(raise_on_error => 1);
+              ($username, $password) = $conn->basic_auth(raise_on_error => 1);
               1;
           };
           return unauth_result(failure => {
@@ -2357,10 +2357,10 @@ These are this application's token rules, not policy imposed by PAGI::Auth.
   # Parsing, JWT verification, and safe rejection messages belong to the backend.
   my $app = builder {
       enable 'Authentication', backend => sub {
-          my ($request) = @_;
+          my ($conn) = @_;
           my $token;
           my $parsed = eval {
-              $token = $request->bearer_token(raise_on_error => 1);
+              $token = $conn->bearer_token(raise_on_error => 1);
               1;
           };
           return unauth_result(failure => {

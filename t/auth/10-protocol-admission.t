@@ -92,11 +92,11 @@ subtest 'mounted Auth retains real protocol scopes and ordinary refusal applicat
             };
             my $application = compose(
                 middleware => [middleware('Authentication', backend => sub {
-                    my ($request) = @_;
-                    isa_ok $request, 'PAGI::Request';
-                    push @backend_types, $request->scope->{type};
-                    $observe_shared->($request);
-                    my $token = $request->header('authorization') // '';
+                    my ($conn) = @_;
+                    isa_ok $conn, 'PAGI::HTTPConnection';
+                    push @backend_types, $conn->scope->{type};
+                    $observe_shared->($conn);
+                    my $token = $conn->header('authorization') // '';
                     return auth_result(user => PAGI::Auth::SimpleUser->new(identity => 'alice'))
                         if $token eq 'Bearer accepted';
                     return unauth_result(scopes => ['notes:read']) if $token eq 'Bearer guest';

@@ -8,6 +8,7 @@ use lib 'lib', "$FindBin::Bin/../lib";
 use PAGI::Test::Client;
 use PAGI::Tools qw(compose middleware mount response route router sse websocket);
 use PAGI::Auth qw(unauth_result);
+use PAGI::Exception::HTTP;
 use PAGI::Utils ();
 use PAGI::Utils::Middleware qw(clone_scope);
 use PAGI::Middleware::RequestClass;
@@ -277,19 +278,35 @@ subtest "in Compose, handler is outside the application middleware: a plain Requ
     is([$client->get('/')->status, $seen], [409, 'Local::AppRequest'], "a catch entry at the route gets the route's class");
 };
 
-subtest 'an Authentication backend gets the class only when listed after RequestClass' => sub {
-    my $seen;
-    my $backend = sub { my ($request) = @_; $seen = ref $request; return unauth_result() };
+subtest 'an Authentication backend gets a connection, the route the class, in either order' => sub {
+    my ($seen, $caught);
+    my $backend = sub {
+        my ($conn) = @_;
+        $seen = [ref $conn, $conn->isa('PAGI::Request') ? 'request' : 'no request'];
+        die PAGI::Exception::HTTP->new(401, 'no') if $conn->header('x-deny');
+        return unauth_result();
+    };
+    my $catch = { 'PAGI::Exception::HTTP' => sub {
+        my ($conn) = @_;
+        $caught = [ref $conn, $conn->isa('PAGI::Request') ? 'request' : 'no request'];
+        return response('Text', 'denied', status => 401);
+    } };
     for my $case (
-        ['after',  'Local::AppRequest', [middleware('RequestClass', class => 'Local::AppRequest'), middleware('Authentication', backend => $backend)]],
-        ['before', 'PAGI::Request',     [middleware('Authentication', backend => $backend), middleware('RequestClass', class => 'Local::AppRequest')]],
+        ['after',  [middleware('RequestClass', class => 'Local::AppRequest'), middleware('Authentication', backend => $backend, catch => $catch)]],
+        ['before', [middleware('Authentication', backend => $backend, catch => $catch), middleware('RequestClass', class => 'Local::AppRequest')]],
     ) {
-        my ($label, $expected, $middleware) = @$case;
-        my $res = PAGI::Test::Client->new(app => compose(
+        my ($label, $middleware) = @$case;
+        my $client = PAGI::Test::Client->new(app => compose(
             middleware => $middleware,
             routes     => [route('/' => $class_of)],
-        ))->get('/');
-        is([$res->status, $res->text, $seen], [200, 'Local::AppRequest', $expected], "$label: $expected");
+        ));
+        ($seen, $caught) = ();
+        my $res = $client->get('/');
+        is([$res->status, $res->text, $seen], [200, 'Local::AppRequest', ['PAGI::HTTPConnection', 'no request']],
+            "$label: the backend gets a connection, the route the class");
+        $res = $client->get('/', headers => { 'X-Deny' => 1 });
+        is([$res->status, $res->text, $caught], [401, 'denied', ['PAGI::HTTPConnection', 'no request']],
+            "$label: the catch handler gets the same kind of object");
     }
 };
 

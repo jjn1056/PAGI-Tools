@@ -133,8 +133,8 @@ PAGI::Auth - authentication results, installed context, and challenge formatting
   use PAGI::Middleware::Authentication;
 
   my $backend = sub {
-      my ($request) = @_;
-      my $token = $request->bearer_token;
+      my ($conn) = @_;
+      my $token = $conn->bearer_token;
       return unauth_result() unless defined $token;
       my $claims = verify_application_jwt($token); # application-owned verifier
       return unauth_result(failure => {
@@ -278,7 +278,7 @@ This complete recipe installs Authentication before an application-owned HTTP
 check. Both protected routes share it; C</public> sits outside the group.
 The wrapper delegates lifespan and other non-HTTP scopes before reading auth,
 awaits the next application, and invokes an ordinary response directly for a
-guest or rejection. The backend delegates Authorization parsing to Request;
+guest or rejection. The backend delegates Authorization parsing to L<PAGI::HTTPConnection>;
 duplicates are rejected without selecting a token. The fixed token is only a
 teaching fixture; replace it with application-owned verification.
 
@@ -291,10 +291,10 @@ teaching fixture; replace it with application-owned verification.
   use PAGI::Routing qw(route mount middleware);
   use PAGI::Utils qw(invoke_app);
 
-  my $backend = sub ($request) {
+  my $backend = sub ($conn) {
       my $token;
       my $parsed = eval {
-          $token = $request->bearer_token(raise_on_error => 1);
+          $token = $conn->bearer_token(raise_on_error => 1);
           1;
       };
       return unauth_result(failure => {

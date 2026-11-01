@@ -101,8 +101,9 @@ C<http_default> coderefs, L<PAGI::Endpoint::HTTP> methods, C<refuse> and
 Maintenance C<response> handlers, the handlers given to
 L<PAGI::WebSocket/deny> and L<PAGI::SSE/decline>, an
 L<PAGI::Middleware::ErrorHandler> C<catch> entry answering a route's error
-(it gets that route's Request), and an L<PAGI::Middleware::Authentication>
-C<backend> listed after this middleware. An ErrorHandler C<handler> gets a
+(it gets that route's Request). An L<PAGI::Middleware::Authentication>
+C<backend> gets an L<PAGI::HTTPConnection>, whatever its place in the stack.
+An ErrorHandler C<handler> gets a
 plain L<PAGI::Request> in Compose, which places it outside every application
 middleware; in a stack you build yourself it gets the class when this
 middleware wraps the ErrorHandler. It sets the scope key

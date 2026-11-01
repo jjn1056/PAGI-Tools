@@ -14,8 +14,8 @@ use PAGI::Utils qw(invoke_app);
     sub to_app { $_[0]->{response}->to_app }
 }
 
-my $backend = sub ($request) {
-    my $token = $request->bearer_token;
+my $backend = sub ($conn) {
+    my $token = $conn->bearer_token;
     return defined($token) && $token eq 'accepted'
         ? auth_result(user => PAGI::Auth::SimpleUser->new(identity => 'alice'))
         : unauth_result(failure => { message => 'Sign in to continue.' });
