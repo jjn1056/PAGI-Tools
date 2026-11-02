@@ -147,11 +147,15 @@ writes its setters out instead of delegating, so it needs no such shim.
 B<Imports.> A function a class imports is a sub in its package, so its
 objects, and every subclass's, answer it as a method: without the
 C<use namespace::autoclean;> line above, C<< $res->response(...) >> would
-run. Put that line in each class that imports, as PAGI-Tools' own classes
-do: it removes the imports once the class is compiled, and the class's own
-code still calls them. It also removes a name looked up when the class runs,
-so a route built in a method that names an imported constraint provider,
-C<{id:&Int}>, needs C<< use namespace::autoclean -except => 'Int'; >>.
+run. Put that line in the classes others subclass or extend, such as a
+framework's own classes, as PAGI-Tools' classes do; an application class
+does not need it. The line removes a class's imports once it is compiled,
+and the class's own code still calls them. Two kinds of name must survive
+it. An imported constraint provider named inline, C<{id:&Int}>, is looked
+up by name when routes are built, wherever that happens, so the class needs
+C<< use namespace::autoclean -except => 'Int'; >>. A class that exports
+with Exporter keeps what it exports: C<< -except => [qw(import ...)] >>,
+listing the names it re-exports too.
 
 B<Building on.> The framework's users write handlers that return PAGI
 values, or plain values the framework converts, and the framework adds its
