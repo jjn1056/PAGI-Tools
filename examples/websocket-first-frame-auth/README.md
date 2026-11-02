@@ -21,8 +21,8 @@ else.
 A connection has one helper, and the route builds it (`PAGI::WebSocket`,
 "WHICH HELPER ANSWERS"). A middleware that built its own `PAGI::WebSocket`
 to accept and read the token would leave the route's handler with a second
-one, whose every operation croaks "this connection was answered by another
-helper; use that one". So the middleware wraps the raw `$send` and
+one, whose every operation but `try_send_*` croaks "this connection was
+answered by another helper; use that one". So the middleware wraps the raw `$send` and
 `$receive` instead, and four rules make that work.
 
 **1. Hold the handler's accept until the token is checked.** The handler's
