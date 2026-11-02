@@ -15,7 +15,7 @@ my %skip = map { $_ => 1 } qw(
     t/response/06-builder.t
 );
 my $removed = qr/\b(?:text|html|json|problem|redirect|empty|file|stream|ndjson)_response\b/;
-my $unnamed = qr/(?<![\w>:\$])response\(\s*(?!['"]|\$name\b|\))/;
+my $unnamed = qr/(?<![\w>:\$])response\(\s*(?!['"]|\$name\b|\$s->\{type\}\s*\/\/\s*['"]|\))/;
 
 my (@removed, @unnamed);
 find({ no_chdir => 1, wanted => sub {

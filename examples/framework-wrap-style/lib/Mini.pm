@@ -43,8 +43,7 @@ package Mini::Response {
     # Empty, and undef content is an empty body for the base class.
     sub finalize ($s) {
         my $staged = $s->{staged};
-        my $name = $s->{type} // '+PAGI::Response';
-        return response($name, $s->{body},
+        return response($s->{type} // '+PAGI::Response', $s->{body},
             ($staged->has_status ? (status => $staged->status) : ()),
             headers => $staged->headers);
     }
