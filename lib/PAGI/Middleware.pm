@@ -36,7 +36,7 @@ PAGI::Middleware - Base class for PAGI middleware
 
     my $app = builder {
         enable 'My::Middleware', option => 'value';
-        enable_if { $_[0]->{path} =~ m{^/api/} } 'RateLimit', limit => 100;
+        enable_if { $_[0]->{path} =~ m{^/api/} } 'RateLimit', requests_per_second => 100;
         mount '/static' => $static_app;
         $my_app;
     };
