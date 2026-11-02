@@ -106,6 +106,7 @@ PAGI::Endpoint::WebSocket - Class-based WebSocket endpoint handler
 
     package MyApp::Chat;
     use parent 'PAGI::Endpoint::WebSocket';
+    use namespace::autoclean;
     use Future::AsyncAwait;
     use PAGI::Routing qw(endpoint websocket);
 

@@ -383,6 +383,7 @@ L<PAGI::Tools::Cookbook/Watching or changing the request body> has more.
 
     package PAGI::Middleware::Logger;
     use parent 'PAGI::Middleware';
+    use namespace::autoclean;
     use Future::AsyncAwait;
     use Time::HiRes 'time';
 

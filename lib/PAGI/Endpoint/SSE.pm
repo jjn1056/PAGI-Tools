@@ -95,6 +95,7 @@ PAGI::Endpoint::SSE - Class-based Server-Sent Events endpoint handler
 
     package MyApp::Notifications;
     use parent 'PAGI::Endpoint::SSE';
+    use namespace::autoclean;
     use Future::AsyncAwait;
     use PAGI::Routing qw(endpoint sse);
 
@@ -226,6 +227,7 @@ between workers.
 
     package MyApp::Events;
     use parent 'PAGI::Endpoint::SSE';
+    use namespace::autoclean;
     use Future::AsyncAwait;
     use JSON::MaybeXS qw(encode_json decode_json);
 

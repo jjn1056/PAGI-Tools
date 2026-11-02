@@ -1252,6 +1252,7 @@ Router grammar. This complete shape keeps topology declarative:
 
   package MessageAPI;
   use parent 'PAGI::Endpoint::HTTP';
+  use namespace::autoclean;
   use PAGI::Response qw(response);
 
   sub get {
@@ -1279,6 +1280,7 @@ Router grammar. This complete shape keeps topology declarative:
   }
 
   package MyApp::API;
+  use namespace::autoclean;
   use PAGI::Routing qw(endpoint route router sse websocket);
 
   sub new {
@@ -1302,6 +1304,7 @@ Router grammar. This complete shape keeps topology declarative:
   }
 
   package MyApp::Root;
+  use namespace::autoclean;
   use PAGI::App::File;
   use PAGI::Compose qw(compose);
   use PAGI::Pages qw(welcome);
@@ -1368,6 +1371,7 @@ L<PAGI::Response::JSON> perform JSON encoding:
 
   package MyCompany::Response::Collection;
   use v5.40;
+  use namespace::autoclean;
 
   use Carp qw(croak);
   use parent 'PAGI::Response::JSON';
@@ -3528,6 +3532,7 @@ tab-separated values:
 
   package MyApp::Response::TSV;
   use parent 'PAGI::Response::Stream';
+  use namespace::autoclean;
   use Carp qw(croak);
   use Encode qw(encode);
 

@@ -284,6 +284,7 @@ application class owns several paths, have a C<routing()> method return an
 immutable Router:
 
   package MyApp::People;
+  use namespace::autoclean;
   use PAGI::Response qw(response);
   use PAGI::Routing qw(route router);
 
@@ -906,6 +907,7 @@ a new event with what you changed:
 
   package MyApp::Middleware::PoweredBy;
   use parent 'PAGI::Middleware';
+  use namespace::autoclean;
   use Future::AsyncAwait;
   use PAGI::Utils::Middleware qw(wrap_response_headers);
 
@@ -1252,6 +1254,7 @@ Create reusable middleware by extending L<PAGI::Middleware>:
 
   package MyApp::Middleware::Auth;
   use parent 'PAGI::Middleware';
+  use namespace::autoclean;
   use Future::AsyncAwait;
   use PAGI::HTTPConnection qw(http_connection);
   use PAGI::Stash;
@@ -1624,6 +1627,7 @@ module with C<< __PACKAGE__->run_if_script >> in place of C<1;>:
     package MyApp;
     use strict;
     use warnings;
+    use namespace::autoclean;
     use parent 'PAGI::App::Compose';
     use PAGI::Tools qw(response route);
 

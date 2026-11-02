@@ -137,6 +137,7 @@ PAGI::Endpoint::HTTP - Class-based HTTP endpoint handler
 
     package MyApp::UserAPI;
     use parent 'PAGI::Endpoint::HTTP';
+    use namespace::autoclean;
     use Future::AsyncAwait;
     use PAGI::Tools qw(endpoint response route);
 

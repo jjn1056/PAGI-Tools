@@ -575,6 +575,10 @@
     full names no longer exist. PAGI::Middleware::Builder's POD now says its
     object interface is add_middleware, add_middleware_if and add_mount, and
     its SYNOPSIS runs.
+  - No lib object answers a function its class imports as a method: every
+    class that imports uses namespace::autoclean (a new prerequisite), so
+    $request->croak, $request->decode_json, $endpoint->invoke_app and the
+    like are gone.
   - $request->host is the uri's host: the Host as sent, without its port
     ("example.com" for "Host: example.com:8080"; use $request->uri->authority
     for host:port or $request->uri->port), never validated, and the server

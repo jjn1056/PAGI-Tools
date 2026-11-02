@@ -91,6 +91,7 @@ The smallest application, in F<lib/MyApp.pm>:
     package MyApp;
     use strict;
     use warnings;
+    use namespace::autoclean;
     use parent 'PAGI::App::Compose';
     use PAGI::Tools qw(response route);
 
@@ -103,6 +104,7 @@ Every hook:
     package MyApp;
     use strict;
     use warnings;
+    use namespace::autoclean;
     use parent 'PAGI::App::Compose';
     use PAGI::Pages qw(not_found);
     use PAGI::Tools qw(middleware response route);
@@ -284,6 +286,7 @@ set them:
 
     package MyApp;
     use Moo;
+    use namespace::autoclean;
     extends 'PAGI::App::Compose';
     use PAGI::Tools qw(response route);
 
