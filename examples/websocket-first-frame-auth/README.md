@@ -25,12 +25,13 @@ one, whose every operation but `try_send_*` croaks "this connection was
 answered by another helper; use that one". So the middleware wraps the raw `$send` and
 `$receive` instead, and four rules make that work.
 
-**1. Hold the handler's accept until the token is checked.** The handler's
-`websocket.accept` goes to the server at once (the client cannot send a
-token before the handshake completes), but the wrapped `$send` returns only
-after the first message is read and checked. Anything the handler sends
-after `accept`, a greeting say, then reaches only a client that showed a
-good token.
+**1. Every send and receive of the handler's waits for the token check.**
+The handler's `websocket.accept` goes to the server at once (the client
+cannot send a token before the handshake completes) and starts the check.
+A helper owns the connection from the moment it issues its accept, so the
+handler may send or receive while that accept is still pending. Its sends
+wait for the check, so nothing reaches a client that has not shown a good
+token; its receives wait too, or one could take the token itself.
 
 **2. Read the token from the raw receive, skipping `websocket.connect`.**
 `PAGI::WebSocket` never reads the handshake event, so the raw receive's
@@ -43,19 +44,20 @@ application issues after its own `websocket.close` fails (PAGI::Server
 answers "cannot send 'websocket.send' after websocket.close"), and the
 handler dies with it. The middleware closed, so it swallows those sends.
 
-**4. After the 4401 close, hand the handler's receive the disconnect.** A
-client may send more frames before the Close reaches it, and the server
-still delivers them. The handler's receive gets the
-`websocket.disconnect` the close stands for instead, so those frames never
-reach it and it ends as it does when any client leaves.
+**4. After the 4401 close, the handler's receive skips the client's
+remaining frames and gets the server's disconnect.** A client may send
+more frames before the Close reaches it, and the server still delivers
+them. The middleware reads past them to the `websocket.disconnect` the
+server delivers once the client has answered the Close, and hands that on.
+The handler then sees what its connection reports: `is_connected` false,
+`close_code` the client's 4401. It waits for the client's answer, which
+the server bounds with its close timeout.
 
 ```perl
-my $checked_send = async sub {
-    my ($event) = @_;
-    return if $ended;                                   # rule 3
-    await $send->($event);
-    return unless $event->{type} eq 'websocket.accept';
-    my $first = await $receive->();                     # rule 1
+my $check = async sub {
+    my ($accept) = @_;
+    await $send->($accept);
+    my $first = await $receive->();
     $first = await $receive->() while $first->{type} eq 'websocket.connect';   # rule 2
     if ($first->{type} eq 'websocket.disconnect') {     # the client left
         $ended = $first;
@@ -63,11 +65,26 @@ my $checked_send = async sub {
     }
     return if defined $first->{text} && $VALID_TOKEN{ $first->{text} };
     await $send->({ type => 'websocket.close', code => 4401, reason => 'unauthorized' });
-    $ended = { type => 'websocket.disconnect', code => 4401, reason => 'unauthorized' };
+    $closed = 1;
     return;
 };
+my $checked_send = async sub {
+    my ($event) = @_;
+    if ($event->{type} eq 'websocket.accept') {
+        $checked = $check->($event);
+        return await $checked;
+    }
+    await $checked if $checked;                         # rule 1
+    return if $closed || $ended;                        # rule 3
+    await $send->($event);
+};
 my $checked_receive = async sub {
-    return {%$ended} if $ended;                         # rule 4
+    await $checked if $checked;                         # rule 1
+    while ($closed && !$ended) {                        # rule 4
+        my $event = await $receive->();
+        $ended = $event if $event->{type} eq 'websocket.disconnect';
+    }
+    return {%$ended} if $ended;
     return await $receive->();
 };
 ```
@@ -96,4 +113,6 @@ my $checked_receive = async sub {
 Close at once, inside the send, which a real client cannot do; the tests of
 rules 3 and 4 use `close_mode => 'manual'`, so the Close is answered after
 the handler's next step, as it is on a real server, and the test client can
-still send a frame the Close has not yet reached.
+still send a frame the Close has not yet reached. Rule 1's tests send and
+receive while the handler's accept is pending, one of them with an accept
+whose send the test settles late, as a server may.
