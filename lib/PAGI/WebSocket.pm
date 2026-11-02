@@ -868,14 +868,6 @@ scope. Middleware reads the request through L<PAGI::HTTPConnection>
 (C<http_connection($scope)>), or wraps the raw C<$receive> and C<$send>, as
 Starlette's middleware does.
 
-A middleware that acts on a WebSocket's frames, such as one that reads a
-token from the client's first message and closes with 4401 when it is
-wrong, builds no helper: it wraps the raw C<$receive> and C<$send>. The
-example C<examples/websocket-first-frame-auth> in this distribution is the
-worked version, with the traps: it holds the application's C<accept> until
-the token is checked, skips C<websocket.connect>, and after its close drops
-the application's sends and hands its receive the disconnect.
-
 B<This helper answered.> From the moment this helper issues its C<accept>,
 before the server's send completes, it owns the connection: sends, receives,
 C<keepalive>, C<close> and C<close_or_deny> work as on an accepted socket,
@@ -906,6 +898,16 @@ is open and another helper started its response, every operation of the
 second croaks
 C<this connection was answered by another helper; use that one>, except
 C<try_send_*>, which return 0.
+
+So a middleware that acts on a WebSocket's frames, such as one that reads a
+token from the client's first message and closes with 4401 when it is
+wrong, builds no helper: it wraps the raw C<$receive> and C<$send>, and the
+application's helper answers. That helper still reads C<pagi.connection>
+itself: once the connection is over, its sends croak C<Cannot send on
+closed WebSocket> whatever the middleware does, so a handler behind such a
+middleware receives before it sends, or uses C<try_send_*>.
+C<examples/websocket-first-frame-auth> in this distribution is the worked
+version, with its other traps.
 
 =head1 STATE ACCESSORS
 
