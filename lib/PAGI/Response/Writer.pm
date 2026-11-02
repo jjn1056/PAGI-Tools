@@ -2,7 +2,6 @@ package PAGI::Response::Writer;
 
 use strict;
 use warnings;
-use namespace::autoclean;
 
 use Carp qw(croak);
 use Encode qw(encode FB_CROAK LEAVE_SRC);
