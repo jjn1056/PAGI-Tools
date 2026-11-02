@@ -15,12 +15,13 @@ PAGI::Middleware - Base class for PAGI middleware
     # Create a custom middleware
     package My::Middleware;
     use parent 'PAGI::Middleware';
+    use Future::AsyncAwait;
 
     sub wrap {
         my ($self, $app) = @_;
 
-        return async sub  {
-        my ($scope, $receive, $send) = @_;
+        return async sub {
+            my ($scope, $receive, $send) = @_;
             # Modify scope for inner app
             my $modified_scope = $self->modify_scope($scope, {
                 custom_key => 'custom_value',
@@ -35,7 +36,7 @@ PAGI::Middleware - Base class for PAGI middleware
     use PAGI::Middleware::Builder;
 
     my $app = builder {
-        enable 'My::Middleware', option => 'value';
+        enable '+My::Middleware', option => 'value';
         enable_if { $_[0]->{path} =~ m{^/api/} } 'RateLimit', requests_per_second => 100;
         mount '/static' => $static_app;
         $my_app;

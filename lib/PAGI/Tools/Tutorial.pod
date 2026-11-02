@@ -906,7 +906,6 @@ a new event with what you changed:
 
   package MyApp::Middleware::PoweredBy;
   use parent 'PAGI::Middleware';
-  use namespace::autoclean;
   use Future::AsyncAwait;
   use PAGI::Utils::Middleware qw(wrap_response_headers);
 
@@ -1253,7 +1252,6 @@ Create reusable middleware by extending L<PAGI::Middleware>:
 
   package MyApp::Middleware::Auth;
   use parent 'PAGI::Middleware';
-  use namespace::autoclean;
   use Future::AsyncAwait;
   use PAGI::HTTPConnection qw(http_connection);
   use PAGI::Stash;
