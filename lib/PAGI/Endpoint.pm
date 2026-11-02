@@ -106,7 +106,6 @@ PAGI::Endpoint - Name an endpoint class at a route; the class decides how it is 
     # A Moo class whose builder fills a required attribute from each request.
     package MyApp::Notes;
     use Moo;
-    use namespace::autoclean;
     use Future::AsyncAwait;
     use PAGI::Tools qw(response);
     extends 'PAGI::Endpoint::HTTP';

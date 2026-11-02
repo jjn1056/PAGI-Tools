@@ -1252,7 +1252,6 @@ Router grammar. This complete shape keeps topology declarative:
 
   package MessageAPI;
   use parent 'PAGI::Endpoint::HTTP';
-  use namespace::autoclean;
   use PAGI::Response qw(response);
 
   sub get {
@@ -1280,7 +1279,6 @@ Router grammar. This complete shape keeps topology declarative:
   }
 
   package MyApp::API;
-  use namespace::autoclean;
   use PAGI::Routing qw(endpoint route router sse websocket);
 
   sub new {
@@ -1304,7 +1302,6 @@ Router grammar. This complete shape keeps topology declarative:
   }
 
   package MyApp::Root;
-  use namespace::autoclean;
   use PAGI::App::File;
   use PAGI::Compose qw(compose);
   use PAGI::Pages qw(welcome);

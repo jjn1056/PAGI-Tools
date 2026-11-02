@@ -284,7 +284,6 @@ application class owns several paths, have a C<routing()> method return an
 immutable Router:
 
   package MyApp::People;
-  use namespace::autoclean;
   use PAGI::Response qw(response);
   use PAGI::Routing qw(route router);
 
@@ -1627,7 +1626,6 @@ module with C<< __PACKAGE__->run_if_script >> in place of C<1;>:
     package MyApp;
     use strict;
     use warnings;
-    use namespace::autoclean;
     use parent 'PAGI::App::Compose';
     use PAGI::Tools qw(response route);
 
