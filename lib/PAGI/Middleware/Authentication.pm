@@ -8,7 +8,7 @@ use Carp qw(croak);
 use Future;
 use Future::AsyncAwait;
 use Scalar::Util qw(blessed);
-use PAGI::Auth ();
+use PAGI::Auth qw(auth);
 use PAGI::HTTPConnection ();
 use PAGI::Middleware::ErrorHandler ();
 use PAGI::Utils::Middleware qw(clone_scope);
@@ -93,7 +93,7 @@ sub wrap {
             unless @results == 1;
 
         my $inner = clone_scope($scope, { 'pagi.auth' => $results[0] });
-        PAGI::Auth::auth($inner);
+        auth($inner);
         await $app->($inner, $receive, $send);
         return;
     };

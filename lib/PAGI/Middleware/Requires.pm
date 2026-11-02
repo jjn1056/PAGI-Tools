@@ -6,7 +6,7 @@ use namespace::autoclean;
 use parent 'PAGI::Middleware';
 use Carp qw(croak);
 use Future::AsyncAwait;
-use PAGI::Auth ();
+use PAGI::Auth qw(auth);
 use PAGI::Response::Redirect ();
 use PAGI::Response::Text ();
 use PAGI::Routing::URL ();
@@ -42,7 +42,7 @@ sub wrap {
         my ($scope, $receive, $send) = @_;
         my $type = $scope->{type} // '';
         my $context = ($type eq 'http' || $type eq 'websocket' || $type eq 'sse')
-            ? PAGI::Auth::auth($scope) : undef;
+            ? auth($scope) : undef;
         if (!$context || ($context->user->is_authenticated
                 && $context->credentials->has_all(@required))) {
             await $app->($scope, $receive, $send);

@@ -23,15 +23,12 @@ package Mini::Request {
     sub mini ($self) { $self->{mini} }
 }
 
-# A package with no methods to hold response(), so neither Mini nor
-# Mini::Response answers it as a method.
-package Mini::_Fn {
-    use PAGI::Response qw(response);
-}
-
 # Seam (§3.4): staging on an empty PAGI::Response; Mini's merge policy is
 # its own -- what the handler staged wins over a class default.
 package Mini::Response {
+    use PAGI::Response qw(response);
+    use namespace::autoclean;    # so a Mini::Response does not answer response()
+
     sub new ($class) { bless { staged => PAGI::Response->new }, $class }
     sub status ($s, $c)          { $s->{staged}->status($c); $s }
     sub header ($s, $n, $v)      { $s->{staged}->header($n, $v); $s }
@@ -46,7 +43,8 @@ package Mini::Response {
     # Empty, and undef content is an empty body for the base class.
     sub finalize ($s) {
         my $staged = $s->{staged};
-        return Mini::_Fn::response($s->{type} // '+PAGI::Response', $s->{body},
+        my $name = $s->{type} // '+PAGI::Response';
+        return response($name, $s->{body},
             ($staged->has_status ? (status => $staged->status) : ()),
             headers => $staged->headers);
     }
