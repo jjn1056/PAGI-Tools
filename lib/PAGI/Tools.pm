@@ -2,10 +2,11 @@ package PAGI::Tools;
 
 use strict;
 use warnings;
-use Exporter 'import';
+use PAGI::Utils::_Exporter ();
 use PAGI::Compose ();
 use PAGI::ContentNegotiation ();
 use PAGI::ErrorContext ();
+use PAGI::HTTPConnection ();
 use PAGI::Response ();
 use PAGI::Routing ();
 use PAGI::Routing::OpenAPI ();
@@ -17,9 +18,9 @@ use PAGI::Utils::Middleware ();
 
 our $VERSION = '0.003000';
 
-# Every name is the source module's own sub, aliased rather than wrapped:
-# route, websocket, sse and mount resolve &Name constraint providers in the
-# package that called them, and an alias keeps that the importing package.
+# Every name is installed as its source module's own coderef, never a
+# wrapper: route, websocket, sse and mount resolve &Name constraint providers
+# in the package that called them, which stays the importing package.
 my @SOURCES = (
     'PAGI::Compose'           => [qw(compose)],
     'PAGI::Response'          => [qw(response)],
@@ -27,6 +28,7 @@ my @SOURCES = (
     'PAGI::Routing::URL'      => [qw(url path_for url_for)],
     'PAGI::Routing::OpenAPI'  => [qw(openapi)],
     'PAGI::ErrorContext'      => [qw(error_context)],
+    'PAGI::HTTPConnection'    => [qw(http_connection)],
     'PAGI::State'             => [qw(app_state)],
     'PAGI::Stash'             => [qw(stash)],
     'PAGI::Session'           => [qw(session)],
@@ -35,20 +37,29 @@ my @SOURCES = (
                                      record_receive)],
 );
 
-our @EXPORT_OK;
+# Function modules keep their exported names callable by full name, so the
+# names re-exported from them are callable as PAGI::Tools::<name> as well.
+# A name from a class gets no such sub here.
+my %FUNCTION_MODULES = map { $_ => 1 } qw(PAGI::Routing PAGI::Utils::Middleware);
+
+my (%EXPORTS, %TAGS, @DEFAULTS);
 for (my $i = 0; $i < @SOURCES; $i += 2) {
     my ($module, $names) = @SOURCES[$i, $i + 1];
     for my $name (@$names) {
         no strict 'refs';
-        *{"PAGI::Tools::$name"} = \&{"${module}::$name"};
-        push @EXPORT_OK, $name;
+        my $code = $module->_exports->{$name};
+        die "PAGI::Tools: $module does not export $name\n" unless $code;
+        $EXPORTS{$name} = $code;
+        *{"PAGI::Tools::$name"} = $code if $FUNCTION_MODULES{$module};
     }
 }
-our %EXPORT_TAGS = (
+%TAGS = (
     routes => [qw(router route websocket sse mount)],
     urls   => [qw(url path_for url_for)],
-    all    => [@EXPORT_OK],
+    all    => [sort keys %EXPORTS],
 );
+sub import   { PAGI::Utils::_Exporter::export(__PACKAGE__, \%EXPORTS, \%TAGS, \@DEFAULTS, scalar caller, @_) }
+sub _exports { \%EXPORTS }
 
 1;
 
@@ -122,7 +133,7 @@ from the scope alone, in middleware or across HTTP, WebSocket and SSE
 
 =item * L<PAGI::Auth> for authentication results, installed context, and challenge formatting
 
-=item * L<PAGI::Middleware::Authentication> for request-based application authentication backends
+=item * L<PAGI::Middleware::Authentication> for application authentication backends, which read a PAGI::HTTPConnection
 
 =item * L<PAGI::Middleware::Requires> to declare the scopes a route, mount or application requires
 
@@ -217,6 +228,7 @@ package that imported them from C<PAGI::Tools>.
     url path_for url_for                          PAGI::Routing::URL
     openapi                                       PAGI::Routing::OpenAPI
     error_context                                 PAGI::ErrorContext
+    http_connection                               PAGI::HTTPConnection
     app_state                                     PAGI::State
     stash                                         PAGI::Stash
     session                                       PAGI::Session

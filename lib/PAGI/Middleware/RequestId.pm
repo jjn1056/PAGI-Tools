@@ -2,6 +2,7 @@ package PAGI::Middleware::RequestId;
 
 use strict;
 use warnings;
+use namespace::autoclean;
 use parent 'PAGI::Middleware';
 use Future::AsyncAwait;
 use PAGI::Utils::Random qw(secure_random_bytes);

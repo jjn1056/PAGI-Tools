@@ -1,6 +1,7 @@
 package PAGI::Request::MultipartStream;
 use strict;
 use warnings;
+use namespace::autoclean;
 
 use Future::AsyncAwait;
 use Carp qw(croak);
@@ -308,6 +309,7 @@ async sub _next_chunk {
 package PAGI::Request::Part;
 use strict;
 use warnings;
+use namespace::autoclean;
 
 use Future::AsyncAwait;
 use Carp qw(croak);

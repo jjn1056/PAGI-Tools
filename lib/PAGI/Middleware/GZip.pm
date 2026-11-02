@@ -2,6 +2,7 @@ package PAGI::Middleware::GZip;
 
 use strict;
 use warnings;
+use namespace::autoclean;
 use parent 'PAGI::Middleware';
 use Future::AsyncAwait;
 use PAGI::Middleware::BufferedResponse qw(stream_transform_response);

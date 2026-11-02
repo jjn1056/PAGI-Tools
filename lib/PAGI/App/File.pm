@@ -2,6 +2,7 @@ package PAGI::App::File;
 
 use strict;
 use warnings;
+use namespace::autoclean;
 use Future;
 use Future::AsyncAwait;
 use Carp qw(croak);

@@ -522,11 +522,13 @@ subtest 'a streaming producer that awaits real I/O completes' => sub {
     require PAGI::Compose;
     require PAGI::Response;
     require PAGI::Routing;
+    PAGI::Response->import('response');
+    PAGI::Compose->import('compose');
 
-    my $app = PAGI::Compose::compose(routes => [
+    my $app = compose(routes => [
         PAGI::Routing::route('/stream' => async sub {
             my ($request) = @_;
-            return PAGI::Response::response('Stream', async sub {
+            return response('Stream', async sub {
                 my ($writer) = @_;
                 for my $n (1 .. 3) {
                     await $writer->write("tick $n\n");

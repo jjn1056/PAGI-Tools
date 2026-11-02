@@ -2,6 +2,7 @@ package PAGI::Lifespan;
 
 use strict;
 use warnings;
+use namespace::autoclean;
 use Future::AsyncAwait;
 use Carp qw(croak);
 use PAGI::Utils ();

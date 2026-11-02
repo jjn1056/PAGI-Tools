@@ -1201,8 +1201,8 @@ state => session_state('Header',
 
 `PAGI::Middleware::Auth::Basic` and `Auth::Bearer` are removed. They answered
 401 themselves and left a plain hash in `$scope->{'pagi.auth'}`.
-`PAGI::Middleware::Authentication` takes a backend that turns a Request into
-a result, and never chooses a response: refusing is application policy.
+`PAGI::Middleware::Authentication` takes a backend that turns a
+`PAGI::HTTPConnection` into a result, and never chooses a response: refusing is application policy.
 
 ```perl
 # Before
@@ -1219,8 +1219,8 @@ use PAGI::Auth qw(auth auth_result unauth_result);
 use PAGI::Auth::SimpleUser;
 
 enable 'Authentication', backend => sub {
-    my ($request) = @_;
-    my ($username, $password) = $request->basic_auth;
+    my ($conn) = @_;
+    my ($username, $password) = $conn->basic_auth;
     return unauth_result()
         unless defined $username && check_password($username, $password);
     return auth_result(user => PAGI::Auth::SimpleUser->new(identity => $username));
@@ -1230,7 +1230,7 @@ enable 'Authentication', backend => sub {
 # ...or refuse declaratively: route('/admin' => \&admin, middleware => [middleware('Requires')])
 ```
 
-For tokens, read `$request->bearer_token` in the backend and verify it
+For tokens, read `$conn->bearer_token` in the backend and verify it
 yourself (Auth::Bearer's JWT decoding is not built in). Answer
 unauthenticated requests with the `Requires` middleware, or in the handler with
 `www_authenticate` for a `WWW-Authenticate` challenge. `PAGI::Auth`'s POD and

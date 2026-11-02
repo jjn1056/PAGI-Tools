@@ -2,6 +2,7 @@ package PAGI::Request::BodyStream;
 
 use strict;
 use warnings;
+use namespace::autoclean;
 
 use Future;
 use Future::AsyncAwait;

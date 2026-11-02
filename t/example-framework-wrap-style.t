@@ -42,4 +42,7 @@ $res = $client->get('/nowhere', headers => { Accept => 'application/json' });
 is($res->status, 404, 'a page turned into a response');
 is($res->header('X-Mini'), '1', "with the framework's header on it");
 
+ok(!Mini::Response->can('response'), 'Mini::Response imports response but has no response method');
+ok(!Mini->can('response'), 'nor does Mini');
+
 done_testing;

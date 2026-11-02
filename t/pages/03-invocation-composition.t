@@ -233,13 +233,20 @@ subtest 'deferred factories retain policy while isolating ordinary inputs' => su
 };
 
 subtest 'exports are opt-in and the common and all bundles are exact' => sub {
-    is(\@PAGI::Pages::EXPORT, [], 'Pages exports nothing by default');
-    is(\@PAGI::Pages::EXPORT_OK, \@ALL_FUNCTIONS,
+    my $installed = sub {
+        my ($package) = @_;
+        no strict 'refs';
+        return [sort grep { defined &{"${package}::$_"} } keys %{"${package}::"}];
+    };
+    my $bare_ok = eval q{
+        package Local::BarePageImports;
+        PAGI::Pages->import;
+        1;
+    };
+    is($bare_ok, 1, 'a bare import succeeds');
+    is($installed->('Local::BarePageImports'), [], 'Pages exports nothing by default');
+    is([sort keys %{ PAGI::Pages->_exports }], [sort @ALL_FUNCTIONS],
         'optional exports contain every and only deferred factory');
-    is($PAGI::Pages::EXPORT_TAGS{common}, \@COMMON_FUNCTIONS,
-        ':common excludes the collision-prone status and redirect names');
-    is($PAGI::Pages::EXPORT_TAGS{all}, \@ALL_FUNCTIONS,
-        ':all contains every deferred factory');
 
     my $common_ok = eval q{
         package Local::CommonPageImports;
@@ -259,6 +266,10 @@ subtest 'exports are opt-in and the common and all bundles are exact' => sub {
         1;
     };
     is($explicit_ok, 1, 'status and redirect remain explicitly importable');
+    is($installed->('Local::CommonPageImports'), [sort @COMMON_FUNCTIONS],
+        ':common excludes the collision-prone status and redirect names');
+    is($installed->('Local::AllPageImports'), [sort @ALL_FUNCTIONS],
+        ':all contains every deferred factory');
 
     for my $name (@ALL_FUNCTIONS) {
         is(Local::CommonPageImports->can($name) ? 1 : 0,

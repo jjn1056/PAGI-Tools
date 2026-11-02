@@ -932,12 +932,12 @@ subtest 'the steps are methods a subclass may override' => sub {
 
 subtest 'endpoint is exported by PAGI::Routing and PAGI::Tools' => sub {
     ok(\&PAGI::Tools::endpoint == \&PAGI::Routing::endpoint, 'one sub');
-    ok((grep { $_ eq 'endpoint' } @{ $PAGI::Routing::EXPORT_TAGS{all} }),
-        "in PAGI::Routing's :all");
-    ok(!(grep { $_ eq 'endpoint' } @{ $PAGI::Routing::EXPORT_TAGS{routes} }),
-        "not in PAGI::Routing's :routes");
-    ok(!(grep { $_ eq 'endpoint' } @{ $PAGI::Tools::EXPORT_TAGS{routes} }),
-        "not in PAGI::Tools' :routes");
+    is(eval q{ package Local::EndpointRoutingAll; use PAGI::Routing qw(:all); defined(&endpoint) ? 1 : 0 },
+        1, "in PAGI::Routing's :all");
+    is(eval q{ package Local::EndpointRoutingRoutes; use PAGI::Routing qw(:routes); defined(&endpoint) ? 1 : 0 },
+        0, "not in PAGI::Routing's :routes");
+    is(eval q{ package Local::EndpointToolsRoutes; use PAGI::Tools qw(:routes); defined(&endpoint) ? 1 : 0 },
+        0, "not in PAGI::Tools' :routes");
 };
 
 done_testing;

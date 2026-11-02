@@ -44,6 +44,7 @@ my @load_modules = qw(
     PAGI::Endpoint::SSE
     PAGI::Endpoint::WebSocket
     PAGI::HTTPConnection
+    PAGI::HTTPConnection::_Protocol
     PAGI::Request
     PAGI::Request::BodyStream
     PAGI::Request::MultipartStream
@@ -79,6 +80,7 @@ my @load_modules = qw(
     PAGI::Utils::TextDecoder
     PAGI::Utils::URI
     PAGI::Utils::_SendValidation
+    PAGI::Utils::_Exporter
     PAGI::Test::Client
     PAGI::Test::Response
 );

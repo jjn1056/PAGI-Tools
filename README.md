@@ -52,7 +52,7 @@ from the scope alone, in middleware or across HTTP, WebSocket and SSE
 - [PAGI::App::File](https://metacpan.org/pod/PAGI%3A%3AApp%3A%3AFile), proxies, health checks, and other ready-made applications
 - [PAGI::Pages](https://metacpan.org/pod/PAGI%3A%3APages) for conventional negotiated HTTP applications
 - [PAGI::Auth](https://metacpan.org/pod/PAGI%3A%3AAuth) for authentication results, installed context, and challenge formatting
-- [PAGI::Middleware::Authentication](https://metacpan.org/pod/PAGI%3A%3AMiddleware%3A%3AAuthentication) for request-based application authentication backends
+- [PAGI::Middleware::Authentication](https://metacpan.org/pod/PAGI%3A%3AMiddleware%3A%3AAuthentication) for application authentication backends, which read a PAGI::HTTPConnection
 - [PAGI::Middleware::Requires](https://metacpan.org/pod/PAGI%3A%3AMiddleware%3A%3ARequires) to declare the scopes a route, mount or application requires
 - [PAGI::State](https://metacpan.org/pod/PAGI%3A%3AState), [PAGI::Stash](https://metacpan.org/pod/PAGI%3A%3AStash), [PAGI::Session](https://metacpan.org/pod/PAGI%3A%3ASession), [PAGI::CSRF](https://metacpan.org/pod/PAGI%3A%3ACSRF), and [PAGI::Transport](https://metacpan.org/pod/PAGI%3A%3ATransport)
 - [PAGI::FutureOwner](https://metacpan.org/pod/PAGI%3A%3AFutureOwner) for work an application starts and does not wait for
@@ -141,6 +141,7 @@ package that imported them from `PAGI::Tools`.
     url path_for url_for                          PAGI::Routing::URL
     openapi                                       PAGI::Routing::OpenAPI
     error_context                                 PAGI::ErrorContext
+    http_connection                               PAGI::HTTPConnection
     app_state                                     PAGI::State
     stash                                         PAGI::Stash
     session                                       PAGI::Session

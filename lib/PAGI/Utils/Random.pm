@@ -2,11 +2,18 @@ package PAGI::Utils::Random;
 
 use strict;
 use warnings;
-use Exporter 'import';
+use PAGI::Utils::_Exporter ();
+
+my (%EXPORTS, %TAGS, @DEFAULTS);
+BEGIN {
+    %EXPORTS = (secure_random_bytes => \&secure_random_bytes);
+    %TAGS    = (all => [sort keys %EXPORTS]);
+}
+sub import   { PAGI::Utils::_Exporter::export(__PACKAGE__, \%EXPORTS, \%TAGS, \@DEFAULTS, scalar caller, @_) }
+sub _exports { \%EXPORTS }
+
 use Carp qw(croak);
 use Crypt::URandom ();
-
-our @EXPORT_OK = qw(secure_random_bytes);
 
 sub secure_random_bytes {
     my ($length) = @_;

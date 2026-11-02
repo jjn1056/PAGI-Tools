@@ -2,6 +2,7 @@ package PAGI::App::File::Result;
 
 use strict;
 use warnings;
+use namespace::autoclean;
 use Carp qw(croak);
 
 my %VALID_KIND = map { $_ => 1 } qw(file directory missing forbidden);

@@ -49,15 +49,16 @@ subtest 'headers through ErrorHandler: an entry passes them on' => sub {
     require PAGI::Exception::HTTP;
     require PAGI::Test::Client;
     require PAGI::Tools;
+    PAGI::Tools->import(qw(compose middleware response route));
     my $entry = sub {
         my ($request, $error) = @_;
-        return PAGI::Tools::response('JSON', { error => $error->message }, headers => $error->headers);
+        return response('JSON', { error => $error->message }, headers => $error->headers);
     };
-    my $app = PAGI::Tools::compose(
-        routes => [PAGI::Tools::route('/' => sub {
+    my $app = compose(
+        routes => [route('/' => sub {
             PAGI::Exception::HTTP->throw(401, 'Sign in.', headers => ['WWW-Authenticate' => 'Bearer realm="x"']);
         })],
-        middleware => [PAGI::Tools::middleware('ErrorHandler', catch => { 'PAGI::Exception::HTTP' => $entry })],
+        middleware => [middleware('ErrorHandler', catch => { 'PAGI::Exception::HTTP' => $entry })],
     );
     my $res = PAGI::Test::Client->new(app => $app->to_app)->get('/');
     is [$res->status, $res->header('WWW-Authenticate'), $res->json], [401, 'Bearer realm="x"', { error => 'Sign in.' }];
@@ -105,12 +106,8 @@ subtest 'error_context is exported only on request' => sub {
     PAGI::ErrorContext->import(':all');
     ::ok(Local::AllImport->can('error_context'), 'lowercase :all exports error_context');
 
-    my $uppercase_tag_error;
-    {
-        local $SIG{__WARN__} = sub { };
-        $uppercase_tag_error = ::dies { PAGI::ErrorContext->import(':ALL') };
-    }
-    ::like($uppercase_tag_error, qr/"?:?ALL"? is not defined|Can't continue/i,
+    my $uppercase_tag_error = ::dies { PAGI::ErrorContext->import(':ALL') };
+    ::like($uppercase_tag_error, qr/\A":ALL" is not exported by PAGI::ErrorContext at /,
         'uppercase :ALL is not an export tag');
 };
 

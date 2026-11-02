@@ -73,6 +73,7 @@ HTTP:
 WebSocket and SSE:
 
 - `websocket-echo` - the smallest WebSocket application: one route, one handler
+- `websocket-first-frame-auth` - a middleware that reads a token from the client's first message and closes with 4401 if it is wrong, in front of an ordinary echo route: it builds no `PAGI::WebSocket`, it wraps the raw send and receive, and its README lists the four rules that make it work
 - `websocket-bidirectional` - a receive loop and a server-initiated send loop on the same socket; a Www 0.7 server keeps the connection's sends in call order, so the two need no coordination
 - `sse-dashboard` - live metrics pushed to every connected dashboard over SSE
 - `sse-close` - ending an SSE stream explicitly, with a client-facing sentinel event

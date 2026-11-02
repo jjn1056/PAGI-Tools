@@ -2,6 +2,7 @@ package PAGI::Middleware::ETag;
 
 use strict;
 use warnings;
+use namespace::autoclean;
 use parent 'PAGI::Middleware';
 use Digest::SHA qw(sha256_hex);
 use PAGI::Middleware::BufferedResponse qw(buffer_whole_response);

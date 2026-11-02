@@ -1,55 +1,29 @@
 package PAGI::SSE;
 use strict;
 use warnings;
-use parent 'PAGI::HTTPConnection';
+use namespace::autoclean;
+use parent 'PAGI::HTTPConnection::_Protocol';
 use Carp qw(croak);
 use PAGI::Utils ();
 use Future::AsyncAwait;
 use Future;
 use JSON::MaybeXS ();
 use PAGI::Utils::_ProtocolHelpers ();
-use PAGI::FutureOwner;
-use Scalar::Util qw(blessed);
 
 
-sub new {
-    my ($class, $scope, $receive, $send) = @_;
+sub _scope_type { 'sse' }
+sub _initial_state { 'pending' }  # pending -> started -> closed
+sub _open_state { 'started' }
+sub _is_open { $_[0]->is_started }
 
-    croak "PAGI::SSE requires scope hashref"
-        unless $scope && ref($scope) eq 'HASH';
-    croak "PAGI::SSE requires receive coderef"
-        unless $receive && ref($receive) eq 'CODE';
-    croak "PAGI::SSE requires send coderef"
-        unless $send && ref($send) eq 'CODE';
-    croak "PAGI::SSE requires scope type 'sse', got '$scope->{type}'"
-        unless ($scope->{type} // '') eq 'sse';
-    # PAGI::Spec::Www 0.6: servers provide pagi.connection on every scope.
-    PAGI::Utils::_ProtocolHelpers::require_connection($scope, 'PAGI::SSE');
-
-    # One object per call: nothing is cached in the scope, so a handler
-    # keeps the object it was given (SUBCLASSING).
-    my $self = $class->SUPER::new($scope);
-    $self->{receive} = $receive;
-    $self->{send} = $send;
-    $self->{_state} = 'pending';  # pending -> started -> closed
-    $self->{_on_close} = [];
-    $self->{_on_error} = [];
-    $self->{_disconnect_reason} = undef;  # Set when disconnect received
-
-    $self->{_cleanup_future} = Future->new;
-    $self->{_owner} = PAGI::FutureOwner->new;
-    $self->{_ended} = Future->new;
-    # The connection owns this helper until end. Cleanup then belongs to the
-    # helper's owner, so whoever awaits finished waits for it too.
-    $scope->{'pagi.connection'}->on_end(sub {
-        $self->_refresh_connection;
-        $self->_start_close_callbacks;
-        $self->{_ended}->done;
-        return;
-    });
-    $self->_refresh_connection;
-    return $self;
+# on_close callbacks receive ($sse, $reason, $detail); on_error callbacks
+# receive ($sse, $error).
+sub _close_callback_args {
+    my ($self) = @_;
+    return ($self, $self->disconnect_reason, $self->disconnect_detail);
 }
+sub _error_callback_args { my ($self, $error) = @_; return ($self, $error) }
+sub _on_error_warning_name { 'PAGI::SSE' }
 
 sub _refresh_connection {
     my ($self) = @_;
@@ -63,117 +37,17 @@ sub _refresh_connection {
     return;
 }
 
-# A helper drives only what it answered (PAGI::Utils::_ProtocolHelpers holds
-# the claim rules): while its own refusal is in progress, or once another
-# helper answered the open connection, it fails locally.
-sub _refusing { PAGI::Utils::_ProtocolHelpers::refusing($_[0]) }
-sub _answered_by_another { PAGI::Utils::_ProtocolHelpers::answered_by_another($_[0]) }
-
-# This helper answered: its start completed, or it was issued -- still
-# pending, or rejected by the server (D6: the helper keeps its claim and is
-# still treated as the answerer). Either way it drives the connection as a
-# started stream and never issues a second sse.start; the server keeps a
-# scope's sends in call order. Once the connection has ended, no helper has
-# answered it.
-sub _answered {
-    my ($self) = @_;
-    return $self->is_started
-        || (($self->{_claim} // '') eq 'answering' && $self->connection_state eq 'pending');
-}
-
-# A keepalive saved for a start this helper may not make is dropped.
+# A keepalive saved for a start this helper may not make is dropped; a
+# helper that may drive the connection keeps it for its start.
 sub _require_ownership {
     my ($self) = @_;
-    my $refused = PAGI::Utils::_ProtocolHelpers::ownership_refusal($self);
-    return unless $refused;
-    delete $self->{_pending_keepalive};
-    croak $refused;
+    delete $self->{_pending_keepalive} if $self->_may_not_drive;
+    return $self->SUPER::_require_ownership;
 }
-
-sub disconnect_detail {
-    my ($self) = @_;
-    $self->_refresh_connection;
-    return $self->{_disconnect_detail};
-}
-
-# Connection state accessors
-sub connection_state { my $self = shift; $self->_refresh_connection; return $self->{_state} }
 
 sub is_started {
     my $self = shift;
     return $self->connection_state eq 'started';
-}
-
-sub is_closed {
-    my $self = shift;
-    return $self->connection_state eq 'closed';
-}
-
-# True while the stream is live (started and not yet closed/disconnected).
-# Synchronous connection facts take precedence over local protocol progress.
-sub is_connected {
-    my $self = shift;
-    return $self->connection_state eq 'started';
-}
-
-# Disconnect reason - why the connection closed
-# Common values: 'client_closed', 'write_error', 'write_timeout', 'idle_timeout',
-# 'read_error', 'protocol_error', 'server_shutdown', 'server_error'
-sub disconnect_reason {
-    my $self = shift;
-    $self->_refresh_connection;
-    return $self->{_disconnect_reason};
-}
-
-# Outbound flow-control introspection (delegates to the pagi.transport handle)
-sub buffered_amount {
-    my $self = shift;
-    my $t = $self->{scope}{'pagi.transport'};
-    return 0 unless $t;
-    return $t->buffered_amount;
-}
-
-sub high_water_mark {
-    my $self = shift;
-    my $t = $self->{scope}{'pagi.transport'};
-    return undef unless $t;
-    return $t->high_water_mark;
-}
-
-sub low_water_mark {
-    my $self = shift;
-    my $t = $self->{scope}{'pagi.transport'};
-    return undef unless $t;
-    return $t->low_water_mark;
-}
-
-sub on_high_water {
-    my ($self, $cb) = @_;
-    my $t = $self->{scope}{'pagi.transport'};
-    $t->on_high_water($cb) if $t && $t->can('on_high_water');
-    return $self;
-}
-
-sub on_drain {
-    my ($self, $cb) = @_;
-    my $t = $self->{scope}{'pagi.transport'};
-    $t->on_drain($cb) if $t && $t->can('on_drain');
-    return $self;
-}
-
-sub is_writable {
-    my $self = shift;
-    my $t = $self->{scope}{'pagi.transport'};
-    return 1 unless $t;
-    my $high = $t->high_water_mark;
-    return 1 unless defined $high;
-    return $t->buffered_amount < $high ? 1 : 0;
-}
-
-# Internal state setter
-sub _set_state {
-    my ($self, $state) = @_;
-    $self->{_state} = $state;
 }
 
 # Start the SSE stream
@@ -357,7 +231,7 @@ sub try_send { my $self = shift; return $self->_keep($self->_try_send(@_)) }
 
 async sub _try_send {
     my ($self, $data) = @_;
-    return 0 if $self->_refusing || $self->_answered_by_another || $self->is_closed || $self->connection_state eq 'closing';
+    return 0 if $self->_may_not_drive || $self->is_closed || $self->connection_state eq 'closing';
 
     eval {
         defined($data = PAGI::Utils::_string_value($data))
@@ -375,11 +249,9 @@ async sub _try_send {
     return 1;
 }
 
-sub try_send_json { my $self = shift; return $self->_keep($self->_try_send_json(@_)) }
-
 async sub _try_send_json {
     my ($self, $data) = @_;
-    return 0 if $self->_refusing || $self->_answered_by_another || $self->is_closed || $self->connection_state eq 'closing';
+    return 0 if $self->_may_not_drive || $self->is_closed || $self->connection_state eq 'closing';
 
     eval {
         await $self->start unless $self->is_started;
@@ -419,7 +291,7 @@ sub try_send_comment { my $self = shift; return $self->_keep($self->_try_send_co
 
 async sub _try_send_comment {
     my ($self, $comment) = @_;
-    return 0 if $self->_refusing || $self->_answered_by_another || $self->is_closed || $self->connection_state eq 'closing';
+    return 0 if $self->_may_not_drive || $self->is_closed || $self->connection_state eq 'closing';
 
     eval {
         defined($comment = PAGI::Utils::_string_value($comment))
@@ -441,7 +313,7 @@ sub try_send_event { my $self = shift; return $self->_keep($self->_try_send_even
 
 async sub _try_send_event {
     my ($self, %opts) = @_;
-    return 0 if $self->_refusing || $self->_answered_by_another || $self->is_closed || $self->connection_state eq 'closing';
+    return 0 if $self->_may_not_drive || $self->is_closed || $self->connection_state eq 'closing';
 
     eval {
         my $event = _send_event_for(%opts);
@@ -478,64 +350,6 @@ sub _send_event_for {
     return $event;
 }
 
-# Internal: trigger error callbacks
-async sub _trigger_error {
-    my ($self, $error) = @_;
-
-    for my $cb (@{$self->{_on_error}}) {
-        eval {
-            my $r = $cb->($self, $error);
-            if (blessed($r) && $r->isa('Future')) {
-                await $r;
-            }
-        };
-        if ($@) {
-            warn "PAGI::SSE on_error callback error: $@";
-        }
-    }
-}
-
-# Register close callback
-sub on_close {
-    my ($self, $callback) = @_;
-    # Once the connection has ended, a callback runs now, after any still
-    # running, as the spec's on_end does.
-    return $self->_run_late_close_callback($callback) if $self->{_close_callbacks_ran};
-    push @{$self->{_on_close}}, $callback;
-    return $self;
-}
-
-sub _run_late_close_callback {
-    my ($self, $callback) = @_;
-    $self->{_close_chain} = $self->{_owner}->adopt(
-        $self->_late_close_worker($self->{_close_chain}, $callback));
-    return $self;
-}
-
-# A late callback's failure fails finished while the handler can still see
-# it; once finished has resolved there is nothing left to fail, so it warns.
-async sub _late_close_worker {
-    my ($self, $previous, $callback) = @_;
-    # The callbacks before it report their own failures.
-    eval { await $previous->without_cancel };
-    my $ok = eval {
-        my $result = $callback->($self, $self->disconnect_reason, $self->disconnect_detail);
-        await $result if blessed($result) && $result->isa('Future');
-        1;
-    };
-    return if $ok;
-    die $@ unless $self->{_finished};
-    warn ref($self) . " on_close callback failed after the handler finished: $@";
-    return;
-}
-
-# Register error callback
-sub on_error {
-    my ($self, $callback) = @_;
-    push @{$self->{_on_error}}, $callback;
-    return $self;
-}
-
 # Generic event dispatcher - dispatches to on_close or on_error
 sub on {
     my ($self, $event, $callback) = @_;
@@ -548,77 +362,6 @@ sub on {
     else {
         croak "Unknown event type: $event (expected close or error)";
     }
-}
-
-# Internal: run all on_close callbacks exactly once, as work the helper owns
-sub _run_close_callbacks {
-    my ($self) = @_;
-    $self->_start_close_callbacks;
-    return $self->{_cleanup_future}->without_cancel;
-}
-
-sub _start_close_callbacks {
-    my ($self) = @_;
-    return if $self->{_close_callbacks_ran};
-    $self->{_close_callbacks_ran} = 1;
-    my $completion = $self->{_cleanup_future};
-    my $worker = $self->{_owner}->adopt($self->_close_callbacks_worker);
-    $self->{_close_chain} = $worker;
-    # The cleanup Future means the callbacks have run; a callback's failure
-    # is reported once, through finished.
-    $worker->on_ready(sub { $completion->done unless $completion->is_ready });
-    return;
-}
-
-async sub _close_callbacks_worker {
-    my ($self) = @_;
-    my @failures;
-    for my $cb (@{$self->{_on_close}}) {
-        my $ok = eval {
-            my $result = $cb->($self, $self->disconnect_reason, $self->disconnect_detail);
-            await $result if blessed($result) && $result->isa('Future');
-            1;
-        };
-        push @failures, $@ unless $ok;
-    }
-    $self->{_on_close} = [];
-    $self->{_on_error} = [];
-    # Every callback has run; the first failure is the helper's to report.
-    die $failures[0] if @failures;
-    return;
-}
-
-# Resolves to the helper once its scope has ended and all the work it
-# started -- its on_close callbacks included -- has settled; fails with the
-# first on_close failure.
-async sub finished {
-    my ($self) = @_;
-    # A scope never accepted (or started) ends only when the application
-    # returns, so waiting for its end would wait for the caller itself.
-    await $self->{_ended}->without_cancel if $self->_ends_without_application;
-    my $settled = eval { await $self->{_owner}->settled; 1 };
-    my $error = $@;
-    $self->{_finished} = 1;
-    die $error unless $settled;
-    return $self;
-}
-
-sub _ends_without_application {
-    my ($self) = @_;
-    return $self->connection_state ne 'pending';
-}
-
-# Keeps a Future the helper returned to its caller until it settles, so
-# finished waits for it. Its failure is the caller's to see: the owner keeps
-# only its completion. The callback also holds the caller's Future, so a
-# caller may drop it.
-sub _keep {
-    my ($self, $future) = @_;
-    my $completion = $future->else_done;
-    my $held = $future;
-    $completion->on_ready(sub { undef $held });
-    $self->{_owner}->adopt($completion);
-    return $future;
 }
 
 # Close the connection
@@ -1065,10 +808,12 @@ has ended, it joins the same cleanup completion.
 
 =head1 WHICH HELPER ANSWERS
 
-A connection has one answer, and a helper drives only the answer it gave.
-Building a second helper over the same scope (C<new> always builds a new
-object) gives a helper that did not answer, so which helper answered
-decides what each can do. C<sse.start> is this helper's accept.
+A connection has one helper, and that helper gives the connection's one
+answer. The route or endpoint builds it; pass it to the code that needs it.
+C<new> builds a new object on every call, so build no other over the same
+scope. Middleware reads the request through L<PAGI::HTTPConnection>
+(C<http_connection($scope)>), or wraps the raw C<$receive> and C<$send>, as
+Starlette's middleware does. C<sse.start> is this helper's accept.
 
 B<This helper answered.> From the moment this helper issues its C<start>,
 before the server's send completes, it owns the connection: sends,
@@ -1080,10 +825,8 @@ sent after the start. If the server rejects the start, the error raises at
 its C<await>; the helper keeps the claim it recorded when it sent the start
 and is still treated as the connection's answerer: its sends,
 C<try_send*>, C<keepalive> and C<close> go to the server as on a started
-stream (which the server may reject in turn), no second C<sse.start> is
-sent, and code that keeps using it gets no protection from the rules below.
-After a failed start, build a new helper if the connection is still live
-and unanswered, or use the helper that answered if another did.
+stream (which the server may reject in turn), and no second C<sse.start>
+is sent.
 
 B<This helper is refusing.> Once the response of this helper's L</decline>
 has started and the connection is still open, the refusal is its answer.
@@ -1094,17 +837,15 @@ nothing; C<try_send*> return 0; C<close> and C<keepalive> return quietly.
 The refusal itself completes as usual. A refusal that settles with no
 response started answered nothing, and the helper may try again.
 
-B<Another helper answered.> While the connection is open and its response
-was started by another helper, every operation of this one croaks
-C<this connection was answered by another helper; use that one>, sending
-nothing and reading nothing, except C<try_send*>, which return 0. That
-includes C<close> and C<keepalive>: ending a stream another helper owns is
-that helper's call. A middleware that must act on the connection's data
-wraps C<$send> or C<$receive> instead.
-
-B<The connection has ended.> Every helper behaves as it does for an ended
+B<The connection has ended.> The helper behaves as it does for an ended
 connection: sends croak C<Cannot send on closed SSE connection>, and
 C<start>, C<close>, C<keepalive> and C<run> do nothing more.
+
+A second helper over the same connection is misuse: while the connection
+is open and another helper started its response, every operation of the
+second croaks
+C<this connection was answered by another helper; use that one>, except
+C<try_send*>, which return 0.
 
 =head1 CONNECTION STATE ACCESSORS
 
@@ -1592,7 +1333,10 @@ Returns C<$self> for chaining.
 
 =head1 SUBCLASSING
 
-A framework may subclass PAGI::SSE (Thunderhorse does). The contract:
+A framework may subclass PAGI::SSE (Thunderhorse does). The code it
+shares with L<PAGI::WebSocket> lives in an internal base class,
+C<PAGI::HTTPConnection::_Protocol>, which is not API: depend on neither
+its name nor its private methods. The contract:
 
 =over 4
 

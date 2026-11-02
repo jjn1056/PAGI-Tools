@@ -27,8 +27,8 @@ use NotesApp::Notes;
 # its tokens.
 my %GRANTS = (reader => ['notes:read'], writer => ['notes:read', 'notes:write']);
 
-sub bearer ($request) {
-    my $token = $request->bearer_token;
+sub bearer ($conn) {
+    my $token = $conn->bearer_token;
     return unauth_result() unless defined $token && $GRANTS{$token};
     return auth_result(
         user   => PAGI::Auth::SimpleUser->new(identity => $token),

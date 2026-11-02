@@ -2,6 +2,7 @@ package PAGI::App::Directory;
 
 use strict;
 use warnings;
+use namespace::autoclean;
 use Carp qw(croak);
 use Encode qw(decode encode FB_CROAK LEAVE_SRC);
 use Errno qw(EACCES EPERM);

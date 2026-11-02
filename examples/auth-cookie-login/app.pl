@@ -17,8 +17,8 @@ use PAGI::Session qw(session);
 
 # The session's logged-in user is the authentication context: the Requires
 # middleware reads it to decide who may see a page.
-sub session_user ($request) {
-    my $username = session($request)->get('user', undef);
+sub session_user ($conn) {
+    my $username = session($conn)->get('user', undef);
     return unauth_result() unless defined $username;
     return auth_result(user => PAGI::Auth::SimpleUser->new(identity => $username));
 }

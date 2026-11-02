@@ -174,11 +174,25 @@ subtest 'published standalone recipes compile and construct their values' => sub
     );
     my $xsendfile = first_code_block(
         $cookbook, '=head3 Custom Download Handler');
+    like $xsendfile, qr/use PAGI::HTTPConnection qw\(http_connection\)/,
+        'the download recipe imports the reader';
+    unlike $xsendfile, qr/PAGI::Request/, 'and builds no Request for a path parameter';
     perl_script_runs(
         'custom XSendfile download',
         $xsendfile
             . "die 'expected Router' unless ref(\$router) eq 'PAGI::Routing::Router';\n"
-            . "die 'expected wrapped application' unless ref(\$app) eq 'CODE';\n",
+            . "die 'expected wrapped application' unless ref(\$app) eq 'CODE';\n"
+            . <<'PERL',
+my @checked;
+sub authenticate { return { id => 1 } }
+sub can_download { push @checked, $_[1]; return 1 }
+use PAGI::Test::Client;
+my $response = PAGI::Test::Client->new(app => $app)->get('/download/report.txt');
+die 'expected 404 for a missing file, got ' . $response->status
+    unless $response->status == 404;
+die "expected the path parameter's file to be checked, got '@checked'"
+    unless "@checked" eq '/var/www/files/report.txt';
+PERL
     );
 };
 
@@ -583,6 +597,40 @@ subtest 'Company Collection recipe builds its class by name' => sub {
             links => { self => '/people' } }, 'with the company envelope';
         is $res->header('X-Collection-Version'), '1', 'and its header';
     }
+};
+
+subtest 'Tutorial 6.4 custom middleware answers a request with a token' => sub {
+    my $heading = '=head2 6.4 Writing Custom Middleware';
+    my $middleware = code_block_containing($tutorial, $heading, 'package MyApp::Middleware::Auth');
+    my $usage = code_block_containing($tutorial, $heading, "middleware('Stash')");
+    like $middleware, qr/^use PAGI::Stash;/m, 'the middleware loads the stash it writes to';
+    my $scope_patterns = code_block_containing($tutorial, '=item * Modify scope', 'custom_data');
+    like $scope_patterns, qr/use PAGI::Stash;/, 'the Modify scope snippet loads the stash';
+
+    require PAGI::Test::Client;
+    my $app = eval <<"PERL";
+package PAGITest::TutorialMiddleware;
+$middleware
+use PAGI::Compose qw(compose);
+use PAGI::Response qw(response);
+use PAGI::Routing qw(middleware route);
+use PAGI::Stash qw(stash);
+compose(
+    routes => [route('/' => sub {
+        my (\$request) = \@_;
+        my \$user = stash(\$request)->get(user => undef);
+        return response('Text', \$user ? \$user->{username} : 'anonymous');
+    })],
+    $usage
+)->to_app;
+PERL
+    is $@, '', 'the middleware and its usage compile as published' or return;
+
+    my $client = PAGI::Test::Client->new(app => $app);
+    my $with_token = $client->get('/', headers => { Authorization => 'Bearer abc' });
+    is [$with_token->status, $with_token->text], [200, 'alice'], 'a token reaches the handler as the user';
+    my $without = $client->get('/');
+    is [$without->status, $without->text], [200, 'anonymous'], 'no token, no user';
 };
 
 unlike $cookbook,

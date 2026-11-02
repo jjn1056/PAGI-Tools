@@ -113,13 +113,13 @@ is($other->header('WWW-Authenticate'), 'Bearer realm="notes"', 'another scheme r
 # Use the actual backend outside Compose to see failed Futures before its 500 boundary.
 my $authentication = PAGI::Middleware::Authentication->new(backend => token_backend($store));
 my $backend_reads = 0;
-my $bearer_token = PAGI::Request->can('bearer_token');
+my $bearer_token = PAGI::HTTPConnection->can('bearer_token');
 my $direct = $authentication->wrap(sub { Future->done });
 my $receive = sub { Future->done({type => 'http.request', body => '', more_body => 0}) };
 my $send = sub { die 'authentication failure must not emit HTTP' };
 {
     no warnings qw(redefine once);
-    local *PAGI::Request::bearer_token = sub { ++$backend_reads; $bearer_token->(@_) };
+    local *PAGI::HTTPConnection::bearer_token = sub { ++$backend_reads; $bearer_token->(@_) };
     for my $headers ([], [['authorization', 'Bearer unknown']]) {
         $direct->({type => 'http', headers => $headers}, $receive, $send)->get;
     }

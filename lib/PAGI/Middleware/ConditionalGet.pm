@@ -2,6 +2,7 @@ package PAGI::Middleware::ConditionalGet;
 
 use strict;
 use warnings;
+use namespace::autoclean;
 use parent 'PAGI::Middleware';
 use Future::AsyncAwait;
 use PAGI::Headers ();

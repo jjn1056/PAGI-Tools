@@ -103,11 +103,11 @@ guessing:
   use strict;
   use warnings;
   use Future::AsyncAwait;
-  use PAGI::Response;
+  use PAGI::Response qw(response);
 
   async sub home {
       my ($request) = @_;
-      return PAGI::Response::response('HTML', '<h1>Home</h1>');
+      return response('HTML', '<h1>Home</h1>');
   }
 
   1;
@@ -1368,6 +1368,7 @@ L<PAGI::Response::JSON> perform JSON encoding:
 
   package MyCompany::Response::Collection;
   use v5.40;
+  use namespace::autoclean;
 
   use Carp qw(croak);
   use parent 'PAGI::Response::JSON';
@@ -1947,8 +1948,8 @@ and C<route_table> shows it in each protected route's C<middleware>.
   my %grants = (reader => ['notes:read'], editor => ['notes:read', 'notes:write']);
 
   my $app = compose(
-      middleware => [middleware('Authentication', backend => sub ($request) {
-          my $token = $request->bearer_token;
+      middleware => [middleware('Authentication', backend => sub ($conn) {
+          my $token = $conn->bearer_token;
           return unauth_result() unless defined $token && $grants{$token};
           return auth_result(
               user   => PAGI::Auth::SimpleUser->new(identity => $token),
@@ -2296,10 +2297,10 @@ that hashref with a convenient (and typo-catching) API.
 
   my $app = builder {
       enable 'Authentication', backend => sub {
-          my ($request) = @_;
+          my ($conn) = @_;
           my ($username, $password);
           my $parsed = eval {
-              ($username, $password) = $request->basic_auth(raise_on_error => 1);
+              ($username, $password) = $conn->basic_auth(raise_on_error => 1);
               1;
           };
           return unauth_result(failure => {
@@ -2357,10 +2358,10 @@ These are this application's token rules, not policy imposed by PAGI::Auth.
   # Parsing, JWT verification, and safe rejection messages belong to the backend.
   my $app = builder {
       enable 'Authentication', backend => sub {
-          my ($request) = @_;
+          my ($conn) = @_;
           my $token;
           my $parsed = eval {
-              $token = $request->bearer_token(raise_on_error => 1);
+              $token = $conn->bearer_token(raise_on_error => 1);
               1;
           };
           return unauth_result(failure => {
@@ -2617,7 +2618,7 @@ good.
 =back
 
   # Tell EventSource to stop reconnecting: a bare 204.
-  await $sse->decline(PAGI::Response::response('Empty', status => 204));
+  await $sse->decline(response('Empty', status => 204));
   return;
 
 A normally completed decline is a clean end, not an abnormal disconnect. The
@@ -2819,7 +2820,7 @@ without naming an event loop.
   use warnings;
   use Future::AsyncAwait;
   use PAGI::Request;
-  use PAGI::Response;
+  use PAGI::Response qw(response);
   use PAGI::Utils qw(invoke_app);
 
   async sub app {
@@ -2834,12 +2835,12 @@ without naming an event loop.
 
           # Validate and process...
           await invoke_app(
-              PAGI::Response::response('Redirect', '/dashboard'),
+              response('Redirect', '/dashboard'),
               $scope, $receive, $send,
           );
       }
       else {
-          my $response = PAGI::Response::response('HTML', <<'HTML');
+          my $response = response('HTML', <<'HTML');
   <form method="POST">
       <input name="username" placeholder="Username">
       <input name="password" type="password" placeholder="Password">
@@ -2858,7 +2859,7 @@ without naming an event loop.
   use warnings;
   use Future::AsyncAwait;
   use PAGI::Request;
-  use PAGI::Response;
+  use PAGI::Response qw(response);
   use PAGI::Utils qw(invoke_app);
 
   async sub app {
@@ -2885,14 +2886,14 @@ without naming an event loop.
           }
 
           await invoke_app(
-              PAGI::Response::response('JSON', {
+              response('JSON', {
                   uploaded => scalar(@files),
               }),
               $scope, $receive, $send,
           );
       }
       else {
-          my $response = PAGI::Response::response('HTML', <<'HTML');
+          my $response = response('HTML', <<'HTML');
   <form method="POST" enctype="multipart/form-data">
       <input type="file" name="file" multiple>
       <button type="submit">Upload</button>
@@ -3223,8 +3224,8 @@ tests or one-liners:
       -e 'PAGI::App::File->new(root => ".")->to_app'
 
   # Quick redirect
-  pagi-server -MPAGI::Response \
-      -e 'PAGI::Response::response('Redirect', "https://example.com")->to_app'
+  pagi-server -MPAGI::Response::Redirect \
+      -e 'PAGI::Response::Redirect->new("https://example.com")->to_app'
 
 =head2 Loading Modules with -M
 
@@ -3358,8 +3359,8 @@ For more control (authentication, logging, custom headers):
   use Future;
   use Future::AsyncAwait;
   use PAGI::Middleware::Builder;
+  use PAGI::HTTPConnection qw(http_connection);
   use PAGI::Pages;
-  use PAGI::Request;
   use PAGI::Routing qw(route router);
   use PAGI::Utils qw(as_app_object invoke_app path_from_root);
 
@@ -3369,9 +3370,9 @@ For more control (authentication, logging, custom headers):
   my $router = router(routes => [
   route('/download/{filename}' => as_app_object(async sub {
       my ($scope, $receive, $send) = @_;
-      my $req = PAGI::Request->new($scope, $receive);
+      my $conn = http_connection($scope);
 
-      my $filename = $req->path_param('filename');
+      my $filename = $conn->path_param('filename');
       my $filepath = path_from_root('/var/www/files', $filename);
       unless (defined $filepath) {
           my $response = PAGI::Pages->forbidden;
@@ -3489,13 +3490,14 @@ A normal handler returns the value:
   async sub create_item {
       my ($request) = @_;
       my $item = await create_from($request);
-      return PAGI::Response::response('JSON', $item, status => 201);
+      return response('JSON', $item, status => 201);
   }
 
 A native application owns the full triplet and one explicit delegation:
 
+  use PAGI::Response qw(response);
   use PAGI::Utils qw(invoke_app);
-  my $res = PAGI::Response::response('JSON', $data, status => 200);
+  my $res = response('JSON', $data, status => 200);
   await invoke_app($res, $scope, $receive, $send);
 
 Do not emit inside a normal Request handler and then return the same value to
@@ -3527,6 +3529,7 @@ tab-separated values:
 
   package MyApp::Response::TSV;
   use parent 'PAGI::Response::Stream';
+  use namespace::autoclean;
   use Carp qw(croak);
   use Encode qw(encode);
 

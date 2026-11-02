@@ -2,6 +2,7 @@ package PAGI::Headers;
 
 use strict;
 use warnings;
+use namespace::autoclean;
 use Carp qw(croak);
 use PAGI::Utils::Headers ();
 

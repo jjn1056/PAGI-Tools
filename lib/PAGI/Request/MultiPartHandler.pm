@@ -1,6 +1,7 @@
 package PAGI::Request::MultiPartHandler;
 use strict;
 use warnings;
+use namespace::autoclean;
 
 use Future::AsyncAwait;
 use HTTP::MultiPartParser;

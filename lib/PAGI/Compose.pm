@@ -2,17 +2,24 @@ package PAGI::Compose;
 
 use strict;
 use warnings;
+use namespace::autoclean;
+use Sub::Util ();
+use PAGI::Utils::_Exporter ();
+
+my (%EXPORTS, %TAGS, @DEFAULTS);
+BEGIN {
+    %EXPORTS = (
+        compose => Sub::Util::set_subname('PAGI::Compose::compose',
+            sub { return __PACKAGE__->new(@_) }),
+    );
+    %TAGS = (all => [sort keys %EXPORTS]);
+}
+sub import   { PAGI::Utils::_Exporter::export(__PACKAGE__, \%EXPORTS, \%TAGS, \@DEFAULTS, scalar caller, @_) }
+sub _exports { \%EXPORTS }
+
 use Carp qw(croak);
-use Exporter 'import';
 use PAGI::Routing::Middleware ();
 use PAGI::Routing::Router ();
-
-our @EXPORT_OK = qw(compose);
-our %EXPORT_TAGS = (all => [@EXPORT_OK]);
-
-sub compose {
-    return __PACKAGE__->new(@_);
-}
 
 sub new {
     my ($class, @args) = @_;

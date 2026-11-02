@@ -2,6 +2,7 @@ package PAGI::Pages::Application;
 
 use strict;
 use warnings;
+use namespace::autoclean;
 
 use Carp qw(croak);
 use Future::AsyncAwait;

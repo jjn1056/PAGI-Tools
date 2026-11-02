@@ -2,14 +2,22 @@ package PAGI::Middleware::BufferedResponse;
 
 use strict;
 use warnings;
-use Exporter qw(import);
+use PAGI::Utils::_Exporter ();
+
+my (%EXPORTS, %TAGS, @DEFAULTS);
+BEGIN {
+    %EXPORTS = map { $_ => \&{__PACKAGE__ . "::$_"} }
+        qw(buffer_whole_response stream_transform_response);
+    %TAGS = (all => [sort keys %EXPORTS]);
+}
+sub import   { PAGI::Utils::_Exporter::export(__PACKAGE__, \%EXPORTS, \%TAGS, \@DEFAULTS, scalar caller, @_) }
+sub _exports { \%EXPORTS }
+
 use Carp qw(croak);
 use Future;
 use Future::AsyncAwait;
 use PAGI::Middleware ();
 use PAGI::Headers ();
-
-our @EXPORT_OK = qw(buffer_whole_response stream_transform_response);
 
 sub buffer_whole_response {
     my ($app, %opts) = @_;

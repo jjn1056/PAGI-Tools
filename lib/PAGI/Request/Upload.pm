@@ -1,6 +1,7 @@
 package PAGI::Request::Upload;
 use strict;
 use warnings;
+use namespace::autoclean;
 
 use File::Basename qw(fileparse);
 use File::Copy qw(move);

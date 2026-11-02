@@ -2,6 +2,7 @@ package PAGI::Exception::HTTP;
 
 use strict;
 use warnings;
+use namespace::autoclean;
 use Carp qw(croak);
 use PAGI::ErrorContext ();
 use PAGI::Utils ();

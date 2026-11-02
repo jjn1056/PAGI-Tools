@@ -343,8 +343,9 @@ construct it only when they choose the Request API; construction requires an
 HTTP, WebSocket, or SSE scope. The receive coderef is what it reads the body
 through: a Request built without one (C<< PAGI::Request->new($scope) >>)
 reads the scope -- headers, query, cookies, path -- and its body methods die.
-To read only the scope, as middleware does, build a L<PAGI::HTTPConnection>,
-which Request extends. WebSocket body methods fail before reading protocol
+To read only the scope, as middleware does, build a L<PAGI::HTTPConnection>
+with C<http_connection($scope)> (C<use PAGI::HTTPConnection qw(http_connection)>);
+Request extends it. WebSocket body methods fail before reading protocol
 events.
 
 =head3 Basic Properties
@@ -1252,7 +1253,8 @@ Create reusable middleware by extending L<PAGI::Middleware>:
   package MyApp::Middleware::Auth;
   use parent 'PAGI::Middleware';
   use Future::AsyncAwait;
-  use PAGI::HTTPConnection;
+  use PAGI::HTTPConnection qw(http_connection);
+  use PAGI::Stash;
 
   sub new {
       my ($class, %args) = @_;
@@ -1271,7 +1273,7 @@ Create reusable middleware by extending L<PAGI::Middleware>:
 
           # Check the bearer token. PAGI::HTTPConnection reads the scope
           # without touching the body, which stays the application's to read.
-          my $token = PAGI::HTTPConnection->new($scope)->bearer_token;
+          my $token = http_connection($scope)->bearer_token;
 
           if (defined $token) {
               my $user = verify_token($token, $self->{secret});
@@ -1291,9 +1293,13 @@ Create reusable middleware by extending L<PAGI::Middleware>:
 
   1;
 
-Use it in a C<middleware> list:
+Use it in a C<middleware> list. It writes to the stash, which only
+C<middleware('Stash')> provides, so stack that above it:
 
-  middleware => [middleware('+MyApp::Middleware::Auth', secret => 'secret-key')],
+  middleware => [
+      middleware('Stash'),
+      middleware('+MyApp::Middleware::Auth', secret => 'secret-key'),
+  ],
 
 The leading C<+> uses the class name as-is instead of prepending
 C<PAGI::Middleware::>; Builder's C<enable> takes the same spelling. Or skip
@@ -1311,7 +1317,7 @@ Or per-route:
   route('/admin' => sub {
       my ($request) = @_;
       return response('Text', 'admin');
-  }, middleware => [middleware($auth)]);
+  }, middleware => [middleware('Stash'), middleware($auth)]);
 
 =head3 Middleware Patterns
 
@@ -1319,7 +1325,10 @@ Or per-route:
 
 =item * Modify scope
 
-Add data for downstream handlers:
+Add data for downstream handlers, through a stash that C<middleware('Stash')>
+provides above this layer:
+
+  use PAGI::Stash;
 
   sub wrap {
       my ($self, $app) = @_;

@@ -8,7 +8,7 @@ use PAGI::Endpoint::HTTP ();
 use PAGI::Middleware ();
 use PAGI::Middleware::Builder;
 use PAGI::Middleware::RequestClass;
-use PAGI::Middleware::Session ();
+use PAGI::Middleware::Session qw(session_store);
 use PAGI::Request ();
 use PAGI::Response qw(response);
 use PAGI::Response::Text ();
@@ -73,7 +73,7 @@ my %loader = (
         head   => "use parent 'PAGI::Middleware';\nsub wrap { \$_[1] }",
     },
     session_store => {
-        load   => sub { PAGI::Middleware::Session::session_store("+$_[0]") },
+        load   => sub { session_store("+$_[0]") },
         caller => sub { "session_store('+$_[0]')" },
         inline => 'Local::Inline::Store',
         head   => 'sub new { bless {}, shift }',

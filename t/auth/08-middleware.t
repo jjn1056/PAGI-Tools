@@ -9,6 +9,8 @@ use PAGI::Auth qw(auth auth_result unauth_result);
 use PAGI::Auth::SimpleUser;
 use PAGI::Middleware::Authentication;
 use PAGI::Response;
+use PAGI::Session qw(session);
+use MIME::Base64 ();
 
 {
     package Local::AuthBackend;
@@ -112,13 +114,13 @@ subtest 'closure backend is reused without retaining invocation results' => sub 
     is $calls, 2, 'same closure serves multiple invocations';
 };
 
-subtest 'object backend receives self plus one Request and is reused' => sub {
+subtest 'object backend receives self plus one connection and is reused' => sub {
     my $backend = Local::AuthBackend->new(unauth_result());
     my $middleware = PAGI::Middleware::Authentication->new(backend => $backend);
     invocation($middleware, { type => 'http', headers => [] })->get;
     invocation($middleware, { type => 'websocket', headers => [] })->get;
     is $backend->{calls}, 2, 'same object serves multiple invocations';
-    is $backend->{argc}, 2, 'object method receives self plus one Request';
+    is $backend->{argc}, 2, 'object method receives self plus one connection';
 };
 
 subtest 'pending backend and downstream Futures remain attached' => sub {
@@ -326,19 +328,47 @@ subtest 'one middleware keeps reverse-order pending invocations isolated' => sub
     use parent 'PAGI::Request';
 }
 
-subtest 'the backend receives the class the scope key builds' => sub {
+subtest 'the backend receives a PAGI::HTTPConnection, whatever class the scope key builds' => sub {
     my @seen;
     my $middleware = PAGI::Middleware::Authentication->new(backend => sub {
-        my ($request) = @_;
-        push @seen, ref $request;
+        my ($conn) = @_;
+        push @seen, [ref $conn, $conn->isa('PAGI::Request') ? 'request' : 'no request'];
         return unauth_result();
     });
     my $factory = sub { return Local::AppRequest->new(@_) };
     invocation($middleware, { type => $_, headers => [], 'pagi.request.factory' => $factory })->get
         for qw(http websocket sse);
     invocation($middleware, { type => 'http', headers => [] })->get;
-    is(\@seen, [('Local::AppRequest') x 3, 'PAGI::Request'],
-        'a key on HTTP, WebSocket and SSE scopes: its class; no key: PAGI::Request');
+    is(\@seen, [(['PAGI::HTTPConnection', 'no request']) x 4],
+        'on every request scope type, with or without a factory key: a connection, not a Request');
+};
+
+subtest 'a backend reads the connection\'s headers, cookies, query and session' => sub {
+    my $seen;
+    my $middleware = PAGI::Middleware::Authentication->new(backend => sub {
+        my ($conn) = @_;
+        $seen = {
+            bearer => $conn->bearer_token,
+            basic  => [$conn->basic_auth],
+            cookie => $conn->cookie('sid'),
+            header => $conn->header('x-trace'),
+            query  => $conn->query_param('page'),
+            session => session($conn)->get('user'),
+        };
+        return unauth_result();
+    });
+    invocation($middleware, {
+        type => 'http', query_string => 'page=3', 'pagi.session' => { user => 'ada' },
+        headers => [['authorization', 'Bearer tok'], ['cookie', 'sid=abc'], ['x-trace', 't1']],
+    })->get;
+    is $seen, { bearer => 'tok', basic => [undef, undef], cookie => 'abc', header => 't1', query => 3, session => 'ada' },
+        'bearer_token, basic_auth, cookie, header, query_param and session($conn) work';
+
+    invocation($middleware, {
+        type => 'http', query_string => '', 'pagi.session' => { user => 'ada' },
+        headers => [['authorization', 'Basic ' . MIME::Base64::encode_base64('ada:pw', '')]],
+    })->get;
+    is $seen->{basic}, ['ada', 'pw'], 'basic_auth decodes the credentials';
 };
 
 # A client's receive delivering the given events, then a disconnect.
@@ -360,34 +390,19 @@ async sub read_body {
     return $body;
 }
 
-subtest 'a backend cannot read the body; the application receives it untouched' => sub {
-    my $middleware = PAGI::Middleware::Authentication->new(backend => async sub {
-        my ($request) = @_;
-        await $request->body;    # a signed request, say: checked in the handler instead
-        return unauth_result();
-    });
-    my $ran = 0;
-    # The backend's Request is request_for_scope($scope): no body, and the
-    # message every such Request gives (spec 2026-10-30 section 5: the
-    # _no_body stubs go).
-    like dies {
-        $middleware->wrap(async sub { $ran = 1 })->(
-            { type => 'http', method => 'POST', headers => [] },
-            client_receive({ type => 'http.request', body => 'payload=1', more => 0 }),
-            sub { Future->done },
-        )->get;
-    }, qr/\Athis Request was built from the scope alone; it has no body at \Q${\__FILE__}\E line \d+/,
-        'the backend\'s body read dies at the backend\'s line';
-    is $ran, 0, 'and the application never runs';
-
+subtest 'a backend\'s connection has no body to read; the application receives it untouched' => sub {
+    my $conn_can_read;
     my $by_app;
-    PAGI::Middleware::Authentication->new(backend => sub { unauth_result() })
-        ->wrap(async sub { $by_app = await read_body($_[1]) })->(
+    PAGI::Middleware::Authentication->new(backend => sub {
+        $conn_can_read = $_[0]->can('body');
+        return unauth_result();
+    })->wrap(async sub { $by_app = await read_body($_[1]) })->(
             { type => 'http', method => 'POST', headers => [] },
             client_receive({ type => 'http.request', body => 'payload=', more => 1 },
                            { type => 'http.request', body => '1', more => 0 }),
             sub { Future->done },
         )->get;
+    ok !$conn_can_read, 'the connection has no body method';
     is $by_app, 'payload=1', 'the application reads the whole body';
 };
 

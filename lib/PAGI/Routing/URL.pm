@@ -2,15 +2,27 @@ package PAGI::Routing::URL;
 
 use strict;
 use warnings;
+use namespace::autoclean;
+use Sub::Util ();
+use PAGI::Utils::_Exporter ();
+
+my (%EXPORTS, %TAGS, @DEFAULTS);
+BEGIN {
+    %EXPORTS = (
+        url => Sub::Util::set_subname('PAGI::Routing::URL::url',
+            sub { return __PACKAGE__->new(@_) }),
+        path_for => \&path_for,
+        url_for  => \&url_for,
+    );
+    %TAGS = (all => [sort keys %EXPORTS]);
+}
+sub import   { PAGI::Utils::_Exporter::export(__PACKAGE__, \%EXPORTS, \%TAGS, \@DEFAULTS, scalar caller, @_) }
+sub _exports { \%EXPORTS }
+
 use Carp qw(croak);
-use Exporter 'import';
 use Scalar::Util qw(blessed);
 use PAGI::Routing::Resolver ();
 use PAGI::Utils::Scope ();
-
-our @EXPORT = ();
-our @EXPORT_OK = qw(url path_for url_for);
-our %EXPORT_TAGS = (all => [@EXPORT_OK]);
 
 =encoding UTF-8
 
@@ -60,8 +72,6 @@ Constructs and returns a C<PAGI::Routing::URL> facade. It always accepts
 exactly one source and never changes return type based on arity.
 
 =cut
-
-sub url { return __PACKAGE__->new(@_) }
 
 =head1 CONSTRUCTOR
 

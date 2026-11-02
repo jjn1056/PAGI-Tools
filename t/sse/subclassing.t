@@ -84,4 +84,22 @@ subtest 'a subclass with a hash-args constructor answers from the scope' => sub 
     is($object->cookie('theme'), 'dark', 'cookie');
 };
 
+{
+    package Local::OddConnected;
+    our @ISA = ('PAGI::SSE');
+    sub is_connected { 0 }
+}
+
+subtest 'a subclass overriding is_connected still starts the stream once' => sub {
+    my $scope = sse_scope();
+    my @sent;
+    my $sse = Local::OddConnected->new($scope, receive_from($scope), send_to($scope, \@sent));
+
+    $sse->start->get;
+    $sse->start->get;
+
+    is([ map { $_->{type} } @sent ], ['sse.start'], 'one sse.start for two start calls');
+    ok($sse->is_started, 'started');
+};
+
 done_testing;

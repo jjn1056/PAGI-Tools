@@ -247,7 +247,7 @@ subtest 'mistakes die when the application is compiled' => sub {
 
 subtest 'PAGI::Auth no longer offers requires' => sub {
     ok(!PAGI::Auth->can('requires'), 'no requires function');
-    ok(!(grep { $_ eq 'requires' } @PAGI::Auth::EXPORT_OK), 'nor an export of one');
+    ok(!PAGI::Auth->_exports->{requires}, 'nor an export of one');
 };
 
 done_testing;

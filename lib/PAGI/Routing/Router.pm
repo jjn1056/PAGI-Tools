@@ -2,6 +2,7 @@ package PAGI::Routing::Router;
 
 use strict;
 use warnings;
+use namespace::autoclean;
 use Carp qw(croak);
 use PAGI::Routing::Route ();
 use PAGI::Routing::Mount ();

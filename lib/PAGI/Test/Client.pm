@@ -2,6 +2,7 @@ package PAGI::Test::Client;
 
 use strict;
 use warnings;
+use namespace::autoclean;
 use Future::AsyncAwait;
 use Carp qw(croak);
 use Scalar::Util qw(weaken);

@@ -2,12 +2,14 @@ package PAGI::Middleware::Authentication;
 
 use strict;
 use warnings;
+use namespace::autoclean;
 use parent 'PAGI::Middleware';
 use Carp qw(croak);
 use Future;
 use Future::AsyncAwait;
 use Scalar::Util qw(blessed);
 use PAGI::Auth qw(auth);
+use PAGI::HTTPConnection ();
 use PAGI::Middleware::ErrorHandler ();
 use PAGI::Utils::Middleware qw(clone_scope);
 use PAGI::Utils ();
@@ -52,14 +54,15 @@ sub wrap {
             return;
         }
 
-        # The backend reads the request's headers and cookies; the body is
-        # the application's, so the backend's Request has none to read.
-        my $request = PAGI::Utils::request_for_scope($scope);
+        # The backend reads what identifies the connection (headers, cookies,
+        # query, session); the body is the application's, so it gets a
+        # connection, which has no body to read.
+        my $conn = PAGI::HTTPConnection->new($scope);
         my @results;
         my $authenticated = eval {
             my $returned = ref($backend) eq 'CODE'
-                ? $backend->($request)
-                : $backend->authenticate($request);
+                ? $backend->($conn)
+                : $backend->authenticate($conn);
             @results = await Future->wrap($returned);
             1;
         };
@@ -76,8 +79,12 @@ sub wrap {
             # here meets that boundary, which diagnoses a rejected status
             # claim; elsewhere this is the only chance to say why.
             my $outer = $type eq 'http' ? $scope->{'pagi.error_handler'} : undef;
-            my $answering = $outer && !$self->{own_catch} ? $outer : $self->{answers};
-            my $handled = await $answering->_handle_exception($error, $request, $scope, $receive, $send,
+            my $by_outer = $outer && !$self->{own_catch};
+            my $answering = $by_outer ? $outer : $self->{answers};
+            # This middleware's own table gets the backend's connection; the
+            # ErrorHandler around it builds the application's Request class.
+            my $handled = await $answering->_handle_exception($error,
+                $by_outer ? undef : $conn, $scope, $receive, $send,
                 $outer ? 'quiet' : undef);
             die $error if !$handled || $handled == 2;
             return;
@@ -109,7 +116,7 @@ PAGI::Middleware::Authentication - install request authentication results
         routes     => [route('/' => sub { response('Text', 'hello') })],
         middleware => [
             middleware('Authentication', backend => sub {
-                my ($request) = @_;
+                my ($conn) = @_;
                 return unauth_result();
             }),
         ],
@@ -122,7 +129,7 @@ application inside it, which you can do yourself:
     use PAGI::Middleware::Authentication;
 
     my $wrapped = PAGI::Middleware::Authentication->new(backend => sub {
-        my ($request) = @_;
+        my ($conn) = @_;
         return unauth_result();
     })->wrap($native_app);
 
@@ -136,21 +143,21 @@ native application. C<backend> is required and must be exactly a coderef or an
 object implementing C<authenticate>; C<catch> is optional (see L</catch>);
 unknown constructor options are errors.
 The same backend is reused across invocations. This middleware constructs one
-L<PAGI::Request>, or the class L<PAGI::Middleware::RequestClass> set when that
-middleware is listed before this one, for each HTTP, WebSocket, or SSE
-invocation. The Request a backend receives has no C<pagi.auth> yet, so a
-subclass helper that calls C<auth($request)> must not be used from a backend.
+L<PAGI::HTTPConnection> for each HTTP, WebSocket, or SSE invocation, whatever
+class L<PAGI::Middleware::RequestClass> sets for the handlers below. The
+connection a backend receives has no C<pagi.auth> yet, so a helper that calls
+C<auth($conn)> must not be used from a backend.
 A coderef receives
-that Request as its only argument; an object's C<authenticate($request)> receives
+that connection as its only argument; an object's C<authenticate($conn)> receives
 it after the normal invocant. Either form must return exactly one completed
 L<PAGI::Auth::Result>, directly or through a L<Future>. Bare users, C<undef>,
 and response values are errors.
 A backend reads what the request carries before its body: headers, cookies,
 the query, the session. The body is the application's, and reaches it
-untouched: reading it through the backend's Request dies. A request signed
-over its body is checked in the handler, which reads the body (as
-Starlette's AuthenticationMiddleware hands its backend a connection with no
-body; see examples/signed-requests).
+untouched: the connection has no body readers, nor the other Request-only
+methods (C<method>, for one). A request signed over its body is checked in
+the handler, which reads the body (as Starlette's AuthenticationMiddleware
+hands its backend an C<HTTPConnection>; see examples/signed-requests).
 
 The result is installed under C<pagi.auth> in a shallow child scope and the
 downstream application always continues. Guest and rejected results do not
@@ -172,12 +179,12 @@ its C<client_message> as plain text, its C<headers> (a 401's
 C<WWW-Authenticate>, say). A WebSocket or SSE connection is refused with that
 answer. From 500 up it is answered and then re-raised, so the server logs it.
 That includes the 400 a
-L<PAGI::Request> auth helper throws with C<raise_on_error> when the client
+L<PAGI::HTTPConnection> auth helper throws with C<raise_on_error> when the client
 sent a malformed or duplicate C<Authorization> field:
 
     middleware('Authentication', backend => sub {
-        my ($request) = @_;
-        my ($user, $password) = $request->basic_auth(raise_on_error => 1);  # 400 if malformed
+        my ($conn) = @_;
+        my ($user, $password) = $conn->basic_auth(raise_on_error => 1);  # 400 if malformed
         return unauth_result() unless defined $user;
         ...
     });
@@ -187,7 +194,7 @@ Every error from downstream propagates as it would without this middleware.
 =head2 catch
 
     my %catch = ('PAGI::Exception::HTTP' => sub {
-        my ($request, $context) = @_;
+        my ($conn, $context) = @_;
         return response('JSON', { error => $context->message },
             status  => $context->status,
             headers => $context->headers);
@@ -213,7 +220,7 @@ C<on_error>; it is not named C<on_error>, which is ErrorHandler's reporting
 hook.
 
 Keys are statuses from 400 to 599 or exact class names; an entry receives
-the backend's Request (with no body) and an L<PAGI::ErrorContext>, and
+the backend's L<PAGI::HTTPConnection> and an L<PAGI::ErrorContext>, and
 returns a response, as an ErrorHandler entry does. The table is checked when
 the middleware is constructed. It answers what the backend throws, wherever
 the middleware is placed, before any ErrorHandler around it -- a class key
@@ -221,7 +228,8 @@ answers the backend's own error class, as Starlette's C<on_error> answers
 C<AuthenticationError> -- and an HTTP error no entry matches gets the
 built-in answer. Without C<catch>, the backend's error is answered by the
 ErrorHandler this middleware is inside, on a route, and with the built-in
-answer elsewhere.
+answer elsewhere. That ErrorHandler's entries get the application's Request
+class, as for a route's error.
 
 Other scope types are passed through unchanged without constructing a request
 or invoking the backend.

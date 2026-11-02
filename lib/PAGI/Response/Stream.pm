@@ -2,6 +2,7 @@ package PAGI::Response::Stream;
 
 use strict;
 use warnings;
+use namespace::autoclean;
 
 use Carp qw(croak);
 use Scalar::Util qw(blessed);

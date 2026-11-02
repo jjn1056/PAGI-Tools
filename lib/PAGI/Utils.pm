@@ -2,7 +2,6 @@ package PAGI::Utils;
 
 use strict;
 use warnings;
-use Exporter ();
 use Future;
 use Future::AsyncAwait;
 use Carp qw(croak);
@@ -10,30 +9,28 @@ use File::Basename qw(basename dirname);
 use File::Spec;
 use Scalar::Util qw(blessed);
 use overload ();
-use PAGI::Lifespan;
-use PAGI::Utils::AppObject;
-use PAGI::Utils::Headers ();
+use PAGI::Utils::_Exporter ();
 
-my @PAGI_ENVIRONMENTS = qw(development test staging production);
-my %VALID_PAGI_ENV = map { $_ => 1 } @PAGI_ENVIRONMENTS;
-my @ENV_EXPORTS = qw(
-    pagi_env is_development is_test is_staging is_production
-);
-my @PATH_EXPORTS = qw(
-    app_path path_from_root replace_path_prefix
-);
-
-our @EXPORT_OK = (
-    qw(handle_lifespan to_app as_app_object invoke_app
-       request_ended_abnormally request_for_scope),
-    @ENV_EXPORTS,
-    @PATH_EXPORTS,
-);
-our %EXPORT_TAGS = (
-    all => \@EXPORT_OK,
-    env => \@ENV_EXPORTS,
-    path => \@PATH_EXPORTS,
-);
+my (%EXPORTS, %TAGS, @DEFAULTS);
+BEGIN {
+    my @env_exports = qw(
+        pagi_env is_development is_test is_staging is_production
+    );
+    my @path_exports = qw(
+        app_path path_from_root replace_path_prefix
+    );
+    %EXPORTS = map { $_ => \&{__PACKAGE__ . "::$_"} } (
+        qw(handle_lifespan to_app as_app_object invoke_app
+           request_ended_abnormally request_for_scope),
+        @env_exports,
+        @path_exports,
+    );
+    %TAGS = (
+        all  => [sort keys %EXPORTS],
+        env  => \@env_exports,
+        path => \@path_exports,
+    );
+}
 our %APP_PATH_SOURCE;
 
 sub _remember_app_path_origin {
@@ -50,10 +47,16 @@ sub import {
     my $class = shift;
     my ($package, $source) = caller;
     _remember_app_path_origin($package, $source);
-
-    local $Exporter::ExportLevel = 1;
-    return Exporter::import($class, @_);
+    PAGI::Utils::_Exporter::export(__PACKAGE__, \%EXPORTS, \%TAGS, \@DEFAULTS, $package, $class, @_);
 }
+sub _exports { \%EXPORTS }
+
+use PAGI::Lifespan;
+use PAGI::Utils::AppObject;
+use PAGI::Utils::Headers ();
+
+my @PAGI_ENVIRONMENTS = qw(development test staging production);
+my %VALID_PAGI_ENV = map { $_ => 1 } @PAGI_ENVIRONMENTS;
 
 sub pagi_env {
     croak 'pagi_env() does not accept arguments' if @_;
@@ -969,14 +972,13 @@ builds (set by L<PAGI::Middleware::RequestClass>), or a plain
 L<PAGI::Request> when the key is absent or undef. It is for code outside a
 route handler -- middleware, an error handler, a framework's own dispatch --
 that hands application code a Request of the class that code expects (an
-L<PAGI::Middleware::Authentication> backend, an
-L<PAGI::Middleware::ErrorHandler> handler). Code that only reads what the
+L<PAGI::Middleware::ErrorHandler> handler, say). Code that only reads what the
 scope holds -- a header, a cookie, the query, the path -- needs no Request
 and no class; it builds a L<PAGI::HTTPConnection>:
 
-    use PAGI::HTTPConnection;
+    use PAGI::HTTPConnection qw(http_connection);
 
-    my $token = PAGI::HTTPConnection->new($scope)->header('Authorization');
+    my $token = http_connection($scope)->header('Authorization');
 
 Know what C<request_for_scope> is not:
 

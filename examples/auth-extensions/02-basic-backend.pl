@@ -13,9 +13,9 @@ use PAGI::Routing qw(route middleware);
         return bless { verify => $args{verify} }, $class;
     }
     sub authenticate {
-        my ($self, $request) = @_;
+        my ($self, $conn) = @_;
         my ($username, $password);
-        try { ($username, $password) = $request->basic_auth(raise_on_error => 1) }
+        try { ($username, $password) = $conn->basic_auth(raise_on_error => 1) }
         catch ($e) {
             return PAGI::Auth::unauth_result(failure => {
                 code => 'malformed_authorization', message => 'Supply one valid Basic credential.',

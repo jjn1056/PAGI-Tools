@@ -2,6 +2,7 @@ package PAGI::Middleware::XSendfile;
 
 use strict;
 use warnings;
+use namespace::autoclean;
 use parent 'PAGI::Middleware';
 use File::Spec;
 use Future::AsyncAwait;

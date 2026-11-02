@@ -2,6 +2,7 @@ package PAGI::Utils::_SendValidation;
 
 use strict;
 use warnings;
+use namespace::autoclean;
 use Carp qw(croak);
 
 =head1 NAME

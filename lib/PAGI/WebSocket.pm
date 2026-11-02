@@ -1,7 +1,8 @@
 package PAGI::WebSocket;
 use strict;
 use warnings;
-use parent 'PAGI::HTTPConnection';
+use namespace::autoclean;
+use parent 'PAGI::HTTPConnection::_Protocol';
 use Carp qw(croak);
 use Scalar::Util ();
 use PAGI::Utils ();
@@ -9,50 +10,31 @@ use Future::AsyncAwait;
 use Future;
 use JSON::MaybeXS ();
 use PAGI::Utils::_ProtocolHelpers ();
-use PAGI::FutureOwner;
 use Scalar::Util qw(blessed);
 
 
+# The close code and reason are read from pagi.connection by
+# _refresh_connection, which the base's new runs.
 sub new {
-    my ($class, $scope, $receive, $send) = @_;
-
-    croak "PAGI::WebSocket requires scope hashref"
-        unless $scope && ref($scope) eq 'HASH';
-    croak "PAGI::WebSocket requires receive coderef"
-        unless $receive && ref($receive) eq 'CODE';
-    croak "PAGI::WebSocket requires send coderef"
-        unless $send && ref($send) eq 'CODE';
-    croak "PAGI::WebSocket requires scope type 'websocket', got '$scope->{type}'"
-        unless ($scope->{type} // '') eq 'websocket';
-    # PAGI::Spec::Www 0.6: servers provide pagi.connection on every scope.
-    PAGI::Utils::_ProtocolHelpers::require_connection($scope, 'PAGI::WebSocket');
-
-    # One object per call: nothing is cached in the scope, so a handler
-    # keeps the object it was given (SUBCLASSING).
-    my $self = $class->SUPER::new($scope);
-    $self->{receive} = $receive;
-    $self->{send} = $send;
-    $self->{_state} = 'connecting';  # connecting -> connected -> closed
-    $self->{_close_code} = undef;
-    $self->{_close_reason} = undef;
-    $self->{_on_close} = [];
-    $self->{_on_error} = [];
+    my $class = shift;
+    my $self = $class->SUPER::new(@_);
     $self->{_on_message} = [];
-
-    $self->{_cleanup_future} = Future->new;
-    $self->{_owner} = PAGI::FutureOwner->new;
-    $self->{_ended} = Future->new;
-    # The connection owns this helper until end. Cleanup then belongs to the
-    # helper's owner, so whoever awaits finished waits for it too.
-    $scope->{'pagi.connection'}->on_end(sub {
-        $self->_refresh_connection;
-        $self->_start_close_callbacks;
-        $self->{_ended}->done;
-        return;
-    });
-    $self->_refresh_connection;
     return $self;
 }
+
+sub _scope_type { 'websocket' }
+sub _initial_state { 'connecting' }  # connecting -> connected -> closed
+sub _open_state { 'connected' }
+sub _is_open { $_[0]->is_connected }
+
+# on_close callbacks receive ($code, $reason, $detail); on_error callbacks
+# receive ($error).
+sub _close_callback_args {
+    my ($self) = @_;
+    return ($self->close_code, $self->close_reason, $self->disconnect_detail);
+}
+sub _error_callback_args { my ($self, $error) = @_; return ($error) }
+sub _on_error_warning_name { 'PAGI::WebSocket' }
 
 sub _refresh_connection {
     my ($self) = @_;
@@ -65,200 +47,19 @@ sub _refresh_connection {
     return;
 }
 
-# A helper drives only what it answered (PAGI::Utils::_ProtocolHelpers holds
-# the claim rules): while its own refusal is in progress, or once another
-# helper answered the open connection, it fails locally.
-sub _refusing { PAGI::Utils::_ProtocolHelpers::refusing($_[0]) }
-sub _answered_by_another { PAGI::Utils::_ProtocolHelpers::answered_by_another($_[0]) }
-
-# This helper answered: its accept completed, or it was issued -- still
-# pending, or rejected by the server (D6: the helper keeps its claim and is
-# still treated as the answerer, as Starlette's WebSocket marks itself
-# connected before awaiting the accept). Either way it drives the connection
-# as an accepted socket; the server keeps a scope's sends in call order.
-# Once the connection has ended, no helper has answered it.
-sub _answered {
-    my ($self) = @_;
-    return $self->is_connected
-        || (($self->{_claim} // '') eq 'answering' && $self->connection_state eq 'connecting');
-}
-
-sub _require_ownership {
-    my ($self) = @_;
-    my $refused = PAGI::Utils::_ProtocolHelpers::ownership_refusal($self);
-    croak $refused if $refused;
-    return;
-}
-
-sub disconnect_detail {
-    my ($self) = @_;
-    $self->_refresh_connection;
-    return $self->{_disconnect_detail};
-}
-
 # What the scope holds is read through PAGI::HTTPConnection; the
 # subprotocols the client offered are WebSocket's own.
 sub subprotocols { shift->{scope}{subprotocols} // [] }
 
-# State accessors
-sub connection_state { my $self = shift; $self->_refresh_connection; return $self->{_state} }
-
-sub is_connected {
-    my $self = shift;
-    return $self->connection_state eq 'connected';
-}
-
-sub is_closed {
-    my $self = shift;
-    return $self->connection_state eq 'closed';
-}
-
 sub close_code { my $self = shift; $self->_refresh_connection; return $self->{_close_code} }
 sub close_reason { my $self = shift; $self->_refresh_connection; return $self->{_close_reason} }
-sub disconnect_reason { my $self = shift; $self->_refresh_connection; return $self->{_disconnect_reason} }
 
-# Outbound flow-control introspection (delegates to the pagi.transport handle)
-sub buffered_amount {
-    my $self = shift;
-    my $t = $self->{scope}{'pagi.transport'};
-    return 0 unless $t;
-    return $t->buffered_amount;
-}
-
-sub high_water_mark {
-    my $self = shift;
-    my $t = $self->{scope}{'pagi.transport'};
-    return undef unless $t;
-    return $t->high_water_mark;
-}
-
-sub low_water_mark {
-    my $self = shift;
-    my $t = $self->{scope}{'pagi.transport'};
-    return undef unless $t;
-    return $t->low_water_mark;
-}
-
-sub on_high_water {
-    my ($self, $cb) = @_;
-    my $t = $self->{scope}{'pagi.transport'};
-    $t->on_high_water($cb) if $t && $t->can('on_high_water');
-    return $self;
-}
-
-sub on_drain {
-    my ($self, $cb) = @_;
-    my $t = $self->{scope}{'pagi.transport'};
-    $t->on_drain($cb) if $t && $t->can('on_drain');
-    return $self;
-}
-
-sub is_writable {
-    my $self = shift;
-    my $t = $self->{scope}{'pagi.transport'};
-    return 1 unless $t;
-    my $high = $t->high_water_mark;
-    return 1 unless defined $high;
-    return $t->buffered_amount < $high ? 1 : 0;
-}
-
-# Internal state setter
-sub _set_state {
-    my ($self, $state) = @_;
-    $self->{_state} = $state;
-}
-
-# Register callback to run on disconnect/close
-sub on_close {
-    my ($self, $callback) = @_;
-    # Once the connection has ended, a callback runs now, after any still
-    # running, as the spec's on_end does.
-    return $self->_run_late_close_callback($callback) if $self->{_close_callbacks_ran};
-    push @{$self->{_on_close}}, $callback;
-    return $self;
-}
-
-sub _run_late_close_callback {
-    my ($self, $callback) = @_;
-    $self->{_close_chain} = $self->{_owner}->adopt(
-        $self->_late_close_worker($self->{_close_chain}, $callback));
-    return $self;
-}
-
-# A late callback's failure fails finished while the handler can still see
-# it; once finished has resolved there is nothing left to fail, so it warns.
-async sub _late_close_worker {
-    my ($self, $previous, $callback) = @_;
-    # The callbacks before it report their own failures.
-    eval { await $previous->without_cancel };
-    my $ok = eval {
-        my $result = $callback->($self->close_code, $self->close_reason, $self->disconnect_detail);
-        await $result if blessed($result) && $result->isa('Future');
-        1;
-    };
-    return if $ok;
-    die $@ unless $self->{_finished};
-    warn ref($self) . " on_close callback failed after the handler finished: $@";
-    return;
-}
-
-# Internal: run all on_close callbacks exactly once, as work the helper owns
-sub _run_close_callbacks {
+# Message callbacks are released with the others.
+sub _release_callbacks {
     my ($self) = @_;
-    $self->_start_close_callbacks;
-    return $self->{_cleanup_future}->without_cancel;
-}
-
-sub _start_close_callbacks {
-    my ($self) = @_;
-    return if $self->{_close_callbacks_ran};
-    $self->{_close_callbacks_ran} = 1;
-    my $completion = $self->{_cleanup_future};
-    my $worker = $self->{_owner}->adopt($self->_close_callbacks_worker);
-    $self->{_close_chain} = $worker;
-    # The cleanup Future means the callbacks have run; a callback's failure
-    # is reported once, through finished.
-    $worker->on_ready(sub { $completion->done unless $completion->is_ready });
-    return;
-}
-
-async sub _close_callbacks_worker {
-    my ($self) = @_;
-    my @failures;
-    for my $cb (@{$self->{_on_close}}) {
-        my $ok = eval {
-            my $result = $cb->($self->close_code, $self->close_reason, $self->disconnect_detail);
-            await $result if blessed($result) && $result->isa('Future');
-            1;
-        };
-        push @failures, $@ unless $ok;
-    }
-    $self->{_on_close} = [];
-    $self->{_on_error} = [];
+    $self->SUPER::_release_callbacks;
     $self->{_on_message} = [];
-    # Every callback has run; the first failure is the helper's to report.
-    die $failures[0] if @failures;
     return;
-}
-
-# Resolves to the helper once its scope has ended and all the work it
-# started -- its on_close callbacks included -- has settled; fails with the
-# first on_close failure.
-async sub finished {
-    my ($self) = @_;
-    # A scope never accepted (or started) ends only when the application
-    # returns, so waiting for its end would wait for the caller itself.
-    await $self->{_ended}->without_cancel if $self->_ends_without_application;
-    my $settled = eval { await $self->{_owner}->settled; 1 };
-    my $error = $@;
-    $self->{_finished} = 1;
-    die $error unless $settled;
-    return $self;
-}
-
-sub _ends_without_application {
-    my ($self) = @_;
-    return $self->connection_state ne 'connecting';
 }
 
 # Internal: a disconnect event arrived off the wire. The connection already
@@ -268,13 +69,6 @@ async sub _note_disconnected {
     my ($self) = @_;
     $self->_refresh_connection;
     return;
-}
-
-# Register callback to run on errors
-sub on_error {
-    my ($self, $callback) = @_;
-    push @{$self->{_on_error}}, $callback;
-    return $self;
 }
 
 # Register callback to run on message receive
@@ -299,23 +93,6 @@ sub on {
     }
     else {
         croak "Unknown event type: $event (expected message, close, or error)";
-    }
-}
-
-# Internal: trigger error callbacks
-async sub _trigger_error {
-    my ($self, $error) = @_;
-
-    for my $cb (@{$self->{_on_error}}) {
-        eval {
-            my $r = $cb->($error);
-            if (blessed($r) && $r->isa('Future')) {
-                await $r;
-            }
-        };
-        if ($@) {
-            warn "PAGI::WebSocket on_error callback error: $@";
-        }
     }
 }
 
@@ -348,19 +125,6 @@ async sub accept {
     $self->_set_state('connected') if $self->connection_state eq 'connecting';
 
     return $self;
-}
-
-# Keeps a Future the helper returned to its caller until it settles, so
-# finished waits for it. Its failure is the caller's to see: the owner keeps
-# only its completion. The callback also holds the caller's Future, so a
-# caller may drop it.
-sub _keep {
-    my ($self, $future) = @_;
-    my $completion = $future->else_done;
-    my $held = $future;
-    $completion->on_ready(sub { undef $held });
-    $self->{_owner}->adopt($completion);
-    return $future;
 }
 
 # Close the WebSocket connection
@@ -497,7 +261,7 @@ sub try_send_text { my $self = shift; return $self->_keep($self->_try_send_text(
 
 async sub _try_send_text {
     my ($self, $text) = @_;
-    return 0 if $self->is_closed || $self->_refusing || $self->_answered_by_another || !$self->_answered;
+    return 0 if $self->is_closed || $self->_may_not_drive || !$self->_answered;
 
     eval {
         defined($text = PAGI::Utils::_string_value($text))
@@ -526,7 +290,7 @@ sub try_send_bytes { my $self = shift; return $self->_keep($self->_try_send_byte
 
 async sub _try_send_bytes {
     my ($self, $bytes) = @_;
-    return 0 if $self->is_closed || $self->_refusing || $self->_answered_by_another || !$self->_answered;
+    return 0 if $self->is_closed || $self->_may_not_drive || !$self->_answered;
 
     eval {
         defined($bytes = PAGI::Utils::_string_value($bytes))
@@ -553,11 +317,9 @@ async sub _try_send_bytes {
     return 1;
 }
 
-sub try_send_json { my $self = shift; return $self->_keep($self->_try_send_json(@_)) }
-
 async sub _try_send_json {
     my ($self, $data) = @_;
-    return 0 if $self->is_closed || $self->_refusing || $self->_answered_by_another || !$self->_answered;
+    return 0 if $self->is_closed || $self->_may_not_drive || !$self->_answered;
 
     my $json = JSON::MaybeXS::encode_json($data);
     eval {
@@ -1099,10 +861,12 @@ error.
 
 =head1 WHICH HELPER ANSWERS
 
-A connection has one answer, and a helper drives only the answer it gave.
-Building a second helper over the same scope (C<new> always builds a new
-object) gives a helper that did not answer, so which helper answered
-decides what each can do.
+A connection has one helper, and that helper gives the connection's one
+answer. The route or endpoint builds it; pass it to the code that needs it.
+C<new> builds a new object on every call, so build no other over the same
+scope. Middleware reads the request through L<PAGI::HTTPConnection>
+(C<http_connection($scope)>), or wraps the raw C<$receive> and C<$send>, as
+Starlette's middleware does.
 
 B<This helper answered.> From the moment this helper issues its C<accept>,
 before the server's send completes, it owns the connection: sends, receives,
@@ -1113,10 +877,7 @@ at its C<await>; the helper keeps the claim it recorded when it sent the
 accept and is still treated as the connection's answerer, as Starlette's
 WebSocket is: its sends, C<try_send_*>, C<keepalive>, C<close> and
 C<close_or_deny> go to the server as on an accepted socket (which the
-server may reject in turn), and code that keeps using it gets no protection
-from the rules below. After a failed accept, build a new helper if the
-connection is still live and unanswered, or use the helper that answered if
-another did.
+server may reject in turn).
 
 B<This helper is refusing.> Once the response of this helper's L</deny> has
 started and the connection is still open, the refusal is its answer. Its
@@ -1128,17 +889,25 @@ C<keepalive> return quietly. The refusal itself completes as usual. A
 refusal that settles with no response started answered nothing, and the
 helper may try again.
 
-B<Another helper answered.> While the connection is open and its response
-was started by another helper, every operation of this one croaks
-C<this connection was answered by another helper; use that one>, sending
-nothing and reading nothing, except C<try_send_*>, which return 0. That
-includes C<close>, C<close_or_deny> and C<keepalive>: closing a socket
-another helper owns is that helper's call. A middleware that must act on
-the connection's data wraps C<$send> or C<$receive> instead.
-
-B<The connection has ended.> Every helper behaves as it does for an ended
+B<The connection has ended.> The helper behaves as it does for an ended
 connection: sends croak C<Cannot send on closed WebSocket>, C<receive>
 returns C<undef>, and C<accept>, C<close> and C<keepalive> do nothing.
+
+A second helper over the same connection is misuse: while the connection
+is open and another helper started its response, every operation of the
+second croaks
+C<this connection was answered by another helper; use that one>, except
+C<try_send_*>, which return 0.
+
+So a middleware that acts on a WebSocket's frames, such as one that reads a
+token from the client's first message and closes with 4401 when it is
+wrong, builds no helper: it wraps the raw C<$receive> and C<$send>, and the
+application's helper answers. That helper still reads C<pagi.connection>
+itself: once the connection is over, its sends croak C<Cannot send on
+closed WebSocket> whatever the middleware does, so a handler behind such a
+middleware receives before it sends, or uses C<try_send_*>.
+C<examples/websocket-first-frame-auth> in this distribution is the worked
+version, with its other traps.
 
 =head1 STATE ACCESSORS
 
@@ -1643,7 +1412,10 @@ Returns C<$self> for chaining.
 
 =head1 SUBCLASSING
 
-A framework may subclass PAGI::WebSocket (Thunderhorse does). The contract:
+A framework may subclass PAGI::WebSocket (Thunderhorse does). The code it
+shares with L<PAGI::SSE> lives in an internal base class,
+C<PAGI::HTTPConnection::_Protocol>, which is not API: depend on neither
+its name nor its private methods. The contract:
 
 =over 4
 

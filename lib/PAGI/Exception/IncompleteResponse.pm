@@ -2,6 +2,7 @@ package PAGI::Exception::IncompleteResponse;
 
 use strict;
 use warnings;
+use namespace::autoclean;
 use Carp qw(croak);
 use overload q{""} => 'message', fallback => 1;
 

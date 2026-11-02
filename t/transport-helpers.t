@@ -71,12 +71,8 @@ ok(Local::Transport::Named->can('transport'),
 ok(Local::Transport::All->can('transport'),
     'lowercase :all exports transport');
 
-my $uppercase_tag_error;
-{
-    local $SIG{__WARN__} = sub { };
-    $uppercase_tag_error = dies { PAGI::Transport->import(':ALL') };
-}
-like($uppercase_tag_error, qr/"?:?ALL"? is not defined|Can't continue/i,
+my $uppercase_tag_error = dies { PAGI::Transport->import(':ALL') };
+like($uppercase_tag_error, qr/\A":ALL" is not exported by PAGI::Transport at /,
     'uppercase :ALL is not an export tag');
 
 subtest 'transport is optional and does not cache in scope' => sub {

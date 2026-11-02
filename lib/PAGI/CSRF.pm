@@ -2,14 +2,24 @@ package PAGI::CSRF;
 
 use strict;
 use warnings;
+use namespace::autoclean;
+use Sub::Util ();
+use PAGI::Utils::_Exporter ();
+
+my (%EXPORTS, %TAGS, @DEFAULTS);
+BEGIN {
+    %EXPORTS = (
+        csrf => Sub::Util::set_subname('PAGI::CSRF::csrf',
+            sub { return __PACKAGE__->new(@_) }),
+    );
+    %TAGS = (all => [sort keys %EXPORTS]);
+}
+sub import   { PAGI::Utils::_Exporter::export(__PACKAGE__, \%EXPORTS, \%TAGS, \@DEFAULTS, scalar caller, @_) }
+sub _exports { \%EXPORTS }
+
 use Carp qw(croak);
-use Exporter 'import';
 use PAGI::Utils::Scope ();
 use PAGI::Utils::SecureCompare ();
-
-our @EXPORT = ();
-our @EXPORT_OK = qw(csrf);
-our %EXPORT_TAGS = (all => [@EXPORT_OK]);
 
 =head1 NAME
 
@@ -77,8 +87,6 @@ with a C<scope> method. This function is an opt-in named export and is also
 available through the C<:all> tag. Nothing is exported by default.
 
 =cut
-
-sub csrf { return __PACKAGE__->new(@_) }
 
 =head1 CONSTRUCTOR
 

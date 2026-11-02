@@ -2,6 +2,7 @@ package PAGI::Middleware::CSRF;
 
 use strict;
 use warnings;
+use namespace::autoclean;
 use parent 'PAGI::Middleware';
 use Future;
 use Future::AsyncAwait;

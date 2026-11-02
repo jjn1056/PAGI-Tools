@@ -1,6 +1,7 @@
 package PAGI::App::Compose;
 use strict;
 use warnings;
+use namespace::autoclean;
 use Carp qw(croak);
 use Scalar::Util qw(blessed);
 use parent 'PAGI::App';

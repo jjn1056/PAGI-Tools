@@ -2,21 +2,32 @@ package PAGI::Middleware::Session;
 
 use strict;
 use warnings;
+use namespace::autoclean;
+use Sub::Util ();
+use PAGI::Utils::_Exporter ();
+
+my (%EXPORTS, %TAGS, @DEFAULTS);
+BEGIN {
+    %EXPORTS = (
+        session_state => Sub::Util::set_subname('PAGI::Middleware::Session::session_state',
+            sub { return _build_named('session_state', 'State', @_) }),
+        session_store => Sub::Util::set_subname('PAGI::Middleware::Session::session_store',
+            sub { return _build_named('session_store', 'Store', @_) }),
+    );
+    %TAGS = (all => [sort keys %EXPORTS]);
+}
+sub import   { PAGI::Utils::_Exporter::export(__PACKAGE__, \%EXPORTS, \%TAGS, \@DEFAULTS, scalar caller, @_) }
+sub _exports { \%EXPORTS }
+
 use parent 'PAGI::Middleware';
 use Future::AsyncAwait;
 use Carp qw(croak);
-use Exporter 'import';
 use JSON::MaybeXS;
 use PAGI::Utils ();
 use PAGI::Utils::Random qw(secure_random_bytes);
 
-our @EXPORT_OK = qw(session_state session_store);
-
 # Set once the default in-memory store has been announced in this process.
 my $warned_default_store = 0;
-
-sub session_state { return _build_named('session_state', 'State', @_) }
-sub session_store { return _build_named('session_store', 'Store', @_) }
 
 # Resolve NAME under PAGI::Middleware::Session::<kind> (or exactly, with a
 # leading '+'), load it, and return CLASS->new(@args).

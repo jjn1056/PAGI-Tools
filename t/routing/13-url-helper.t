@@ -129,12 +129,8 @@ subtest 'exports are opt-in and lowercase-only' => sub {
     ok(Local::URL::All->can('path_for'), 'lowercase :all exports path_for');
     ok(Local::URL::All->can('url_for'), 'lowercase :all exports url_for');
 
-    my $uppercase_error;
-    {
-        local $SIG{__WARN__} = sub { };
-        $uppercase_error = dies { PAGI::Routing::URL->import(':ALL') };
-    }
-    like($uppercase_error, qr/"?:?ALL"? is not defined|Can't continue/i,
+    my $uppercase_error = dies { PAGI::Routing::URL->import(':ALL') };
+    like($uppercase_error, qr/\A":ALL" is not exported by PAGI::Routing::URL at /,
         'uppercase :ALL is rejected');
 };
 

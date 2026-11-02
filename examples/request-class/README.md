@@ -35,7 +35,8 @@ pagi-server --app examples/request-class/app.pl --port 5000
   it that hands a Request to your code uses it: route and `http_default`
   handlers, Endpoint::HTTP methods, `refuse` handlers, `deny`/`decline`
   handlers on WebSocket and SSE routes, an ErrorHandler `handler` listed
-  after RequestClass, and Authentication backends.
+  after RequestClass. An Authentication backend gets a
+  `PAGI::HTTPConnection`, not the class.
 - Middleware listed before RequestClass does not see it. List it first.
 - An application mounted below it gets the class too, even one written by
   someone else.

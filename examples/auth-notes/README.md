@@ -4,7 +4,7 @@ A small Authentication v1 example: public notes, an identity endpoint, publishin
 and a permission-restricted bulk export. All notes are public. Export restrictions
 control bulk access and do not imply confidentiality.
 
-The backend receives a Request, extracts Bearer credentials with
+The backend receives a `PAGI::HTTPConnection`, extracts Bearer credentials with
 `bearer_token(raise_on_error => 1)`, awaits the application-owned token store,
 and returns `auth_result` or `unauth_result`.
 Authentication installs that context and continues, even for rejected tokens.
@@ -148,7 +148,7 @@ Compose may render it as 500 at its outer error boundary. It never becomes a
 
 | File | Demonstrates |
 | --- | --- |
-| [app.pl](app.pl) | Request backend, explicit results, default guest, user flag, `auth`, scope membership, and ordinary 400/401/403 responses |
+| [app.pl](app.pl) | Connection backend, explicit results, default guest, user flag, `auth`, scope membership, and ordinary 400/401/403 responses |
 | [TokenStore.pm](lib/NotesDemo/TokenStore.pm) | Fixed trusted identity/grant records and a Future-returning lookup |
 | [Library.pm](lib/NotesDemo/Library.pm) | Public in-memory notes and Future-returning publication under an authenticated author |
 | [Acceptance test](../../t/integration-auth-notes.t) | Route matrix, absence still invoking the backend, no publishing on denial, and direct propagation of store failure |

@@ -92,9 +92,10 @@ package Local::Modulino;
 use strict;
 use warnings;
 use parent 'PAGI::App';
+use PAGI::Tools qw(compose response route);
 our $BUILT = 0;
 sub new { $BUILT++; shift->SUPER::new(@_) }
-sub to_app { require PAGI::Tools; PAGI::Tools::compose(routes => [PAGI::Tools::route('/' => sub { PAGI::Tools::response('Text', 'modulino') })])->to_app }
+sub to_app { compose(routes => [route('/' => sub { response('Text', 'modulino') })])->to_app }
 __PACKAGE__->run_if_script;
 PERL
 close $fh;
@@ -207,7 +208,8 @@ subtest 'run prints the response and returns the exit status' => sub {
 subtest 'a failed startup exits 1' => sub {
     package Local::BadStart {
         use parent -norequire, 'PAGI::App';
-        sub to_app { PAGI::Tools::compose(routes => [], lifespan => { startup => sub { die "no db\n" } })->to_app }
+        use PAGI::Tools qw(compose);
+        sub to_app { compose(routes => [], lifespan => { startup => sub { die "no db\n" } })->to_app }
     }
     my ($status, undef, $err) = run_cli(Local::BadStart->new, '/');
     is $status, 1, 'exit 1';

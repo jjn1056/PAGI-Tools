@@ -1,6 +1,7 @@
 use strict;
 use warnings;
 use Test2::V0;
+use Carp ();
 
 use lib 'lib';
 use PAGI::Response qw(response);
@@ -28,15 +29,24 @@ like($marked, qr/at \Q${\ __FILE__}\E line $marked_line\.$/m, "marked: its user'
 # A body Text or HTML cannot render is refused the same way.
 {
     package Local::Marked::Pages;
+    use PAGI::Response qw(response);
     $Carp::Internal{'Local::Marked::Pages'}++;
-    sub text { PAGI::Response::response('Text', $_[0]) }
-    sub html { PAGI::Response::response('HTML', $_[0]) }
+    sub text { response('Text', $_[0]) }
+    sub html { response('HTML', $_[0]) }
 }
 for my $class (qw(Text HTML)) {
     my $line = __LINE__ + 1;
     my $error = dies { Local::Marked::Pages->can(lc $class)->(undef) };
     like($error, qr/must be a defined Unicode scalar at \Q${\ __FILE__}\E line $line\.$/m,
         "marked, $class with an undefined body: its user's line is named");
+}
+
+# A stack trace names the function the user called.
+{
+    my $trace;
+    local $SIG{__DIE__} = sub { $trace //= Carp::longmess('trace') };
+    ok(dies { response('Nope') }, 'an unknown response type dies');
+    like($trace, qr/PAGI::Response::response\(/, 'a trace through response names response');
 }
 
 done_testing;

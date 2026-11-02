@@ -7,6 +7,13 @@
   UPGRADING-REFERENCE.md has the details. Needs PAGI::Server 0.003000.
 
   [New]
+  - http_connection($scope), a function import from PAGI::HTTPConnection and
+    PAGI::Tools: PAGI::HTTPConnection->new($scope) in the house style of
+    stash($request) and session($request), so the reader that cannot touch
+    the body or socket is the easy one for middleware to reach for.
+    PAGI::Request, WebSocket and SSE still import nothing; asking them or a
+    subclass for a name now dies ("PAGI::Request exports nothing; import
+    from PAGI::HTTPConnection"), where it was ignored.
   - PAGI::HTTPConnection, Starlette's HTTPConnection: what can be known
     about an http, websocket or sse request without talking to it --
     path, headers, query, path parameters, cookies, client and application
@@ -135,11 +142,12 @@
     PAGI::Exception::HTTP (with no headers), so one catch entry for
     PAGI::Exception::HTTP answers a bad body too.
   - PAGI::Auth (auth, auth_result, unauth_result, www_authenticate)
-    and PAGI::Middleware::Authentication. Its backend reads the request's
-    headers and cookies, never the body (as Starlette's backend gets an
-    HTTPConnection); a request signed over its body is checked in the
-    handler. What the backend throws is handled as the same value thrown
-    from a route is (as Starlette answers a backend's AuthenticationError):
+    and PAGI::Middleware::Authentication. Its backend, and its own catch
+    entries, get a PAGI::HTTPConnection, whatever Request class RequestClass
+    sets (as Starlette's backend gets an HTTPConnection): it reads the
+    headers, cookies, query and session, never the body; a request signed
+    over its body is checked in the handler. What the backend throws is
+    handled as the same value thrown from a route is (as Starlette answers a backend's AuthenticationError):
     an HTTP error, a class with a catch entry, or a page is answered, by the
     ErrorHandler the route is inside or with the built-in answer, and a
     WebSocket or SSE is refused with it; anything else is a server error.
@@ -250,11 +258,15 @@
   - PAGI::Middleware::RequestClass: middleware('RequestClass', class =>
     'MyApp::Request') gives every handler below it (routes, Endpoint::HTTP
     methods, refuse, deny and decline handlers, an ErrorHandler catch
-    entry, Authentication backends listed after it) that Request class instead
+    entry) that Request class instead
     of PAGI::Request, through the scope key pagi.request.factory;
     request_response's request_factory still wins for its one handler.
   - examples/request-class: an application's Request class set once by
     middleware.
+  - examples/websocket-first-frame-auth: WebSocket first-frame
+    authentication as a middleware that builds no PAGI::WebSocket and
+    wraps the raw send and receive, so the route's own helper answers;
+    PAGI::WebSocket's "WHICH HELPER ANSWERS" points to it.
   - PAGI::Endpoint and endpoint() (PAGI::Routing, PAGI::Tools):
     route('/x' => endpoint('Class', %args)) loads the class and builds a
     fresh object with new for each request (each connection for WebSocket
@@ -338,6 +350,12 @@
   [Changed]
   - url_for and path_for write a space in a query as "+" (path segments and
     the fragment keep "%20").
+  - A subclass of PAGI::WebSocket or PAGI::SSE names itself in new's
+    errors ("MyApp::WebSocket requires receive coderef", "... requires
+    pagi.connection capabilities ..."), where they named PAGI::WebSocket
+    or PAGI::SSE. The two classes share their common code through one
+    internal base, PAGI::HTTPConnection::_Protocol, which is not API;
+    nothing else in their behaviour changes.
   - PAGI::WebSocket and PAGI::SSE hand each send to the server at once and
     rely on it to keep a connection's sends in call order, as
     PAGI::Spec::Www 0.7 requires. A handler with several producers needs no
@@ -549,6 +567,22 @@
     Tutorial link to one statement of each rule instead of restating it.
 
   [Breaking -- see UPGRADING.md]
+  - Every module exports through one installer, PAGI::Utils::_Exporter, in
+    place of Exporter. A class's exported function (response, compose,
+    stash, ...) is no longer also a sub of its package, so it is not callable
+    by full name and its objects no longer answer it as a method;
+    PAGI::Pages' names, respond_to, Auth's auth, auth_result, unauth_result
+    and www_authenticate, and Routing::URL's path_for and url_for stay
+    methods. Function modules are unchanged. A name imported from a subclass
+    dies, naming the module to import from; Exporter's :DEFAULT, !name and
+    /regex/ forms are gone. PAGI::Tools::response and the other class-sourced
+    full names no longer exist. PAGI::Middleware::Builder's POD now says its
+    object interface is add_middleware, add_middleware_if and add_mount, and
+    its SYNOPSIS runs.
+  - PAGI-Tools' classes (every package that answers new) use
+    namespace::autoclean (a new prerequisite), so they no longer answer an
+    imported function as a method: $request->croak, $request->decode_json,
+    $endpoint->invoke_app and the like are gone.
   - $request->host is the uri's host: the Host as sent, without its port
     ("example.com" for "Host: example.com:8080"; use $request->uri->authority
     for host:port or $request->uri->port), never validated, and the server
@@ -657,7 +691,6 @@
     sse scope: an untyped hash dies. Session gives no session to scope
     types other than http, websocket and sse (it gave a read-only one to
     any type with headers): such a scope passes to the app untouched.
-    Authentication's backend and
     ErrorHandler's handler and catch entries get request_for_scope($scope):
     reading their Request's body dies "this Request was built from the
     scope alone; it has no body", where each had its own message.
@@ -820,6 +853,13 @@
     It used to build the class with new and no arguments, ignoring BUILD_APP.
 
   [Fixed]
+  - PAGI::Middleware::Builder: enable_if (and add_middleware_if) with a
+    middleware name builds the middleware once, with the app, as enable
+    does and as enable_if with an instance already did. It was built anew
+    on every request the condition admitted, so state it keeps never
+    accumulated -- RateLimit under enable_if never refused anyone -- and a
+    bad option surfaced only on the first matching request; it now fails
+    when the app is built.
   - PAGI::Test::WebSocket: a receive the application cancels while it
     waits (Future->wait_any cancels the receive that loses a race) no longer
     swallows the next message the test sends; the next receive gets it, and

@@ -228,7 +228,7 @@ subtest 'openapi returns the application, its document a route inside it' => sub
         'a route there for another method is not shadowed');
 
     require PAGI::Tools;
-    ok(\&PAGI::Tools::openapi == \&PAGI::Routing::OpenAPI::openapi, 'PAGI::Tools re-exports openapi');
+    ok(PAGI::Tools->_exports->{openapi} == PAGI::Routing::OpenAPI->_exports->{openapi}, 'PAGI::Tools re-exports openapi');
 };
 
 subtest 'a subclass builds on it' => sub {
