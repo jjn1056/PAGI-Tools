@@ -138,9 +138,9 @@ subtest 'the function modules export through the installer' => sub {
 
 # An imported function is a sub in the importer's stash, so a class that
 # imports one answers it as a method, and so does every subclass. A lib
-# class (a package declared in lib that answers new) holds no sub defined
-# in another package; overload's entries, whose names start with "(", are
-# not methods.
+# class (a package declared in lib that answers new, or whose code blesses)
+# holds no sub defined in another package; overload's entries, whose names
+# start with "(", are not methods.
 sub imported_subs {
     my ($package) = @_;
     my @imported;
@@ -169,9 +169,12 @@ subtest 'no lib class holds an imported sub' => sub {
     my %declared;
     for my $module (@LIB_MODULES) {
         my $code = code_of($module->[1]);
-        $declared{$1} = 1 while $code =~ /^\s*package\s+([\w:]+)/mg;
+        my ($head, @sections) = split /^\s*package\s+([\w:]+)/m, $code;
+        while (my ($package, $body) = splice @sections, 0, 2) {
+            $declared{$package} ||= $body =~ /\bbless\b/ ? 1 : 0;
+        }
     }
-    my @classes = grep { $declared{$_} && $_->can('new') } @PAGI_PACKAGES;
+    my @classes = grep { exists $declared{$_} && ($declared{$_} || $_->can('new')) } @PAGI_PACKAGES;
     ok(scalar(@classes), 'there are lib classes to look at');
 
     my @held = map { my $class = $_; map { "$class holds $_" } imported_subs($class) } @classes;

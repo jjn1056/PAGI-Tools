@@ -2,6 +2,7 @@ package PAGI::Utils::URI;
 
 use strict;
 use warnings;
+use namespace::autoclean;
 use Carp qw(croak);
 use Encode ();
 use Hash::MultiValue;
