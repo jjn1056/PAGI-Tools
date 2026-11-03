@@ -34,6 +34,11 @@ come through exactly. C<REQUEST_URI> is L<PAGI::HTTPConnection/request_uri>: the
 path and query the client requested, including any mount prefix. At an exact
 mount C<PATH_INFO> is C</>.
 
+A delayed response (C<psgi.streaming>) is collected and sent when the
+application's responder callback returns, so the writer must be used inside
+that callback. C<psgi.nonblocking> is false: a write made later, from an
+event callback, would arrive after the response has ended.
+
 =cut
 
 sub new {
@@ -107,7 +112,7 @@ sub _build_env {
         'psgi.multiprocess' => 0,
         'psgi.run_once'     => 0,
         'psgi.streaming'    => 1,
-        'psgi.nonblocking'  => 1,
+        'psgi.nonblocking'  => 0,
     );
 
     # Add headers

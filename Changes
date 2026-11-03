@@ -854,6 +854,10 @@
     It used to build the class with new and no arguments, ignoring BUILD_APP.
 
   [Fixed]
+  - PAGI::App::WrapPSGI reports psgi.nonblocking as false. A delayed
+    response's writer is collected and sent when the responder callback
+    returns, so a PSGI app that took the old true value at its word and wrote
+    later, from an event callback, got a 200 with an empty body.
   - PAGI::SSE every() no longer grows memory as it ticks. It raced a fresh
     end_future against each sleep, and a race against a Future the
     connection keeps pending leaves a callback on it until the connection
