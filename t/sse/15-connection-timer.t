@@ -17,13 +17,50 @@ subtest 'every observes end after multiple timer wins without consuming receive'
     my $every = $sse->every(1, sub { ++$ticks; Future->done });
     is($ticks, 1, 'first callback executes');
     $timers[0]->done;
-    is($ticks, 2, 'second tick survives cancelled end observer');
+    is($ticks, 2, 'second tick after a timer win');
     $timers[1]->done;
-    is($ticks, 3, 'fresh end observer for every race');
+    is($ticks, 3, 'third tick after two timer wins');
     $conn->_mark_complete;
     ok($every->is_ready && !$every->is_failed, 'clean completion exits periodic loop');
     is($cleaned, 1, 'one cleanup');
     ok($timers[2]->is_cancelled, 'owned losing timer cancelled');
+};
+
+subtest 'every registers with the connection once, however many ticks' => sub {
+    eval { require Future::IO::Impl::IOAsync; 1 } or skip_all('Future::IO::Impl::IOAsync unavailable');
+    my @timers;
+    no warnings qw(redefine once);
+    local *Future::IO::sleep = sub { my $f = Future->new; push @timers, $f; return $f };
+
+    # A race against a Future the connection keeps pending leaves a callback
+    # on it until the connection ends -- through without_cancel or wait_any's
+    # also alike -- so a loop that races one per tick grows for as long as the
+    # stream lives. every() may register with the connection once, not per tick.
+    my %calls;
+    my $counting = sub {
+        my ($method) = @_;
+        my $original = PAGI::Test::ConnectionState->can($method);
+        return sub { $calls{$method}++; goto &$original };
+    };
+    local *PAGI::Test::ConnectionState::end_future        = $counting->('end_future');
+    local *PAGI::Test::ConnectionState::disconnect_future = $counting->('disconnect_future');
+    local *PAGI::Test::ConnectionState::on_end            = $counting->('on_end');
+    local *PAGI::Test::ConnectionState::on_disconnect     = $counting->('on_disconnect');
+
+    my $conn = PAGI::Test::ConnectionState->new;
+    my $sse = PAGI::SSE->new({type => 'sse', 'pagi.connection' => $conn}, sub {die 'receive'}, sub {Future->done});
+    my $registered = sub { ($calls{on_end} // 0) + ($calls{on_disconnect} // 0) };
+    my $before = $registered->();        # what building the helper registered
+    my $ticks = 0;
+    my $every = $sse->every(1, sub { ++$ticks; Future->done });
+    $timers[$_]->done for 0 .. 49;
+    is($ticks, 51, 'fifty timer wins, fifty-one callbacks');
+    is(($calls{end_future} // 0) + ($calls{disconnect_future} // 0), 0,
+        'no connection Future is raced');
+    is($registered->() - $before, 1, 'one end callback for the whole loop');
+
+    $conn->_mark_complete;
+    ok($every->is_ready && !$every->is_failed, 'the end still stops the loop');
 };
 
 subtest 'SSE send errors do not publish connection terminal facts' => sub {
