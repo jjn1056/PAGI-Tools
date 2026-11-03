@@ -9,7 +9,7 @@ requires 'Encode', '3.00';
 
 # Async primitives (apps and middleware are written against Futures;
 # no event loop dependency — the server owns the loop)
-requires 'Future', '0.50';
+requires 'Future', '0.54';
 requires 'Future::AsyncAwait', '0.66';
 
 # Loop-agnostic async I/O (PAGI::SSE->every, timers in apps)

@@ -348,6 +348,7 @@
     SameSite=None and secure.
 
   [Changed]
+  - Requires Future 0.54, the current release (was 0.50).
   - url_for and path_for write a space in a query as "+" (path segments and
     the fragment keep "%20").
   - A subclass of PAGI::WebSocket or PAGI::SSE names itself in new's
@@ -853,6 +854,12 @@
     It used to build the class with new and no arguments, ignoring BUILD_APP.
 
   [Fixed]
+  - PAGI::SSE every() no longer grows memory as it ticks. It raced a fresh
+    end_future against each sleep, and a race against a Future the
+    connection keeps pending leaves a callback on it until the connection
+    ends: on PAGI::Server, about 1 KB a tick under Future::PP and 570 bytes
+    under Future::XS. It now registers one on_end callback for the loop,
+    which ends each tick's race through a Future of its own.
   - PAGI::Middleware::Builder: enable_if (and add_middleware_if) with a
     middleware name builds the middleware once, with the app, as enable
     does and as enable_if with an instance already did. It was built anew

@@ -494,7 +494,14 @@ async sub every {
 
     await $self->start unless $self->is_started;
 
-    my $connection = $self->{scope}{'pagi.connection'};
+    # The connection's end wakes this tick's race. Racing a connection Future
+    # instead would leave a callback on it per tick (whatever the combinator)
+    # until the connection ends, so one on_end serves the whole loop and each
+    # tick races a Future of its own.
+    my $wake;
+    $self->{scope}{'pagi.connection'}->on_end(sub {
+        $wake->done if $wake && !$wake->is_ready;
+    });
 
     while (!$self->is_closed) {
         # A callback that dies propagates, as in each(); on_close runs when
@@ -503,7 +510,7 @@ async sub every {
 
         # Race the interval against the connection ending.
         my $sleep_future = Future::IO->sleep($interval);
-        await Future->wait_any($sleep_future, $connection->end_future);
+        await Future->wait_any($sleep_future, $wake = Future->new);
 
         if ($self->is_closed) {
             $sleep_future->cancel if $sleep_future->can('cancel') && !$sleep_future->is_ready;
@@ -1147,8 +1154,9 @@ Parameters:
 =back
 
 The callback is executed first, then the method sleeps for the interval
-before the next iteration. Every timer race gets a fresh cancellation-isolated
-connection end observer; it never starts a receive watcher on a connection-backed
+before the next iteration. The connection's end interrupts the sleep through
+one C<on_end> callback for the whole loop, so a long-lived stream holds no more
+memory as it ticks; it never starts a receive watcher on a connection-backed
 scope. Callback exceptions propagate to the server; terminal cleanup waits for
 the connection outcome.
 
