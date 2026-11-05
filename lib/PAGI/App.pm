@@ -52,6 +52,31 @@ PAGI::App - The base class for a PAGI application object
 C<PAGI::App> is a L<Class::Tiny> class: its constructor, C<new>, comes from
 C<Class::Tiny::Object>.
 
+=head1 RATIONALE
+
+A PAGI application is a code reference, called with
+C<($scope, $receive, $send)> and returning a L<Future>. Most real
+applications also carry state: settings, connections, templates. An object
+is the natural home for that.
+
+In Python an object can be the application itself: a class that defines
+C<__call__> makes its instances callable, which is how Starlette's
+applications, routes and responses all work. A Perl object cannot be called
+as a code reference. Overloading C<&{}> comes close, but the result is still
+not a native code reference, which is what the PAGI specification's runner
+checks for first. So PAGI's convention is C<to_app>: an object with a
+C<to_app> method is asked, once, for the code reference
+(L<PAGI::Spec::Server/Application Loading and Normalization>).
+
+C<PAGI::App> writes that adapter once. A subclass writes C<call> as an
+ordinary method, and C<to_app> turns the object into the code reference.
+
+It is built on L<Class::Tiny>: small, with no dependencies outside the Perl
+core, and it gives accessors with defaults, C<BUILDARGS> and C<BUILD>. A
+default can be a code reference run on first use, which is how an
+application takes its settings from C<%ENV> or a configuration file without a
+constructor argument.
+
 =head1 DESCRIPTION
 
 An application object: a class whose instances are PAGI applications. A
