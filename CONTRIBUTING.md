@@ -29,6 +29,39 @@ Follow the existing code style. Key conventions:
 
 When in doubt, match what you see in the surrounding code.
 
+Library code and tests start with `use v5.24;` and `use warnings;` (the 5.24
+version bundle turns on strict but not warnings), and use no signatures,
+which are experimental before 5.36. Examples in POD and in `examples/` use
+`use v5.40;` and signatures, and POD examples define classes as
+`package Name { ... }`.
+
+## Bytes, characters and `use v5.24`
+
+PAGI hands an application bytes: `raw_path`, query strings, header values and
+request bodies are bytes, not characters. `use v5.24;` (like any `use v5.12;`
+or later) turns on the `unicode_strings` feature, and with it Perl applies
+Unicode rules to bytes 128-255 in a string that is not marked as UTF-8:
+
+- `\s` matches the bytes `\x85` and `\xA0`;
+- `\w` matches bytes such as `\xC3`;
+- `lc`, `uc` and `/i` treat `\xC0`-`\xFF` as Latin-1 letters.
+
+So a regex that was right on bytes can silently corrupt them. "à" is the two
+bytes `\xC3\xA0` in UTF-8, and `s/\s+$//` strips the `\xA0`, cutting the
+character in half.
+
+The rule: in code that handles bytes, write the regex for what it means.
+
+- HTTP whitespace is space and tab: write `[ \t]`, not `\s`.
+- A token or a name is ASCII: write `[A-Za-z0-9_]` (or use `/a`), not `\w`.
+- A case-insensitive match on header names or other ASCII: use `/ia`, or
+  `lc` only on values known to be ASCII.
+
+Don't turn the feature off with `no feature 'unicode_strings'`: fix the regex.
+Every module that takes or returns bytes adds cases to `t/bytes.t`, which
+sends `\x85`, `\xA0`, `\xC3\xA0` and `\xC9` through its public methods and
+checks they come out unchanged.
+
 ## Running Tests
 
 The test suite is self-contained — no external servers or cross-repository
