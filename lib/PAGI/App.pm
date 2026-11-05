@@ -44,6 +44,14 @@ PAGI::App - The base class for a PAGI application object
     # elsewhere
     my $app = MyApp->new(greeting => 'Hi')->to_app;   # a PAGI application
 
+=head1 INHERITANCE
+
+    PAGI::App
+      Class::Tiny::Object
+
+C<PAGI::App> is a L<Class::Tiny> class: its constructor, C<new>, comes from
+C<Class::Tiny::Object>.
+
 =head1 DESCRIPTION
 
 An application object: a class whose instances are PAGI applications. A
