@@ -27,19 +27,19 @@ PAGI::App - The base class for a PAGI application object
 
 =head1 SYNOPSIS
 
-    package MyApp;
-    use v5.40;
-    use parent 'PAGI::App';
-    use Class::Tiny { greeting => 'Hello' };
-    use Future::AsyncAwait;
+    package MyApp {
+        use v5.40;
+        use parent 'PAGI::App';
+        use Class::Tiny { greeting => 'Hello' };
+        use Future::AsyncAwait;
 
-    async sub call ($self, $scope, $receive, $send) {
-        await $send->({ type => 'http.response.start', status => 200,
-                        headers => [['content-type', 'text/plain']] });
-        await $send->({ type => 'http.response.body', body => $self->greeting, more => 0 });
+        async sub call ($self, $scope, $receive, $send) {
+            await $send->({ type => 'http.response.start', status => 200,
+                            headers => [['content-type', 'text/plain']] });
+            await $send->({ type => 'http.response.body', body => $self->greeting, more => 0 });
+        }
     }
 
-    # elsewhere
     my $app = MyApp->new(greeting => 'Hi')->to_app;   # a PAGI application
 
 =head1 INHERITANCE
