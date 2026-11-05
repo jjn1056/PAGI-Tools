@@ -1,6 +1,6 @@
 package PAGI::App;
 
-use strict;
+use v5.24;
 use warnings;
 use Carp ();
 use Class::Tiny;

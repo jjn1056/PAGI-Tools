@@ -1,4 +1,4 @@
-use strict;
+use v5.24;
 use warnings;
 use Test2::V0;
 use FindBin qw($Bin);
