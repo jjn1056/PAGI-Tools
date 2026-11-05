@@ -1,75 +1,12 @@
-# PAGI-Tools dependencies
+# PAGI-Tools dependencies. On the rebuild branch each one returns with the
+# code that needs it.
 # Install with: cpanm --installdeps .
 
 requires 'perl', '5.024';  # see "Perl version support" in PAGI
 
-# body_stream's decoding relies on Encode's stateful decoder behaving
-# alike from 3.00 on (earlier releases differ on UTF-16 and strict).
-requires 'Encode', '3.00';
+# PAGI::App: the constructor, accessors with defaults, BUILD
+requires 'Class::Tiny', '1.008';
 
-# Async primitives (apps and middleware are written against Futures;
-# no event loop dependency — the server owns the loop)
-requires 'Future', '0.54';
-requires 'Future::AsyncAwait', '0.66';
-
-# Loop-agnostic async I/O (PAGI::SSE->every, timers in apps)
-recommends 'Future::IO', '0.23';
-
-# Body/header processing
-requires 'JSON::MaybeXS', '1.004003';
-requires 'Hash::MultiValue', '0.16';
-requires 'HTTP::MultiPartParser', '0.02';
-
-# Response compression (PAGI::Middleware::GZip). Ships with core Perl; declared
-# so the dependency is explicit.
-requires 'IO::Compress::Gzip';
-
-# Date parsing for PAGI::Middleware::ConditionalGet
-requires 'HTTP::Date', '6.06';
-
-# Fast JSON (optional)
-recommends 'Cpanel::JSON::XS', '4.19';
-
-# PAGI::Utils::Random's source of secure random bytes
-requires 'Crypt::URandom', '0.36';
-
-# Names the anonymous subs PAGI-Tools modules export. Ships with core Perl
-# (Scalar-List-Utils 1.41, perl 5.22); declared so the dependency is explicit.
-requires 'Sub::Util', '1.41';
-
-# Removes each class's imported functions, so its objects never answer one as a method
-requires 'namespace::autoclean', '0.31';
-
-# Testing
 on 'test' => sub {
     requires 'Test2::V0', '0.000159';
-    requires 'Moose', '2.2200';
-    # t/endpoint/15-endpoint.t and examples/endpoint-lifecycle use Moo
-    requires 'Moo';
-    requires 'Type::Tiny';
-    # In-process tests drive apps under a real event loop
-    requires 'IO::Async', '0.805';
-    # examples/upload-streaming parses CSV with it (pure Perl via Text::CSV_PP)
-    requires 'Text::CSV', '2.00';
-    # tutorial.t exercises Future::IO patterns (self-skips when absent,
-    # but CI should run it)
-    requires 'Future::IO', '0.23';
-    requires 'Time::HiRes', '1.9764';
-    # t/stringify-overloaded.t checks real objects that overload "";
-    # examples/modify-form-post encodes a form with it
-    requires 'URI';
-    # examples/modify-form-post and auth-cookie-login escape HTML with it
-    requires 'HTML::Escape';
-    requires 'Path::Tiny';
-};
-
-# Development
-on 'develop' => sub {
-    requires 'Dist::Zilla', '6.030';
-    requires 'Dist::Zilla::Plugin::MetaJSON';
-    requires 'Dist::Zilla::Plugin::MetaResources';
-    requires 'Dist::Zilla::Plugin::MetaNoIndex';
-    requires 'Dist::Zilla::Plugin::Prereqs::FromCPANfile';
-    requires 'Dist::Zilla::Plugin::PkgVersion';
-    requires 'Dist::Zilla::Plugin::ReadmeAnyFromPod';
 };
