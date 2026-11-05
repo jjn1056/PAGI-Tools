@@ -21,6 +21,8 @@ sub to_app {
 
 __END__
 
+=encoding UTF-8
+
 =head1 NAME
 
 PAGI::App - The base class for a PAGI application object
@@ -118,6 +120,76 @@ calls it when handed the object: a server (C<pagi-server --app>, which asks
 once, as the specification says), or a router or mount it is passed to. It is
 mostly useful in tests, or to hand the application to something that takes
 only a code reference.
+
+=head1 COOKBOOK
+
+=head2 Settings from the environment
+
+A default can be a code reference, run the first time the attribute is read,
+so a setting can come from C<%ENV> while C<new> needs no arguments:
+
+    package Greeter {
+        use v5.40;
+        use parent 'PAGI::App';
+        use Class::Tiny { greeting => sub { $ENV{GREETING} // 'Hello' } };
+        use Future::AsyncAwait;
+
+        async sub call ($self, $scope, $receive, $send) {
+            await $send->({ type => 'http.response.start', status => 200,
+                            headers => [['content-type', 'text/plain']] });
+            await $send->({ type => 'http.response.body', body => $self->greeting, more => 0 });
+        }
+    }
+
+    Greeter->new;                        # "Hello", or whatever GREETING says
+    Greeter->new(greeting => 'Howdy');   # an argument still wins
+
+=head2 HTTP only
+
+A server calls the application with a C<lifespan> scope as well as C<http>.
+An application that has no startup or shutdown to do declines lifespan by
+returning; the server carries on without it:
+
+    package Ping {
+        use v5.40;
+        use parent 'PAGI::App';
+        use Future::AsyncAwait;
+
+        async sub call ($self, $scope, $receive, $send) {
+            return unless $scope->{type} eq 'http';
+            await $send->({ type => 'http.response.start', status => 200,
+                            headers => [['content-type', 'text/plain']] });
+            await $send->({ type => 'http.response.body', body => 'pong', more => 0 });
+        }
+    }
+
+=head2 Unicode in and out
+
+The scope's C<path> is characters: the server percent-decodes it and then
+decodes the UTF-8, so a request for C</caf%C3%A9> has the path C</café>.
+(C<raw_path> keeps the bytes the client sent.) A response body must be
+bytes, so text is encoded before it is sent, and the Content-Type says which
+encoding. C<use utf8> is what makes the non-ASCII characters written in the
+source code characters too:
+
+    package Hello {
+        use v5.40;
+        use utf8;
+        use parent 'PAGI::App';
+        use Encode ();
+        use Future::AsyncAwait;
+
+        async sub call ($self, $scope, $receive, $send) {
+            return unless $scope->{type} eq 'http';
+            my $name = substr($scope->{path}, 1) || 'world';    # "/café" is "café"
+            my $body = Encode::encode('UTF-8', "Grüß dich, $name ☺\n");
+            await $send->({ type => 'http.response.start', status => 200,
+                            headers => [['content-type', 'text/plain; charset=utf-8']] });
+            await $send->({ type => 'http.response.body', body => $body, more => 0 });
+        }
+    }
+
+A request for C</caf%C3%A9> gets the UTF-8 bytes of C<Grüß dich, café ☺>.
 
 =head1 SEE ALSO
 
