@@ -44,7 +44,8 @@ Unicode rules to bytes 128-255 in a string that is not marked as UTF-8:
 
 - `\s` matches the bytes `\x85` and `\xA0`;
 - `\w` matches bytes such as `\xC3`;
-- `lc`, `uc` and `/i` treat `\xC0`-`\xFF` as Latin-1 letters.
+- `lc`, `uc` and `/i` treat `\xC0`-`\xFF` as Latin-1 letters, and `/i` even
+  lets the single byte `\xDF` (ß) match the ASCII pattern `ss`.
 
 So a regex that was right on bytes can silently corrupt them. "à" is the two
 bytes `\xC3\xA0` in UTF-8, and `s/\s+$//` strips the `\xA0`, cutting the
@@ -54,8 +55,11 @@ The rule: in code that handles bytes, write the regex for what it means.
 
 - HTTP whitespace is space and tab: write `[ \t]`, not `\s`.
 - A token or a name is ASCII: write `[A-Za-z0-9_]` (or use `/a`), not `\w`.
-- A case-insensitive match on header names or other ASCII: use `/ia`, or
-  `lc` only on values known to be ASCII.
+- A case-insensitive match against an ASCII pattern, such as a header name:
+  use `/iaa`. Plain `/i`, and even `/ia`, let `\xDF` match `ss`; the doubled
+  `a` never lets a non-ASCII byte match an ASCII character.
+- To lowercase bytes, use `tr/A-Z/a-z/`, which changes ASCII letters only;
+  `lc` also changes `\xC0`-`\xDE`.
 
 Don't turn the feature off with `no feature 'unicode_strings'`: fix the regex.
 Every module that takes or returns bytes adds cases to `t/bytes.t`, which
