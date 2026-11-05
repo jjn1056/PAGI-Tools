@@ -40,7 +40,7 @@ PAGI::App - The base class for a PAGI application object
         }
     }
 
-    my $app = MyApp->new(greeting => 'Hi')->to_app;   # a PAGI application
+    MyApp->new(greeting => 'Hi');   # an application: a server calls its to_app
 
 =head1 INHERITANCE
 
@@ -112,6 +112,12 @@ C<to_app>.
 
 Returns the PAGI application: a code reference that calls
 C<< $app->call($scope, $receive, $send) >>.
+
+You rarely call this yourself. Whatever runs or composes the application
+calls it when handed the object: a server (C<pagi-server --app>, which asks
+once, as the specification says), or a router or mount it is passed to. It is
+mostly useful in tests, or to hand the application to something that takes
+only a code reference.
 
 =head1 SEE ALSO
 
