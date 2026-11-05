@@ -28,14 +28,12 @@ PAGI::App - The base class for a PAGI application object
 =head1 SYNOPSIS
 
     package MyApp;
-    use strict;
-    use warnings;
+    use v5.40;
     use parent 'PAGI::App';
     use Class::Tiny { greeting => 'Hello' };
     use Future::AsyncAwait;
 
-    async sub call {
-        my ($self, $scope, $receive, $send) = @_;
+    async sub call ($self, $scope, $receive, $send) {
         await $send->({ type => 'http.response.start', status => 200,
                         headers => [['content-type', 'text/plain']] });
         await $send->({ type => 'http.response.body', body => $self->greeting, more => 0 });
@@ -103,7 +101,7 @@ C<BUILDARGS> reshapes the arguments and C<BUILD> validates, parent first.
 
 =head2 call
 
-    async sub call { my ($self, $scope, $receive, $send) = @_; ... }
+    async sub call ($self, $scope, $receive, $send) { ... }
 
 The application. The default croaks: a subclass must write it, or override
 C<to_app>.
