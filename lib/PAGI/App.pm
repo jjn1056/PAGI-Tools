@@ -36,6 +36,7 @@ PAGI::App - The base class for a PAGI application object
         use Future::AsyncAwait;
 
         async sub call ($self, $scope, $receive, $send) {
+            die "Unsupported scope type: $scope->{type}\n" unless $scope->{type} eq 'http';
             await $send->({ type => 'http.response.start', status => 200,
                             headers => [['content-type', 'text/plain']] });
             await $send->({ type => 'http.response.body', body => $self->greeting, more => 0 });
@@ -135,6 +136,7 @@ so a setting can come from C<%ENV> while C<new> needs no arguments:
         use Future::AsyncAwait;
 
         async sub call ($self, $scope, $receive, $send) {
+            die "Unsupported scope type: $scope->{type}\n" unless $scope->{type} eq 'http';
             await $send->({ type => 'http.response.start', status => 200,
                             headers => [['content-type', 'text/plain']] });
             await $send->({ type => 'http.response.body', body => $self->greeting, more => 0 });
@@ -146,9 +148,11 @@ so a setting can come from C<%ENV> while C<new> needs no arguments:
 
 =head2 HTTP only
 
-A server calls the application with a C<lifespan> scope as well as C<http>.
-An application that has no startup or shutdown to do declines lifespan by
-returning; the server carries on without it:
+A server calls the application with a C<lifespan> scope as well as C<http>,
+and may send C<websocket> or C<sse> scopes too. An application that handles
+only HTTP says so with one line. Raising declines lifespan, which the
+specification treats exactly as a clean return, so the server carries on
+without it; any other scope is refused loudly, with the message saying why:
 
     package Ping {
         use v5.40;
@@ -156,7 +160,7 @@ returning; the server carries on without it:
         use Future::AsyncAwait;
 
         async sub call ($self, $scope, $receive, $send) {
-            return unless $scope->{type} eq 'http';
+            die "Unsupported scope type: $scope->{type}\n" unless $scope->{type} eq 'http';
             await $send->({ type => 'http.response.start', status => 200,
                             headers => [['content-type', 'text/plain']] });
             await $send->({ type => 'http.response.body', body => 'pong', more => 0 });
@@ -180,7 +184,7 @@ source code characters too:
         use Future::AsyncAwait;
 
         async sub call ($self, $scope, $receive, $send) {
-            return unless $scope->{type} eq 'http';
+            die "Unsupported scope type: $scope->{type}\n" unless $scope->{type} eq 'http';
             my $name = substr($scope->{path}, 1) || 'world';    # "/café" is "café"
             my $body = Encode::encode('UTF-8', "Grüß dich, $name ☺\n");
             await $send->({ type => 'http.response.start', status => 200,
