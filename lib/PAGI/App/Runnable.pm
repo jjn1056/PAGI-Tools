@@ -116,7 +116,7 @@ come from somewhere C<new> can reach on its own, such as C<%ENV> or a
 configuration file, read by your attributes' defaults (see
 L</Settings from a configuration file>). A setting it can't run without is
 checked in C<BUILD>, so the server refuses to start without it (see
-L</A setting the application must have>).
+L</Testing it: set the environment before use>).
 
 If building your application takes more than that, serve it from a launcher
 instead (see L</A launcher, for construction that needs more>).
@@ -166,37 +166,28 @@ and each setting's default looks in C<%ENV>, then the file, then falls back:
 A test that passes C<< dsn => 'test' >> gets C<test>, and the file isn't read
 for it.
 
-=head2 A setting the application must have
+=head2 Testing it: set the environment before use
 
-C<dsn> has no default, so C<BUILD> refuses to build the application without
-it. Loading the module builds it, so the server refuses to start. The module
-file, F<lib/MyApp.pm>:
+Loading the module builds the application, so whatever C<new> reads from the
+environment has to be in place before the module loads, in a test as much as
+in a server. Here's an application that won't build without a database:
 
     package MyApp;
     use v5.40;
     use parent 'PAGI::App::Runnable';
     use Class::Tiny { dsn => sub { $ENV{MYAPP_DSN} } };
-    use Future::AsyncAwait;
 
     sub BUILD ($self, $args) {
         die "MyApp needs a database: set MYAPP_DSN\n" unless defined $self->dsn;
     }
 
-    async sub call ($self, $scope, $receive, $send) {
-        die "Unsupported scope type: $scope->{type}\n" unless $scope->{type} eq 'http';
-        await $send->({ type => 'http.response.start', status => 200,
-                        headers => [['content-type', 'text/plain']] });
-        await $send->({ type => 'http.response.body', body => 'connected to ' . $self->dsn, more => 0 });
-    }
+    ...
 
     __PACKAGE__->run_if_script;
 
-Without C<MYAPP_DSN>, C<pagi-server -Ilib --app lib/MyApp.pm> stops with
-"Error loading .../lib/MyApp.pm: MyApp needs a database: set MYAPP_DSN". End
-the message with a newline, or Perl adds the file and line to it.
-
-A test loads the module too, so it sets the setting first, in a C<BEGIN>
-block, before the C<use>:
+A test sets C<MYAPP_DSN> in a C<BEGIN> block, before the C<use>. C<use> runs
+at compile time, so a plain assignment on the line above it would come too
+late:
 
     use v5.40;
     use Test2::V0;
