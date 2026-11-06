@@ -9,4 +9,6 @@ requires 'Class::Tiny', '1.008';
 
 on 'test' => sub {
     requires 'Test2::V0', '0.000159';
+    # Fixtures that must be real module files live in t/lib
+    requires 'Test::Lib', '0.003';
 };
