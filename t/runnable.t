@@ -39,16 +39,8 @@ subtest 'a later use of the module does not compile it again' => sub {
 
 subtest 'run as the program, it says how to serve it' => sub {
     my ($status, $stdout, $stderr) = run_file('TestApps/Greeter.pm');
-    is($status, 2, 'exit status 2');
-    like($stderr, qr/is a PAGI application; serve it with:\n  pagi-server -Ilib --app /, 'usage on STDERR');
-};
-
-subtest 'a root application can give run commands of its own' => sub {
-    my ($status, $stdout) = run_file('TestApps/Commands.pm', 'hello');
-    is([$status, $stdout], [0, "hello from run\n"], 'its own command, and its exit status');
-    my ($fallback, undef, $stderr) = run_file('TestApps/Commands.pm');
-    is($fallback, 2, 'anything else falls through to SUPER::run');
-    like($stderr, qr/serve it with/, 'with the usage');
+    isnt($status, 0, 'a non-zero exit');
+    like($stderr, qr/is a PAGI application; serve it with:\n  pagi-server -Ilib --app /, 'how to serve it, on STDERR');
 };
 
 subtest 'a setting checked in BUILD: the server refuses to load without it' => sub {
@@ -71,11 +63,10 @@ subtest 'without it, use stops too' => sub {
     like($stderr, qr/\ATestApps::Validated needs a database: set VALIDATED_DSN\n/, 'the BUILD message');
 };
 
-subtest 'run as the program without it, it gives the BUILD message' => sub {
+subtest 'run as the program, it builds nothing' => sub {
     local $ENV{VALIDATED_DSN}; delete $ENV{VALIDATED_DSN};
     my ($status, $stdout, $stderr) = run_file('TestApps/Validated.pm');
-    isnt($status, 0, 'a non-zero exit');
-    like($stderr, qr/\ATestApps::Validated needs a database/, 'not the usage text');
+    like($stderr, qr/\A\S+Validated\.pm is a PAGI application; serve it with:/, 'the hint, not the BUILD message');
 };
 
 done_testing;

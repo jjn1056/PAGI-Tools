@@ -5,7 +5,7 @@ use warnings;
 use parent 'PAGI::App';
 
 # The module's last line, in place of 1;. Loaded (pagi-server --app, require,
-# use): the application. Run as the program: run, whose result is the exit status.
+# use): the application. Run as the program: how to serve it.
 sub run_if_script {
     my ($class) = @_;
     # A server loads this file by its path (do lib/MyApp.pm), which Perl doesn't
@@ -16,14 +16,7 @@ sub run_if_script {
     (my $key = "$class.pm") =~ s{::}{/}g;
     $INC{$key} //= (caller(0))[1];
     return $class->new if caller(1);
-    exit $class->new->run(@ARGV);
-}
-
-# What running the module does. A placeholder until the command line exists.
-sub run {
-    my ($self, @args) = @_;
-    print STDERR "$0 is a PAGI application; serve it with:\n  pagi-server -Ilib --app $0\n";
-    return 2;
+    die "$0 is a PAGI application; serve it with:\n  pagi-server -Ilib --app $0\n";
 }
 
 1;
@@ -87,7 +80,8 @@ the PAGI application instead of C<1>. That's because whatever loads it is usuall
 server, and C<pagi-server --app lib/MyApp.pm> needs a PAGI application back
 from the file. So one module does both jobs: it's the class your PAGI application is
 made of, and it's the file you point the server at. There's no separate
-F<app.pl> to keep in step with it.
+F<app.pl> to keep in step with it. Run it with Perl, and it tells you how to
+serve it.
 
 This is meant for small things: our examples and demos, and PAGI
 applications whose settings come from the environment, a configuration file or
@@ -126,22 +120,13 @@ instead (see L</A launcher, for construction that needs more>).
 Put it on the module's last line, in place of C<1;>. When something loads the
 module (a server's C<--app>, C<require> or C<use>), it returns
 C<< $class->new >>, your PAGI application. When you run the file with Perl
-(C<perl lib/MyApp.pm ...>), it calls C<< $class->new->run(@ARGV) >> and exits
-with whatever C<run> returns.
+(C<perl lib/MyApp.pm>), it builds nothing and dies with how to serve it.
 
 It also records the module in C<%INC> under its module name. A server loads the
 file by its path, and Perl records that under the path, not under
 F<MyApp.pm>, so without this a later C<use MyApp> in the same process would
 compile the whole file again. L<Web::Simple> does the same thing in its
 C<import>.
-
-=head2 run
-
-    my $status = $app->run(@args);
-
-What running the module as a program does, returning its exit status. For
-now it prints how to serve the file and returns C<2>. Override it to give the
-module commands of its own, and call C<SUPER::run> for anything else.
 
 =head1 COOKBOOK
 
@@ -230,28 +215,6 @@ plain L<PAGI::App>, built like any other object, and doesn't need this class:
 
 The file's last value is what the server gets. C<-Ilib> goes on the command
 line, not in the file.
-
-=head2 A command of its own
-
-C<run> is what C<perl lib/MyApp.pm> does. Override it, and pass anything else
-on to C<SUPER::run>:
-
-    package MyApp {
-        use v5.40;
-        use parent 'PAGI::App::Runnable';
-
-        sub run ($self, @args) {
-            if (($args[0] // '') eq 'version') {
-                say 'MyApp 1.0';
-                return 0;
-            }
-            return $self->SUPER::run(@args);
-        }
-
-        __PACKAGE__->run_if_script;
-    }
-
-    # perl lib/MyApp.pm version    prints "MyApp 1.0", exits 0
 
 =head1 SEE ALSO
 
