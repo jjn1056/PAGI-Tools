@@ -39,15 +39,26 @@ PAGI::App - The base class for a PAGI application object
         use parent 'PAGI::App';
         use Future::AsyncAwait;
 
+        sub message ($self) { 'Hello, world' }
+
         async sub call ($self, $scope, $receive, $send) {
-            die "Unsupported scope type: $scope->{type}\n" unless $scope->{type} eq 'http';
-            await $send->({ type => 'http.response.start', status => 200,
-                            headers => [['content-type', 'text/plain']] });
-            await $send->({ type => 'http.response.body', body => 'Hello, world', more => 0 });
+            die "Unsupported scope type: $scope->{type}\n"
+                unless $scope->{type} eq 'http';
+
+            await $send->({
+                type    => 'http.response.start',
+                status  => 200,
+                headers => [['content-type', 'text/plain']],
+            });
+            await $send->({
+                type => 'http.response.body',
+                body => $self->message,
+                more => 0,
+            });
         }
     }
 
-    MyApp->new;   # an application provider: a server calls its to_app
+    my $pagi_app = MyApp->new;   # an application provider: a server calls its to_app
 
 =head1 INHERITANCE
 
