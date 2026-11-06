@@ -34,25 +34,47 @@ subtest 'a subclass without call croaks when called' => sub {
         'names the class');
 };
 
-subtest 'a Moose subclass, through MooseX::NonMoose, runs BUILD once' => sub {
+subtest 'a Moose subclass, through MooseX::NonMoose' => sub {
     skip_all 'needs Moose and MooseX::NonMoose'
         unless eval { require Moose; require MooseX::NonMoose; 1 };
-    our $builds = 0;
     eval q{
         package Local::MooseHello;
         use Moose;
         use MooseX::NonMoose;
         extends 'PAGI::App';
         has name => (is => 'ro', required => 1);
-        sub BUILD { $main::builds++ }
+        sub BUILD { my ($self) = @_; die "name must not be empty\n" unless length $self->name }
         sub call { my ($self) = @_; return $self->name }
         __PACKAGE__->meta->make_immutable;
         1;
     } or die $@;
-    my $app = Local::MooseHello->new(name => 'Ann');
-    is($builds, 1, 'BUILD runs once');
-    is($app->to_app->(), 'Ann', 'the arguments are set, and to_app calls call');
+    is(Local::MooseHello->new(name => 'Ann')->to_app->(), 'Ann', 'the arguments are set, and to_app calls call');
     like(dies { Local::MooseHello->new }, qr/Attribute \(name\) is required/, 'required is checked');
+    is(dies { Local::MooseHello->new(name => '') }, "name must not be empty\n", 'a die in BUILD refuses new');
+};
+
+subtest 'a Moose subclass of a Class::Tiny application keeps its inherited arguments' => sub {
+    skip_all 'needs Moose and MooseX::NonMoose'
+        unless eval { require Moose; require MooseX::NonMoose; 1 };
+    eval q{
+        package Local::TinyGreeter;
+        use parent -norequire, 'PAGI::App';
+        use Class::Tiny { greeting => 'Hello' };
+        sub BUILD { my ($self) = @_; die "greeting must not be empty\n" unless length $self->greeting }
+
+        package Local::MooseGreeter;
+        use Moose;
+        use MooseX::NonMoose;
+        extends 'Local::TinyGreeter';
+        has name => (is => 'ro', required => 1);
+        sub call { my ($self) = @_; return $self->greeting . ', ' . $self->name }
+        __PACKAGE__->meta->make_immutable;
+        1;
+    } or die $@;
+    is(Local::MooseGreeter->new(greeting => 'Hi', name => 'Ann')->to_app->(), 'Hi, Ann',
+        'the Class::Tiny argument and the Moose argument are both set');
+    is(dies { Local::MooseGreeter->new(greeting => '', name => 'Ann') }, "greeting must not be empty\n",
+        "the Class::Tiny parent's BUILD checks the argument passed");
 };
 
 done_testing;

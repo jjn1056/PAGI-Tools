@@ -17,10 +17,14 @@ sub to_app {
     return sub { $self->call(@_) };
 }
 
-# A Moose subclass built through MooseX::NonMoose calls this for the arguments
-# to pass to this class's new. Moose sets the attributes and runs BUILD itself,
-# so Class::Tiny's new is told to skip BUILD (the same flag Moo sends it).
-sub FOREIGNBUILDARGS { return (__no_BUILD__ => 1) }
+# MooseX::NonMoose calls this for the arguments to give this class's new: the
+# arguments as passed, so inherited Class::Tiny attributes are set, plus the flag
+# that leaves BUILD to Moose, which runs it once its own attributes are set. Moo
+# hands Class::Tiny the same pair itself.
+sub FOREIGNBUILDARGS {
+    my ($class, @args) = @_;
+    return (@args, __no_BUILD__ => 1);
+}
 
 1;
 
@@ -147,6 +151,13 @@ once, as the specification says), or a router or mount it is passed to. It is
 mostly useful in tests, or to hand the application to something that takes
 only a code reference.
 
+=head2 FOREIGNBUILDARGS
+
+For L<Moose> subclasses built with L<MooseX::NonMoose>, which calls it: it
+passes the arguments on to this class's C<new> and leaves C<BUILD> to Moose, so
+C<BUILD> runs once, after every attribute is set. You don't call it, and a
+Moose subclass doesn't need one of its own. See L</With other object systems>.
+
 =head1 COOKBOOK
 
 =head2 Settings from the environment
@@ -269,7 +280,8 @@ Use L<MooseX::NonMoose>, as with any parent that isn't a Moose class:
     }
 
 Without it, Moose leaves construction to the parent's C<new>, and your
-attributes are never set.
+attributes are never set. With it, C<BUILD> runs once, after every attribute
+is set (see L</FOREIGNBUILDARGS>).
 
 =item L<Object::Pad>
 
