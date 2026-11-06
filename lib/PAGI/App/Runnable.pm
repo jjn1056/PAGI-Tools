@@ -105,45 +105,17 @@ as any L<PAGI::App> does.
 
 =head1 CONSTRUCTOR ARGUMENTS
 
-Loaded, C<run_if_script> calls C<new> with B<no arguments>, and so does running
-the module as a program. So C<new> must succeed with no arguments, given the
-environment the application runs in, and each attribute gets its value from a
-default. A default may be a code reference,
-run the first time the attribute is read, so it can read C<%ENV> or a
-configuration file. Settings then resolve in this order:
+A server loads the module, and C<run_if_script> builds the application with
+C<new> and no arguments: there's no way to pass constructor arguments from the
+server's command line. So if your application takes arguments, they have to
+come from somewhere C<new> can reach on its own, such as C<%ENV> or a
+configuration file, read by your attributes' defaults (see
+L</Settings from a configuration file>). A setting it can't run without is
+checked in C<BUILD>, so the server refuses to start without it (see
+L</A setting the application must have>).
 
-=over 4
-
-=item 1. an argument given to C<new> (a test passes its own);
-
-=item 2. an environment variable;
-
-=item 3. a configuration file;
-
-=item 4. the default.
-
-=back
-
-L<Moo> and L<Moose> classes do the same with C<lazy> attributes and a
-C<default>, rather than C<required>.
-
-Loading the module builds the application with C<new> and no arguments, so a
-setting the application can't run without is checked in C<BUILD>, and
-whatever C<BUILD> needs must be in place before the module is loaded: the
-server refuses to start without it, and a test sets it before C<use MyApp>.
-In a test that means a C<BEGIN> block, because C<use> runs at compile time, so
-the environment has to be set at compile time too. (Or set it with
-C<local $ENV{...}> and C<require MyApp> at run time.) See
-L</A setting the application must have>.
-
-Opening connections is different: don't do it in C<BUILD>, which runs every
-time the module is loaded, a test's C<use> included. Open them the first time
-they're needed, from an attribute's default.
-
-An application whose construction needs more than defaults can give, such as
-several objects built from one configuration, is better served from a
-launcher than from C<run_if_script>: see
-L</A launcher, for construction that needs more>.
+If building your application takes more than that, serve it from a launcher
+instead (see L</A launcher, for construction that needs more>).
 
 =head1 METHODS
 
