@@ -68,6 +68,12 @@ PAGI::App - The base class for a PAGI application object
 C<PAGI::App> is a L<Class::Tiny> class: its constructor, C<new>, comes from
 C<Class::Tiny::Object>.
 
+=head1 DESCRIPTION
+
+An application object: a class whose instances are PAGI applications. A
+subclass writes C<call>, the application, or overrides C<to_app> to return a
+whole application of its own.
+
 =head1 RATIONALE
 
 PAGI is Perl's version of Python's ASGI: the PAGI specification was modelled
@@ -104,15 +110,9 @@ default can be a code reference run on first use, which is how an
 application takes its settings from C<%ENV> or a configuration file without a
 constructor argument.
 
-=head1 DESCRIPTION
-
-An application object: a class whose instances are PAGI applications. A
-subclass writes C<call>, the application, or overrides C<to_app> to return a
-whole application of its own.
-
-The base is optional. Anything with a C<to_app> that returns a PAGI
-application is an application provider, whatever its class; nothing checks for this
-one.
+L<Class::Tiny> is widely compatible with most of the popular object frameworks
+on CPAN, so your subclasses of this will straightforwardly 'just work'.  See
+the cookbook section below for examples.
 
 =head1 METHODS
 
@@ -146,13 +146,6 @@ calls it when handed the object: a server (C<pagi-server --app>, which asks
 once, as the specification says), or a router or mount it is passed to. It is
 mostly useful in tests, or to hand the application to something that takes
 only a code reference.
-
-=head2 FOREIGNBUILDARGS
-
-For L<Moose> subclasses built with L<MooseX::NonMoose>: it hands this class's
-C<new> nothing but the instruction to leave C<BUILD> to Moose, so C<BUILD> runs
-once. You don't call it, and a Moose subclass doesn't need one of its own. See
-L</With other object systems>.
 
 =head1 COOKBOOK
 
@@ -312,35 +305,6 @@ source code characters too:
     }
 
 A request for C</caf%C3%A9> gets the UTF-8 bytes of C<Grüß dich, café ☺>.
-
-=head2 Serving it: Runnable for small things, a launcher for the rest
-
-A server loads a file and needs the application back. For an application
-whose settings come from the environment, a configuration file or defaults,
-the module can be that file: inherit
-L<PAGI::App::Runnable> and end the module with C<run_if_script> in place of
-C<1;>:
-
-    # lib/MyApp.pm -- serve with: pagi-server -Ilib --app lib/MyApp.pm
-    package MyApp;
-    use v5.40;
-    use parent 'PAGI::App::Runnable';
-    use Class::Tiny { greeting => sub { $ENV{GREETING} // 'Hello' } };
-    ...
-    __PACKAGE__->run_if_script;
-
-When building the application takes more than defaults, such as reading a
-configuration and building several objects from it, keep the module a plain
-C<PAGI::App> and write a small launcher whose last value is the application:
-
-    # launch.pl -- serve with: pagi-server -Ilib --app launch.pl
-    use v5.40;
-    use MyApp;
-    my $config = load_config($ENV{MYAPP_CONFIG} // 'myapp.json');
-    MyApp->new(dsn => $config->{dsn}, greeting => $config->{greeting});
-
-L<PAGI::App::Runnable/CONSTRUCTOR ARGUMENTS> says what an application served
-from its own module can and can't take.
 
 =head1 SEE ALSO
 
