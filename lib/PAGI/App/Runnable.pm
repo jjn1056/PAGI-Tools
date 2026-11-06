@@ -200,22 +200,70 @@ late:
 
 =head2 A launcher, for construction that needs more
 
-When building the application takes more than defaults, write a small file
-that builds it, and serve that file instead. The application itself is then a
-plain L<PAGI::App>, built like any other object, and doesn't need this class:
+When your application needs real constructor arguments, keep it a plain
+L<PAGI::App> that takes them, and serve it from a launcher: a small module
+that reads the configuration and builds the application. The application
+stays an ordinary class, built with arguments, which is also how a test builds
+it.
 
-    # launch.pl -- serve with: pagi-server -Ilib --app launch.pl
+The application, F<lib/MyApp.pm>, needs a database and a secret:
+
+    package MyApp;
+    use v5.40;
+    use parent 'PAGI::App';
+    use Class::Tiny qw(dsn secret);
+    use Future::AsyncAwait;
+
+    sub BUILD ($self, $args) {
+        for my $name (qw(dsn secret)) {
+            die "MyApp needs $name\n" unless defined $self->$name;
+        }
+    }
+
+    async sub call ($self, $scope, $receive, $send) {
+        die "Unsupported scope type: $scope->{type}\n"
+            unless $scope->{type} eq 'http';
+
+        await $send->({
+            type    => 'http.response.start',
+            status  => 200,
+            headers => [['content-type', 'text/plain']],
+        });
+        await $send->({
+            type => 'http.response.body',
+            body => 'connected to ' . $self->dsn,
+            more => 0,
+        });
+    }
+
+    1;
+
+The launcher, F<lib/MyApp/Launcher.pm>, is the module you point the server at.
+It's the plain modulino line: loaded by the server, its last value is the
+application it builds; run with Perl, it says how to serve it:
+
+    package MyApp::Launcher;
     use v5.40;
     use JSON::PP ();
     use MyApp;
 
-    my $file   = $ENV{MYAPP_CONFIG} // 'myapp.json';
-    my $config = do { open my $fh, '<', $file or die "Can't read $file: $!\n";
-                      JSON::PP::decode_json(do { local $/; <$fh> }) };
-    MyApp->new(dsn => $config->{dsn}, greeting => $config->{greeting});
+    sub app {
+        my $file = $ENV{MYAPP_CONFIG} // 'myapp.json';
+        open my $fh, '<', $file or die "Can't read $file: $!\n";
+        my $config = JSON::PP::decode_json(do { local $/; <$fh> });
 
-The file's last value is what the server gets. C<-Ilib> goes on the command
-line, not in the file.
+        return MyApp->new(dsn => $config->{dsn}, secret => $config->{secret});
+    }
+
+    caller ? app() : die "Serve it with: pagi-server -Ilib --app $0\n";
+
+With F<myapp.json> holding C<{"dsn": "dbi:SQLite:app.db", "secret": "s3kr1t"}>:
+
+    pagi-server -Ilib --app lib/MyApp/Launcher.pm
+
+A test leaves the launcher out and builds the application itself:
+
+    my $app = MyApp->new(dsn => 'dbi:SQLite:dbname=:memory:', secret => 'test');
 
 =head1 SEE ALSO
 
