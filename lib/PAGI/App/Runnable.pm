@@ -36,14 +36,24 @@ A module file, F<lib/MyApp.pm>:
     package MyApp;
     use v5.40;
     use parent 'PAGI::App::Runnable';
-    use Class::Tiny { greeting => sub { $ENV{GREETING} // 'Hello' } };
     use Future::AsyncAwait;
 
+    sub message ($self) { 'Hello, world' }
+
     async sub call ($self, $scope, $receive, $send) {
-        die "Unsupported scope type: $scope->{type}\n" unless $scope->{type} eq 'http';
-        await $send->({ type => 'http.response.start', status => 200,
-                        headers => [['content-type', 'text/plain']] });
-        await $send->({ type => 'http.response.body', body => $self->greeting, more => 0 });
+        die "Unsupported scope type: $scope->{type}\n"
+            unless $scope->{type} eq 'http';
+
+        await $send->({
+            type    => 'http.response.start',
+            status  => 200,
+            headers => [['content-type', 'text/plain']],
+        });
+        await $send->({
+            type => 'http.response.body',
+            body => $self->message,
+            more => 0,
+        });
     }
 
     __PACKAGE__->run_if_script;    # in place of 1;
