@@ -2,7 +2,6 @@ use v5.24;
 use warnings;
 use Test2::V0;
 use FindBin qw($Bin);
-use lib "$Bin/../lib";
 use Test::Lib;
 use IPC::Open3 qw(open3);
 use Symbol qw(gensym);
