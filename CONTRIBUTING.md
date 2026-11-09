@@ -62,8 +62,8 @@ The rule: in code that handles bytes, write the regex for what it means.
   `lc` also changes `\xC0`-`\xDE`.
 
 Don't turn the feature off with `no feature 'unicode_strings'`: fix the regex.
-Every module that takes or returns bytes adds cases to `t/bytes.t`, which
-sends `\x85`, `\xA0`, `\xC3\xA0` and `\xC9` through its public methods and
+Every module that takes or returns bytes tests them in its own test file:
+it sends `\x85`, `\xA0`, `\xC3\xA0` and `\xC9` through its public methods and
 checks they come out unchanged.
 
 ## Running Tests

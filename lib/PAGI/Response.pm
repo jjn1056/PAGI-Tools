@@ -4,13 +4,12 @@ use v5.24;
 use warnings;
 use parent 'PAGI::App';
 use Carp ();
-use Future;
 use Future::AsyncAwait;
 use Class::Tiny qw(body), {
     status       => 200,
     headers      => sub { [] },
-    trailers     => 0,
     content_type => sub { $_[0]->default_content_type },
+    trailers     => 0,
 };
 
 # One positional first argument is the content.
@@ -20,204 +19,63 @@ sub BUILDARGS {
     return {@args};
 }
 
+# Everything is worked out once, here: the body, then the headers the start
+# sends. Serving the response sends them as they are.
 sub BUILD {
     my ($self, $args) = @_;
-    # Rendered once, here, so a bad value fails on the line that built the
-    # response; only the bytes are kept. What render returns is checked
-    # whatever class wrote it. Undefined content is no content.
-    my $body = '';
-    # Whether there is content to know the length of: a class that sends a
-    # body of its own gives none, so it never claims a length by accident.
-    $self->{_has_content} = defined $args->{content};
-    if (defined $args->{content}) {
-        $body = $self->render($args->{content});
-        Carp::croak(ref($self) . ' render returned undef') unless defined $body;
-        $self->_must_be_bytes($body);
-    }
-    $self->body($body);
-    # Copied, because cookies are added to it, and lowercased (Www.pod: names
-    # MUST be lowercase). Names are bytes: tr changes ASCII letters only.
-    $self->headers(_lowercase_names($self->headers));
-    # A content-length that promises a body this status can't have would leave
-    # an HTTP/1.1 client waiting for bytes that never come (RFC 9110 8.6). A
-    # 304 may still say the length the full response would have had.
-    my ($length) = map { $_->[1] } grep { $_->[0] eq 'content-length' } @{ $self->headers };
-    if (defined $length) {
-        my $status = $self->status;
-        # Over HTTP/1.1 trailers need chunked coding; the server fails the send.
-        Carp::croak("a response with trailers can't have a content-length: HTTP/1.1 sends trailers only in chunked coding")
-            if $self->trailers && !$self->no_content_status;
-        Carp::croak("a $status response has no body, so it can't have a content-length")
-            if $status < 200 || $status == 204;
-        Carp::croak("a 205 response has no body: its content-length must be 0, not $length")
-            if $status == 205 && $length ne '0';
-        # Content you gave has a known length: a header that disagrees would
-        # hang an HTTP/1.1 client or cut the body short. (A 304 may state the
-        # full length; with no content, the body and its promise are a
-        # subclass's own.)
-        Carp::croak("the content-length header says $length but the body is " . length($self->body) . ' bytes')
-            if !$self->no_content_status && $self->{_has_content} && $length ne length $self->body;
-    }
+    $self->body($self->render($args->{content}));
+    $self->headers($self->init_headers($self->headers));
 }
 
-
-# The content as bytes: here, bytes as given. A representation (Text, JSON)
-# overrides encode_chunk, and render is built on it, so a format already
-# means "encode what you pull".
+# The content as bytes. A Perl string doesn't say whether it's bytes, so we
+# refuse what can't be: a reference, or a character above 0xFF.
 sub render {
     my ($self, $content) = @_;
-    return $self->encode_chunk($content);
+    return '' unless defined $content;
+    Carp::croak(ref($self) . ' content must be bytes: encode it first, or use PAGI::Response::Text')
+        if ref $content || $content =~ /[^\x00-\xFF]/;
+    return $content;
 }
 
-sub encode_chunk {
-    my ($self, $chunk) = @_;
-    $self->_must_be_bytes($chunk);
-    return $chunk;
-}
-
-sub _must_be_bytes {
-    my ($self, $bytes) = @_;
-    Carp::croak(ref($self) . ' content must be a string, not a ' . ref($bytes) . ' reference') if ref $bytes;
-    Carp::croak(ref($self) . ' content must be bytes: it has a character above 0xFF; encode it first, or use PAGI::Response::Text')
-        if $bytes =~ /[^\x00-\xFF]/;
-}
-
-# The type and length of the buffered body: octet-stream for bytes with no
-# type given (RFC 9110 8.3), none for an empty body; the length of the
-# content given, or unknown when there was none, so the server frames it.
-# A class that knows the length of a body of its own (File) overrides it.
+# Bytes with no type given are sent as what RFC 9110 8.3 says a recipient
+# may assume anyway; an empty body has no type.
 sub default_content_type {
     my ($self) = @_;
-    return undef unless length $self->body;
-    return 'application/octet-stream';
+    return length($self->body // '') ? 'application/octet-stream' : undef;
 }
 
-sub content_length {
-    my ($self) = @_;
-    return $self->{_has_content} ? length $self->body : undef;
+# Your headers, lowercased (names are bytes: tr changes ASCII letters only),
+# then the body's length and the type unless you gave them. No length on a
+# status that has no body (RFC 9110), nor with trailers, which HTTP/1.1 sends
+# only in chunked coding.
+sub init_headers {
+    my ($self, $given) = @_;
+    my @headers = map { my $name = $_->[0]; $name =~ tr/A-Z/a-z/; [$name, $_->[1]] } @$given;
+    my %has = map { $_->[0] => 1 } @headers;
+    my $status = $self->status;
+    push @headers, ['content-length', length $self->body]
+        if defined $self->body && !$has{'content-length'} && !$self->trailers
+        && !($status < 200 || $status == 204 || $status == 304);
+    push @headers, ['content-type', $self->content_type]
+        if defined $self->content_type && !$has{'content-type'};
+    return \@headers;
 }
 
-# The body: the buffered one, as one event, then its trailers if declared.
-# Stream and File override this.
-async sub send_body {
+async sub call {
     my ($self, $scope, $receive, $send) = @_;
-    await $send->({ type => 'http.response.body', body => $self->body, more => 0 });
+    await $send->({
+        type    => 'http.response.start',
+        status  => $self->status,
+        headers => [map { [@$_] } @{ $self->headers }],   # a fresh list: a middleware may edit it
+        ($self->trailers ? (trailers => 1) : ()),
+    });
+    await $send->({ type => 'http.response.body', body => $self->body });
     await $send->({ type => 'http.response.trailers', headers => $self->trailers_for($scope) })
         if $self->trailers;
 }
 
-# The buffered body's trailers, per request: none unless a subclass says.
+# The trailers for one request, when trailers are declared: none here.
 sub trailers_for { [] }
-
-# Lowercased like the headers; names are bytes.
-sub _lowercase_names {
-    my ($pairs) = @_;
-    return [ map { my $name = $_->[0]; $name =~ tr/A-Z/a-z/; [$name, $_->[1]] } @$pairs ];
-}
-
-# 1xx, 204, 205 and 304 carry no content (RFC 9110).
-sub no_content_status {
-    my ($self) = @_;
-    my $status = $self->status;
-    return $status < 200 || $status == 204 || $status == 205 || $status == 304;
-}
-
-# The header rules, in one place: no content-type or content-length on 1xx,
-# 204 and 304; content-length 0 on 205; otherwise the content type unless the
-# headers carry one, and the length when known and not given. A new list each
-# call, so sending never changes the response.
-sub response_headers {
-    my ($self, $length) = @_;
-    my @headers = map { [@$_] } @{ $self->headers };
-    my %has = map { $_->[0] => 1 } @headers;
-    my $status = $self->status;
-    return \@headers if $status < 200 || $status == 204 || $status == 304;
-    $length = 0 if $status == 205;
-    $length = undef if $self->trailers;
-    push @headers, ['content-type', $self->content_type]
-        if defined $self->content_type && !$has{'content-type'};
-    push @headers, ['content-length', $length]
-        if defined $length && !$has{'content-length'};
-    return \@headers;
-}
-
-# The response as a PAGI application. The start goes out just before the
-# first body event send_body sends, so a subclass can do its work first and
-# a failure before then leaves call with nothing sent: the server, or a
-# framework, sends a clean 500.
-async sub call {
-    my ($self, $scope, $receive, $send) = @_;
-    die "Unsupported scope type: $scope->{type}\n"
-        unless $scope->{type} =~ /\A(?:http|websocket|sse)\z/;
-    # The start's Future, kept: every send waits for it, so sends that overlap
-    # (Www.pod "Sends Are Sequential") reach the server in the order they were made.
-    my $started;
-    my $start = sub { $started //= $self->send_start($send, $self->content_length) };
-    if ($self->no_content_status) {
-        await $start->();
-        return await $send->({ type => 'http.response.body', body => '', more => 0 });
-    }
-    my ($sent_body, $body_done, $sent_trailers, @waiting);
-    # A plain sub, not an async one: its checks run in the caller's own frame,
-    # so an error names the subclass's line. Once the start is out, the event
-    # goes to the server at once, as in raw PAGI. Before then it waits on the
-    # start's Future, and Futures run their callbacks in order, so sends keep
-    # call order; those waiting sends are kept, so one whose Future the
-    # subclass drops is still sent.
-    await $self->send_body($scope, $receive, sub {
-        my ($event) = @_;
-        my $refuse = sub { my (undef, $file, $line) = caller 1; die "$_[0] at $file line $line.\n" };
-        my $type = $event->{type};
-        $refuse->('PAGI::Response sends the start; send_body sends only body events')
-            if $type eq 'http.response.start';
-        $refuse->('a body event after the trailers: the trailers end the response')
-            if $sent_trailers && $type eq 'http.response.body';
-        if ($type eq 'http.response.trailers') {
-            $refuse->('trailers sent, but none were declared: build the response with trailers => 1')
-                unless $self->trailers;
-            $refuse->('trailers already sent: a response has one trailers event') if $sent_trailers;
-            $refuse->("trailers before the body's last event: send it with more => 0 first") unless $body_done;
-            $sent_trailers++;
-            $event = { %$event, headers => _lowercase_names($event->{headers} // []) };
-        }
-        elsif ($type eq 'http.response.body') {
-            $sent_body++;
-            # A file or fh event is complete on its own (Www.pod "Response Body").
-            $body_done = !$event->{more} || exists $event->{file} || exists $event->{fh};
-        }
-        return $send->($event) if $started && $started->is_done;
-        my $sent = $start->()->then(sub { $send->($event) });
-        push @waiting, $sent;
-        return $sent;
-    });
-    await Future->needs_all(@waiting) if @waiting;
-    return if $sent_trailers || ($body_done && !$self->trailers);
-    # The client gone: stopping early is no error, and there's no one to tell.
-    my $connection = $scope->{'pagi.connection'};
-    return if $connection && !$connection->is_connected;
-    # A terminal event is a claim that the response is complete, so we never
-    # make one up for a body send_body started: the response is left
-    # incomplete, for the server to end as truncated (Www.pod "Application
-    # Left a Response Incomplete").
-    die ref($self) . " send_body returned with the body unfinished: its last event had more => 1\n"
-        if $sent_body && !$body_done;
-    die ref($self) . " send_body returned without the trailers it declared: send one http.response.trailers event last\n"
-        if $sent_body;
-    # A send_body that sent nothing started nothing: its response is empty.
-    await $start->();
-    await $send->({ type => 'http.response.body', body => '', more => 0 });
-    await $send->({ type => 'http.response.trailers', headers => [] }) if $self->trailers;
-}
-
-sub send_start {
-    my ($self, $send, $length) = @_;
-    return $send->({
-        type    => 'http.response.start',
-        ($self->trailers && !$self->no_content_status ? (trailers => 1) : ()),
-        status  => $self->status,
-        headers => $self->response_headers($length),
-    });
-}
 
 1;
 
@@ -259,46 +117,27 @@ PAGI::Response - An HTTP response, and the base for every other kind
       PAGI::App
         Class::Tiny::Object
 
-Text, JSON, Stream, File and the other responses add themselves to the top.
 C<to_app> comes from L<PAGI::App>, and C<new> from L<Class::Tiny>.
 
 =head1 RATIONALE
 
-A PAGI HTTP response is two things in order: one C<http.response.start>
-event, with the status and headers, and then the body events. We split this
-class the same way.
+This is Starlette's C<Response>, ported. You give it content, and it works
+out everything once, when you build it: the body, as bytes, and the headers
+the start will send, with the Content-Length and Content-Type filled in
+unless you gave them. Serving it sends the start and then the body. That
+makes a response a value: build it once and serve it to any number of
+requests.
 
-The start is always ours. The rules every response has to get right live in
-one place: the statuses that carry no body (1xx, 204, 205, 304), when to send
-a Content-Type and a Content-Length, lowercase header names, and trailers.
-
-The body is C<send_body>, and it's the one method a different kind of
-delivery overrides. Here it sends a buffered body: the content you gave,
-rendered to bytes once, when you built the response, and sent as one event.
-That's the common case, so it's the base. A stream overrides C<send_body> to
-send many events, and a file to send the spec's C<file> event, and neither
-touches the start.
-
-If you know Starlette, this is its shape, with that one change. Starlette's
-C<Response> is buffered too, but its streaming and file responses replace the
-whole call, so each repeats the start and everything that touches it.
-
-We send the start lazily: just before the first body event. That lets a
-response do its work first, pulling a first chunk or opening a file, and if
-that work fails, nothing has gone out yet, so the server or your framework
-can still send a clean 500.
-
-A response is a value. You can build one once and serve it to any number of
-requests: C<send_body> runs per request, and sending never changes the
-object. That's why it isn't the base of L<PAGI::WebSocket> or L<PAGI::SSE>:
-those hold the state of one connection.
+Where we differ, it's for Perl or for PAGI. A Perl string doesn't say
+whether it's bytes, so C<render> refuses what can't be. Bytes with no type
+are sent as C<application/octet-stream>. We don't add a charset to the
+type you give. And PAGI has trailers, so we do too.
 
 =head1 DESCRIPTION
 
 Use C<PAGI::Response> as it is for bytes, or for a response with no body.
-For text, HTML or JSON, use the class for it. To write your own, override
-C<render> (or C<encode_chunk>) for a format, and C<send_body> for a delivery;
-see L</COOKBOOK>.
+For text, HTML or JSON, use the class for it. For a format of your own,
+override C<render> and C<default_content_type>; see L</COOKBOOK>.
 
 =head1 CONSTRUCTOR ARGUMENTS
 
@@ -309,13 +148,9 @@ see L</COOKBOOK>.
 
 =item content
 
-What to send. One argument before the others is the content. It's rendered
-to bytes once, by C<render>, when you build the response, so a value that
-can't be sent fails on the line that built it; only the bytes are kept, as
-L</body>. Here it must already be bytes: a string with a character above
-0xFF croaks (encode it first, or use L<PAGI::Response::Text>), as does a
-reference. With no content, or undefined content, the body is empty and its
-length unknown; give C<''> for an empty body with a C<content-length> of 0.
+What to send: one argument before the others is the content. It's rendered
+to bytes once, by C<render>, and kept as C<body>. Here it must already be
+bytes; with none, or C<undef>, the body is empty.
 
 =item status
 
@@ -323,157 +158,79 @@ The status code. Defaults to 200.
 
 =item headers
 
-The headers, as the PAGI spec writes them: C<[[name, value], ...]>, values
-as bytes. The list is copied, and each name lowercased (ASCII letters only,
-since names are bytes). A C<content-type> or C<content-length> given here is
-sent as given. A C<content-length> that would leave a client waiting for
-bytes that never come croaks: one that disagrees with the content you gave,
-any on a 1xx
-or 204, one other than 0 on a 205, and any when trailers are declared. A 304
-may carry the length the full response would have had (RFC 9110 8.6).
+Your headers, as the PAGI spec writes them: C<[[name, value], ...]>, values
+as bytes. They're copied, with each name lowercased (ASCII letters only,
+since names are bytes). A C<content-type> or C<content-length> you give is
+the one sent.
 
 =item content_type
 
-The Content-Type. Defaults to the class's C<default_content_type>. A
-C<content-type> in C<headers> wins over this.
+The Content-Type, when C<headers> has none. Defaults to the class's
+C<default_content_type>. Sent as given: no charset is added.
 
 =item trailers
 
-True to send trailers after the body. The start then declares them and
-carries no Content-Length, since HTTP/1.1 can send trailers only in chunked
-coding. Defaults to false. See L</Trailers>.
+True to send trailers after the body (L<PAGI::Spec::Www/Response Trailers>):
+the start declares them, there's no Content-Length (HTTP/1.1 sends trailers
+only in chunked coding), and C<trailers_for> gives them. Defaults to false.
 
 =back
 
 =head1 METHODS
 
-=head2 status, headers, content_type, trailers
+=head2 body, status, headers, content_type, trailers
 
-    my $status  = $response->status;
-    my $headers = $response->headers;        # [[name, value], ...], names lowercase
-    my $type    = $response->content_type;
-
-What the response was built with (see L</CONSTRUCTOR ARGUMENTS>);
-C<content_type> is the class's default when none was given. A response is a
-value you may share between requests, so set these when you build it, not
-while it's being served.
-
-=head2 body
-
-    my $bytes = $response->body;
-
-The rendered content: what the buffered body sends. C<''> with no content.
+The rendered body, and what the response was built with. C<headers> is the
+list the start sends: yours, then the Content-Length and Content-Type
+worked out for you. A response is a value you may share between requests,
+so set these when you build it, not while it's being served.
 
 =head2 call
 
     await $response->call($scope, $receive, $send);
 
 The response as a PAGI application; C<to_app> returns a code reference that
-calls it. It answers C<http> scopes, and C<websocket> and C<sse> scopes too,
-where an HTTP response is the spec's way to refuse the connection. Any other
-scope dies C<Unsupported scope type: ...>.
-
-For a status that carries no body (1xx, 204, 205, 304) it sends the start
-and an empty final body event, and never calls C<send_body>. Otherwise it
-calls C<send_body> and sends the start just before the first event that
-sends. Sends keep the order they were made in, even ones you don't await.
-If C<send_body> sends nothing, the response is empty: the start, an empty
-body and, if declared, empty trailers. But we never finish a body
-C<send_body> started: a last event is a claim that the body is complete, so
-if it returns with the body open, or without the trailers it declared,
-C<call> fails, and the server ends the response as truncated, which the
-client can see (L<PAGI::Spec::Www/Application Left a Response Incomplete>).
-If the client has already gone, nothing more is sent, and stopping early is
-no error.
-
-=head2 send_body
-
-    async sub send_body ($self, $scope, $receive, $send) { ... }
-
-Sends the body, through C<$send>, and returns a Future. Here it sends
-L</body> as one C<http.response.body> event with C<< more => 0 >>, then,
-with C<trailers> declared, the trailers L</trailers_for> gives.
-
-Override it for a different delivery. Send C<http.response.body> events,
-the last with C<< more => 0 >> (an event with C<file> or C<fh> is complete
-on its own), and then, with C<trailers> declared, one
-C<http.response.trailers> event. The start is ours: sending one croaks, as
-do trailers that weren't declared, a second trailers event, trailers before
-the body's last event, and a body event after the trailers. Each croak names
-your line.
-
-A class that sends a body of its own gives no content, so its length is
-unknown and the server frames the body; if it does know the length (a
-file's size), it overrides C<content_length>. It gives its own
-C<default_content_type> too, since the base's describes L</body>.
+calls it. It sends the start, the body as one event and, if declared, the
+trailers. Each start gets its own copy of the headers, so a middleware that
+changes them changes only that request.
 
 =head2 render
 
     my $bytes = $response->render($content);
 
-The content as bytes, called once, when you build the response. Here it's
-C<encode_chunk> of the content. Override it for a format that needs the
-whole value at once, such as JSON. What it returns must be bytes, whoever
-wrote it: C<undef>, a reference or a character above 0xFF croaks.
+The content as bytes, called once, when you build the response. Here,
+C<undef> is an empty body, and bytes are kept as they are; a reference or a
+character above 0xFF croaks (encode it first, or use
+L<PAGI::Response::Text>). Override it for a format of your own.
 
-=head2 encode_chunk
+=head2 default_content_type
 
-    my $bytes = $response->encode_chunk($chunk);
+The type when none is given: here, C<application/octet-stream> when there
+is a body, since RFC 9110 8.3 says a recipient may assume that anyway, and
+none when there isn't.
 
-One piece of content as bytes. Here: bytes as given, croaking on a
-reference or a character above 0xFF. Override it for a format that can
-encode piece by piece, such as text, and C<render> uses it.
+=head2 init_headers
+
+    my $headers = $response->init_headers($given);
+
+The headers the start sends, worked out once, when you build the response:
+the ones given, lowercased, then the Content-Length unless one was given
+(none on 1xx, 204 and 304, which have no body, nor with trailers), then the
+Content-Type unless one was given.
 
 =head2 trailers_for
 
     sub trailers_for ($self, $scope) { [[name, value], ...] }
 
-The buffered body's trailers, per request, when C<trailers> is declared.
-None here. Names are lowercased as they're sent.
-
-=head2 default_content_type
-
-The class's Content-Type when none is given. Here,
-C<application/octet-stream> when there is a body, since bytes with no type
-are what RFC 9110 8.3 says a recipient may assume anyway, and C<undef> (no
-header) when there isn't.
-
-=head2 content_length
-
-The body's length in bytes, or C<undef> if the class doesn't know it: here,
-the length of L</body> when you gave content, and C<undef> when you didn't,
-so the server frames the body itself (chunked, over HTTP/1.1). It's asked just before the start goes out, so a class that sends
-its own body can report something that changes between requests, such as a
-file's size.
-
-=head2 no_content_status
-
-True when the status carries no body: 1xx, 204, 205 or 304.
-
-=head2 response_headers
-
-    my $headers = $response->response_headers($length);
-
-The headers the start sends, given the body's length (or C<undef>): the
-headers you gave, then the Content-Type unless one was given, then the
-Content-Length when known, not given, and no trailers are declared. No
-Content-Type or Content-Length on 1xx, 204 and 304, and a length of 0 on
-205 (RFC 9110). A new list each call.
-
-=head2 send_start
-
-    await $response->send_start($send, $length);
-
-Sends the C<http.response.start> event. C<call> does this for you.
+The trailers for one request, when C<trailers> is declared: none here.
 
 =head1 COOKBOOK
 
 =head2 A format of your own
 
 Override C<render> to say how your content becomes bytes, and give the
-class a type. The content is rendered when you build the response, and what
-C<render> returns must be bytes, so a bad value fails there, not halfway
-through a request:
+class a type. The content is rendered when you build the response, so a bad
+value fails there, not halfway through a request:
 
     package CSV {
         use v5.40;
@@ -489,59 +246,23 @@ through a request:
 
     my $report = CSV->new([['id', 'name'], [1, 'Ada']]);
 
-=head2 A delivery of your own
-
-Override C<send_body> when the body isn't one buffer. Do the work that can
-fail before your first C<$send>: if it dies there, nothing has been sent,
-and the caller gets a clean 500 rather than half a response.
-
-    package Quote {
-        use v5.40;
-        use parent 'PAGI::Response';
-        use Class::Tiny qw(file);
-        use Future::AsyncAwait;
-
-        sub default_content_type { 'text/plain; charset=utf-8' }
-
-        async sub send_body ($self, $scope, $receive, $send) {
-            open my $fh, '<:raw', $self->file or die "Can't read the quotes: $!\n";
-            my @quotes = <$fh>;
-            await $send->({ type => 'http.response.body', body => $quotes[rand @quotes], more => 0 });
-        }
-    }
-
-    Quote->new(file => '/srv/quotes.txt');
-
 =head2 Trailers
 
-Trailers are headers sent after the body, for what you only know once it's
-sent: a checksum, a count, a status. Declare them with C<< trailers => 1 >>,
-and send them last:
+Trailers are headers sent after the body. For a buffered body, give them
+with C<trailers_for>, which runs for each request:
 
-    package Lines {
+    package Signed {
         use v5.40;
         use parent 'PAGI::Response';
-        use Class::Tiny qw(lines);
-        use Future::AsyncAwait;
+        use Digest::SHA qw(sha256_hex);
 
-        sub default_content_type { 'text/plain' }
-
-        async sub send_body ($self, $scope, $receive, $send) {
-            my $count = 0;
-            for my $line ($self->lines->@*) {
-                await $send->({ type => 'http.response.body', body => "$line\n", more => 1 });
-                $count++;
-            }
-            await $send->({ type => 'http.response.body', body => '', more => 0 });
-            await $send->({ type => 'http.response.trailers', headers => [['x-line-count', $count]] });
-        }
+        sub trailers_for ($self, $scope) { [['x-checksum', 'sha256=' . sha256_hex($self->body)]] }
     }
 
-    Lines->new(lines => ['one', 'two'], trailers => 1);
+    my $download = Signed->new("%PDF-1.7 ...", content_type => 'application/pdf', trailers => 1);
 
-For a buffered body, override C<trailers_for> instead. Many clients, browsers
-among them, don't show trailers to the application, so don't put anything
-there a client can't do without.
+Many clients, browsers among them, don't show trailers to the application,
+so don't put anything there a client can't do without.
 
 =head1 SEE ALSO
 
