@@ -1,6 +1,7 @@
 use v5.24;
 use warnings;
 use Test2::V0;
+use Future;
 use PAGI::Test::Client;
 
 use PAGI::Response;
@@ -69,11 +70,11 @@ subtest 'immutable: read, never written' => sub {
     is $res->body, 'abc', 'body';
     ok !$res->has_trailers, 'has_trailers';
     for my $name (qw(status headers content_type body has_trailers)) {
-        like(dies { $res->$name(1) }, qr/\APAGI::Response is immutable: \$response->$name can't be set; build a new response/, "$name can't be set");
+        like(dies { $res->$name(1) }, qr/\Aresponse is immutable: \$response->$name can't be set; build a new response/, "$name can't be set");
     }
     is $res->status, 201, 'and nothing changed';
-    like(dies { Local::CSV->new([[1]])->status(204) }, qr/\ALocal::CSV is immutable: \$response->status can't be set/,
-        "a subclass's own name");
+    like(dies { Local::CSV->new([[1]])->status(204) }, qr/\Aresponse is immutable: \$response->status can't be set/,
+        'in a subclass too');
     is(PAGI::Response->new('abc')->content_type, 'application/octet-stream', 'content_type: the default when none was given');
 };
 
@@ -150,6 +151,15 @@ package Local::Given { use parent -norequire, 'PAGI::Response';
         return $prepared{body} =~ /\A\{/ ? 'application/json' : 'text/plain' }
     sub prepare_headers { my ($self, $args, %prepared) = @_; $Local::Given::HEADERS_GOT = {%prepared};
         return $self->SUPER::prepare_headers($args, %prepared) } }
+package Local::TwoChunks { use parent -norequire, 'PAGI::Response'; use Future::AsyncAwait;
+    async sub send_body { my ($self, $scope, $receive, $send) = @_;
+        await $send->({ type => 'http.response.body', body => 'a', more => 1 });
+        await $send->({ type => 'http.response.body', body => 'b' });
+        return } }
+package Local::Summed { use parent -norequire, 'PAGI::Response'; use Future::AsyncAwait;
+    async sub send_body { my ($self, $scope, $receive, $send) = @_;
+        await $send->({ type => 'http.response.body', body => 'abc' });
+        return [['X-Sum', 3]] } }
 package Local::CSV { use parent -norequire, 'PAGI::Response';
     sub default_content_type { 'text/csv' }
     sub render { my ($self, $rows) = @_; join '', map { join(',', @$_) . "\r\n" } @$rows } }
@@ -187,6 +197,23 @@ subtest 'prepare: content_type and has_trailers as given' => sub {
     is(PAGI::Response->new('abc', content_type => undef)->headers, [['content-length', 3]], 'content_type undef: none sent');
     ok(PAGI::Response->new('abc', has_trailers => 1)->has_trailers, 'has_trailers');
     ok(!PAGI::Response->new('abc')->has_trailers, 'none by default');
+};
+
+subtest 'call: send_start, send_body, send_trailers' => sub {
+    my $res = get(Local::TwoChunks->new(headers => [['x-id', 7]]));
+    is $res->content, 'ab', 'send_body overridden: a body of its own';
+    is $res->header('x-id'), 7, 'and the start is the base\'s';
+    my $summed = get(Local::Summed->new(has_trailers => 1));
+    is $summed->content, 'abc', 'the body';
+    is $summed->trailer_pairs, [['x-sum', 3]], 'send_body returns the trailer values; send_trailers sends them, names lowercased';
+    my @sent;
+    my $call = Local::Summed->new->call({ type => 'http', method => 'GET' }, sub { Future->new },
+        sub { push @sent, $_[0]; Future->done });
+    like $call->failure, qr/\Asend_body returned trailers, but has_trailers wasn't declared/,
+        'trailers returned but not declared: call fails';
+    is [map { $_->{type} } @sent], ['http.response.start', 'http.response.body'], 'and no trailers event is sent';
+    is get(Local::TwoChunks->new)->trailer_pairs, [], 'nothing returned, nothing declared: fine';
+    can_ok 'PAGI::Response', qw(send_start send_body send_trailers);
 };
 
 subtest 'a format of your own' => sub {

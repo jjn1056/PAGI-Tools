@@ -131,8 +131,8 @@ sub content_type {
 }
 
 sub _immutable {
-    my ($self, $name) = @_;
-    Carp::croak(ref($self) . " is immutable: \$response->$name can't be set; build a new response");
+    my (undef, $name) = @_;
+    Carp::croak("response is immutable: \$response->$name can't be set; build a new response");
 }
 
 # 204 and 304 responses cannot contain content (RFC 9110 6.4.1), nor can a
@@ -158,19 +158,48 @@ sub default_content_type {
     return length($body // '') ? 'application/octet-stream' : undef;
 }
 
+# Serving the response, in steps, as prepare builds it in steps: the start,
+# the body, and, if declared, the trailers. A subclass with a body of its own
+# overrides send_body, which returns the trailer values it has by its end.
 async sub call {
     my ($self, $scope, $receive, $send) = @_;
-    await $send->({
+    await $self->send_start($send);
+    my $trailers = await $self->send_body($scope, $receive, $send);
+    # Values with no declaration can never be sent: the start went out
+    # without saying trailers follow. That's a mistake in the class.
+    Carp::croak("send_body returned trailers, but has_trailers wasn't declared at new")
+        if !$self->has_trailers && $trailers && @$trailers;
+    return unless $self->has_trailers;
+    await $self->send_trailers($send, $trailers // []);
+}
+
+# The start: the status, a copy of the headers (a middleware may edit it),
+# and whether trailers follow.
+sub send_start {
+    my ($self, $send) = @_;
+    return $send->({
         type    => 'http.response.start',
         status  => $self->status,
-        headers => [map { [@$_] } @{ $self->headers }],   # a copy: a middleware may edit it
+        headers => [map { [@$_] } @{ $self->headers }],
         ($self->has_trailers ? (trailers => 1) : ()),
     });
-    await $send->({ type => 'http.response.body', body => $self->body });
-    # Declared trailers end the response, so a buffered body, which has
-    # nothing to put in them, sends them empty.
-    await $send->({ type => 'http.response.trailers', headers => [] })
-        if $self->has_trailers;
+}
+
+# The body: here, the buffered one, as one event. A buffered body has no
+# trailer values to give, so none are returned.
+async sub send_body {
+    my ($self, $scope, $receive, $send) = @_;
+    await $send->({ type => 'http.response.body', body => $self->body, more => 0 });
+    return;
+}
+
+# The trailers, names lowercased as headers are (names are bytes: tr).
+sub send_trailers {
+    my ($self, $send, $trailers) = @_;
+    return $send->({
+        type    => 'http.response.trailers',
+        headers => [ map { my $name = $_->[0]; $name =~ tr/A-Z/a-z/; [$name, $_->[1]] } @$trailers ],
+    });
 }
 
 1;
@@ -317,9 +346,35 @@ attribute returns it: don't change what's in it.
     await $response->call($scope, $receive, $send);
 
 The response as a PAGI application; C<to_app> returns a code reference that
-calls it. It sends the start, the body as one event and, if declared, the
-trailers. The start carries a copy of C<headers>, so a middleware that
-changes it changes only that request.
+calls it. It serves the response in steps, as C<prepare> builds it in
+steps: C<send_start>, then C<send_body>, then, if trailers are declared,
+C<send_trailers> with the values C<send_body> returned.
+
+=head2 send_start
+
+    await $response->send_start($send);
+
+The start: the status, a copy of C<headers> (so a middleware that changes
+it changes only that request), and, if declared, that trailers follow.
+
+=head2 send_body
+
+    async sub send_body ($self, $scope, $receive, $send) { ...; return $trailers }
+
+The body. Here, the buffered C<body>, as one event. A subclass with a body
+of its own overrides it, sending its body events, and returns the trailer
+values it has by the body's end (C<[[name, value], ...]>), or nothing.
+Returning values when C<has_trailers> wasn't declared is an error: the
+start has already gone out without saying trailers follow, so C<call>
+croaks once the body is sent.
+
+=head2 send_trailers
+
+    await $response->send_trailers($send, $trailers);
+
+The trailers, C<[[name, value], ...]>, with each name lowercased. C<call>
+sends them only when C<has_trailers> was declared, and empty when
+C<send_body> returned none.
 
 =head2 prepare
 
@@ -436,9 +491,27 @@ trailer about it goes in a header instead.
 
 A response declares trailers with C<< has_trailers => 1 >>, at C<new>,
 because the start, which goes out first, must say so. Their values come
-from whatever sends the body, at its end; a response that streams its body
-is where that happens. A buffered response that declares them sends them
-empty, so the response still completes.
+from whatever sends the body, at its end: C<send_body> returns them, and
+C<call> hands them to C<send_trailers>. A buffered response has none to
+give, so if it declares trailers it sends them empty and the response
+still completes.
+
+    package Counted {
+        use v5.40;
+        use parent 'PAGI::Response';
+        use Future::AsyncAwait;
+
+        async sub send_body ($self, $scope, $receive, $send) {
+            my @lines = ("one\n", "two\n");
+            for my $line (@lines) {
+                await $send->({ type => 'http.response.body', body => $line, more => 1 });
+            }
+            await $send->({ type => 'http.response.body', body => '', more => 0 });   # the last
+            return [['x-line-count', scalar @lines]];
+        }
+    }
+
+    my $counted = Counted->new(content_type => 'text/plain', has_trailers => 1);
 
 Many clients, browsers among them, don't show trailers to the application,
 so don't put anything there a client can't do without.
