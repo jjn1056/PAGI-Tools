@@ -15,8 +15,8 @@ sub BUILDARGS {
 }
 
 # A response is immutable: built once, from what you give it, and only
-# read after that. Only what you gave is kept: the Content-Length and
-# default Content-Type are worked out when the start is sent.
+# read after that. The Content-Length is worked out when the start is sent,
+# from the body, so it's never stored to go stale.
 sub BUILD {
     my ($self, $args) = @_;
     $self->prepare($args);
@@ -29,10 +29,10 @@ sub prepare {
     my ($self, $args) = @_;
     $self->prepare_status($args);
     $self->prepare_headers($args);
-    $self->prepare_content_type($args);
+    $self->prepare_body($args);
+    $self->prepare_content_type($args);   # after the body: the default may depend on it
     $self->prepare_trailers($args);
     $self->prepare_cookies($args);
-    $self->prepare_body($args);
     return;
 }
 
@@ -51,11 +51,14 @@ sub prepare_headers {
     return;
 }
 
-# The type you gave, undef included; none given leaves the class's default
-# to be worked out when the start is sent.
+# The type you gave, undef included; else the class's default, except on a
+# status without content (RFC 9110 15.4.5: a 304 doesn't describe a
+# representation).
 sub prepare_content_type {
     my ($self, $args) = @_;
-    $self->{content_type} = $args->{content_type} if exists $args->{content_type};
+    $self->{content_type} = exists $args->{content_type}  ? $args->{content_type}
+                          : _without_content($self->{status}) ? undef
+                          :                                  $self->default_content_type($self->{body});
     return;
 }
 
@@ -104,14 +107,10 @@ sub body {
     return $self->{body};
 }
 
-# The type you gave (undef included), else the class's default, except on a
-# status without content (RFC 9110 15.4.5: a 304 doesn't describe a
-# representation).
 sub content_type {
     my $self = shift;
     _immutable('content_type') if @_;
-    return $self->{content_type} if exists $self->{content_type};
-    return _without_content($self->{status}) ? undef : $self->default_content_type;
+    return $self->{content_type};
 }
 
 sub _immutable {
@@ -134,11 +133,12 @@ sub render {
     return defined $content ? $content : '';
 }
 
-# Bytes with no type given are sent as what RFC 9110 8.3 says a recipient
-# may assume anyway; an empty body has no type.
+# The class's type for a body: here, what RFC 9110 8.3 says a recipient may
+# assume for bytes with no type, and none for an empty body. Given the body
+# rather than reading it, so it can be called at any point, by anyone.
 sub default_content_type {
-    my ($self) = @_;
-    return length($self->body // '') ? 'application/octet-stream' : undef;
+    my ($self, $body) = @_;
+    return length($body // '') ? 'application/octet-stream' : undef;
 }
 
 # The headers the start sends, worked out each time: yours, then the body's
@@ -232,11 +232,11 @@ request (a cookie, a header) would change it for every request after, and
 one user's session cookie would go out to the next. Nothing here can be
 changed, so that can't happen.
 
-Simpler, because there's nothing to keep in step. The response keeps only
-what you gave it, and works out the Content-Length and Content-Type each
-time it's sent, so there's no stale length to keep in step. When you want a
-variation, build a new response: rendering it is the only work, and it
-happens once.
+Simpler, because there's nothing to keep in step. Everything is decided
+once, when you build it, from what you gave it, and nothing can change
+after: no status that moves while its Content-Length stays put. When you
+want a variation, build a new response: rendering it is the only work, and
+it happens once.
 
 Where else we differ from Starlette, it's for Perl or for PAGI. Bytes with
 no type are sent as C<application/octet-stream>. We don't add a charset to the
@@ -329,8 +329,8 @@ trailers. The start carries C<start_headers>.
 Makes the constructor's arguments into the response's fields, once, when
 you build it (C<BUILD> calls it with the arguments by name), one step per
 argument, in this order: C<prepare_status>, C<prepare_headers>,
-C<prepare_content_type>, C<prepare_trailers>, C<prepare_cookies>,
-C<prepare_body>. A subclass with arguments of its own extends it, or the
+C<prepare_body>, C<prepare_content_type>, C<prepare_trailers>,
+C<prepare_cookies>. A subclass with arguments of its own extends it, or the
 step for the argument it adds to, calling the class it inherits from
 first:
 
@@ -349,8 +349,10 @@ Your C<headers>, copied, with each name lowercased (ASCII letters only).
 
 =head2 prepare_content_type
 
-The C<content_type> you gave, C<undef> included. With none, the class's
-C<default_content_type> is worked out when the start is sent.
+The C<content_type> you gave, C<undef> included; else the class's
+C<default_content_type>, except on a 1xx, 204 or 304 response, which has no
+content to describe. It runs after C<prepare_body>, since the default may
+depend on the body.
 
 =head2 prepare_trailers
 
@@ -375,9 +377,13 @@ L<PAGI::Response::Text>.
 
 =head2 default_content_type
 
-The type when none is given: here, C<application/octet-stream> when there
-is a body, since RFC 9110 8.3 says a recipient may assume that anyway, and
-none when there isn't.
+    my $type = $response->default_content_type($body);
+
+The type for C<$body> when none is given: here, C<application/octet-stream>
+when there is a body, since RFC 9110 8.3 says a recipient may assume that
+anyway, and none when there isn't. It's given the body rather than reading
+the response's, so it depends on nothing else having been prepared.
+Override it for a format of your own.
 
 =head2 trailers_for
 

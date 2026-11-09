@@ -120,6 +120,8 @@ subtest 'content must be bytes: the send says so, as a server would' => sub {
     is get(PAGI::Response->new("caf\xE9"))->content, "caf\xE9", 'bytes 128-255 are bytes';
 };
 
+package Local::ByBody { use parent -norequire, 'PAGI::Response';
+    sub default_content_type { my ($self, $body) = @_; ($body // '') =~ /\A\{/ ? 'application/json' : 'text/plain' } }
 package Local::Steps { use parent -norequire, 'PAGI::Response';
     sub prepare_content_type { my ($self, $args) = @_; $self->{content_type} = $args->{format} // 'text/csv' }
     sub prepare_trailers { my ($self, $args) = @_; $self->{trailers} = $args->{checksum} ? 1 : 0 }
@@ -145,6 +147,13 @@ subtest 'prepare: a subclass adds its own arguments' => sub {
     is $steps->content_type, 'text/csv', 'prepare_content_type extended';
     ok $steps->trailers, 'prepare_trailers extended';
     is $steps->{seen_cookies}, [['a', 1]], 'prepare_cookies is called with the arguments';
+};
+
+subtest 'default_content_type is given the body' => sub {
+    is(Local::ByBody->new('{"a":1}')->content_type, 'application/json', 'a subclass decides from the body it is given');
+    is(Local::ByBody->new('hello')->content_type, 'text/plain', 'either way');
+    is(PAGI::Response->default_content_type('abc'), 'application/octet-stream', 'callable on its own: bytes');
+    is(PAGI::Response->default_content_type(''), undef, 'an empty body: no type');
 };
 
 subtest 'prepare: content_type and trailers as given' => sub {
