@@ -5,11 +5,10 @@ use warnings;
 use parent 'PAGI::App';
 use Carp ();
 use Future::AsyncAwait;
-use Class::Tiny qw(body), {
-    status       => 200,
-    headers      => sub { [] },
-    content_type => sub { $_[0]->default_content_type },
-    trailers     => 0,
+use Class::Tiny qw(body content_type), {
+    status   => 200,
+    headers  => sub { [] },
+    trailers => 0,
 };
 
 # One positional first argument is the content.
@@ -24,7 +23,18 @@ sub BUILDARGS {
 sub BUILD {
     my ($self, $args) = @_;
     $self->body($self->render($args->{content}));
+    # The class's default type, unless you gave one or the status has no
+    # content (RFC 9110 15.4.5: a 304 doesn't describe a representation).
+    $self->content_type($self->default_content_type)
+        unless exists $args->{content_type} || _without_content($self->status);
     $self->headers($self->init_headers($self->headers));
+}
+
+# 204 and 304 responses cannot contain content (RFC 9110 6.4.1), nor can a
+# 1xx, which is never a final response (RFC 9110 15.2).
+sub _without_content {
+    my ($status) = @_;
+    return $status < 200 || $status == 204 || $status == 304;
 }
 
 # The content as bytes. A Perl string doesn't say whether it's bytes, so we
@@ -55,7 +65,7 @@ sub init_headers {
     my $status = $self->status;
     push @headers, ['content-length', length $self->body]
         if defined $self->body && !$has{'content-length'} && !$self->trailers
-        && !($status < 200 || $status == 204 || $status == 304);
+        && !_without_content($status);
     push @headers, ['content-type', $self->content_type]
         if defined $self->content_type && !$has{'content-type'};
     return \@headers;
@@ -166,7 +176,9 @@ the one sent.
 =item content_type
 
 The Content-Type, when C<headers> has none. Defaults to the class's
-C<default_content_type>. Sent as given: no charset is added.
+C<default_content_type>, except on a 1xx, 204 or 304 response, which has no
+content to describe. One you give is sent as given, on any status: no
+charset is added, and C<undef> sends none.
 
 =item trailers
 
@@ -216,7 +228,8 @@ none when there isn't.
 The headers the start sends, worked out once, when you build the response:
 the ones given, lowercased, then the Content-Length unless one was given
 (none on 1xx, 204 and 304, which have no body, nor with trailers), then the
-Content-Type unless one was given.
+Content-Type unless one was given (the class's default isn't used on 1xx,
+204 and 304; see L</content_type>).
 
 =head2 trailers_for
 

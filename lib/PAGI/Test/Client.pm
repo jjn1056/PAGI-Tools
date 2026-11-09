@@ -143,6 +143,10 @@ sub _request {
     # decoder.
     my $sv = PAGI::Utils::_SendValidation->new(scope_type => 'http', extensions => $scope->{extensions});
     my $response = PAGI::Test::Response->new(events => []);
+    # Whether the response may carry content: not for HEAD, nor for a 204
+    # or 304 status (PAGI::Spec::Www, "HEAD Requests" and "Statuses Without
+    # Content"). The server suppresses it; so does this client.
+    my $no_content = $method eq 'HEAD';
     my $send = async sub {
         my ($event) = @_;
 
@@ -161,6 +165,8 @@ sub _request {
             if ($captured{type} // '') eq 'http.response.start';
 
         if (($captured{type} // '') eq 'http.response.start') {
+            my $status = $captured{status} // 200;
+            $no_content ||= $status == 204 || $status == 304;
             # PAGI spec — this mock is H1-flavored (see http_version above):
             # strip app-supplied transfer-encoding/connection (the mock owns
             # response framing), warning per occurrence, then supply Date if
@@ -180,10 +186,13 @@ sub _request {
             $captured{headers} = $headers;
         }
         elsif (($captured{type} // '') eq 'http.response.body') {
-            if ($method eq 'HEAD') {
+            if ($no_content) {
                 $captured{body} = '';
                 delete @captured{qw(fh file offset length)};
             }
+        }
+        elsif (($captured{type} // '') eq 'http.response.trailers') {
+            $captured{headers} = [] if $no_content;   # accepted and discarded
         }
 
         $response->_capture_event(\%captured);

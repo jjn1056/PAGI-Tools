@@ -39,6 +39,18 @@ subtest 'statuses without a body get no content-length' => sub {
     is get(PAGI::Response->new(status => 205))->header('content-length'), 0, '205: its body is empty';
 };
 
+subtest 'statuses without content get no default content-type' => sub {
+    for my $status (204, 304) {
+        is(PAGI::Response->new('abc', status => $status)->headers, [], "$status: no type, no length");
+    }
+    is(PAGI::Response->new(status => 304, content_type => 'image/png')->headers, [['content-type', 'image/png']],
+        'a content_type you give is sent');
+    is(PAGI::Response->new(status => 304, headers => [['Content-Type', 'image/png']])->headers, [['content-type', 'image/png']],
+        'and so is a content-type header');
+    is(PAGI::Response->new('abc', status => 205)->headers, [['content-length', 3], ['content-type', 'application/octet-stream']],
+        '205 is not one of them');
+};
+
 subtest 'headers: yours, lowercased, and they win' => sub {
     my $given = [['X-One', 'a'], ["X-\xC9tag", 'b']];
     my $res = get(PAGI::Response->new('abc', headers => $given));
