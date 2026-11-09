@@ -96,6 +96,34 @@ subtest 'B1: undeclared trailers fails the send Future' => sub {
 # state) is a server-shaped abnormal disconnect, not a clean completion.
 # ---------------------------------------------------------------------------
 
+subtest 'B1: a body that is not bytes fails the send Future' => sub {
+    my $app = async sub {
+        my ($scope, $receive, $send) = @_;
+        await $send->({ type => 'http.response.start', status => 200, headers => [] });
+        my $err = await try_send($send, { type => 'http.response.body', body => "caf\x{e9} \x{263A}" });
+        ok $err, 'send Future failed';
+        like $err, qr/above 0xFF/, 'error names the problem';
+        await $send->({ type => 'http.response.body', body => 'ok', more => 0 });
+    };
+    is(PAGI::Test::Client->new(app => $app)->get('/')->content, 'ok', 'the response goes on');
+};
+
+subtest 'B1: trailers after a content-length fail the send Future (HTTP/1.1)' => sub {
+    my $app = async sub {
+        my ($scope, $receive, $send) = @_;
+        await $send->({ type => 'http.response.start', status => 200, trailers => 1, headers => [['content-length', 3]] });
+        await $send->({ type => 'http.response.body', body => 'abc' });
+        my $err = await try_send($send, { type => 'http.response.trailers', headers => [] });
+        ok $err, 'send Future failed';
+        like $err, qr/requires chunked framing/, 'error names the problem';
+    };
+    my @warnings;
+    { local $SIG{__WARN__} = sub { push @warnings, $_[0] }; PAGI::Test::Client->new(app => $app)->get('/') }
+    is scalar @warnings, 1, 'one warning';
+    like $warnings[0], qr/incomplete response: response awaiting declared http\.response\.trailers/,
+        'the response is left incomplete, as a server would leave it';
+};
+
 subtest 'B2: more=>1 body, never terminated' => sub {
     my (@events);
     my $app = async sub {

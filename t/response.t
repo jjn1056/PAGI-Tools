@@ -114,19 +114,45 @@ subtest 'bytes 128-255 pass through unchanged (CONTRIBUTING.md)' => sub {
     }
 };
 
-subtest 'render: content must be bytes' => sub {
-    like(dies { PAGI::Response->new("caf\x{e9} \x{263A}") }, qr/\APAGI::Response content must be bytes: encode it first, or use PAGI::Response::Text/,
-        'a character above 0xFF');
-    like(dies { PAGI::Response->new([1]) }, qr/\APAGI::Response content must be bytes/, 'a reference');
+subtest 'content must be bytes: the send says so, as a server would' => sub {
+    like get(PAGI::Response->new("caf\x{e9} \x{263A}"))->exception, qr/contains a character above 0xFF/, 'a character above 0xFF';
+    like get(PAGI::Response->new([1]))->exception, qr/must be bytes, not a ARRAY reference/, 'a reference';
     is get(PAGI::Response->new("caf\xE9"))->content, "caf\xE9", 'bytes 128-255 are bytes';
 };
 
+package Local::Steps { use parent -norequire, 'PAGI::Response';
+    sub prepare_content_type { my ($self, $args) = @_; $self->{content_type} = $args->{format} // 'text/csv' }
+    sub prepare_trailers { my ($self, $args) = @_; $self->{trailers} = $args->{checksum} ? 1 : 0 }
+    sub prepare_cookies { my ($self, $args) = @_; $self->{seen_cookies} = $args->{cookies} } }
+package Local::Moved { use parent -norequire, 'PAGI::Response';
+    sub prepare_status { my ($self, $args) = @_; $self->{status} = $args->{status} // 302 } }
+package Local::Located { use parent -norequire, 'PAGI::Response';
+    sub prepare_headers { my ($self, $args) = @_; $self->SUPER::prepare_headers($args); push @{ $self->{headers} }, ['location', $args->{location}] } }
 package Local::CSV { use parent -norequire, 'PAGI::Response';
     sub default_content_type { 'text/csv' }
     sub render { my ($self, $rows) = @_; join '', map { join(',', @$_) . "\r\n" } @$rows } }
 package Local::Checksum { use parent -norequire, 'PAGI::Response';
     sub trailers_for { my ($self, $scope) = @_; [['x-checksum', "sha256=$scope->{method}"]] } }
 package main;
+
+subtest 'prepare: a subclass adds its own arguments' => sub {
+    my $res = Local::Located->new(status => 302, location => '/there', headers => [['X-Id', 7]]);
+    is $res->headers, [['x-id', 7], ['location', '/there']], 'prepare_headers extended: yours, then its own';
+    is $res->status, 302, 'and the rest prepared as usual';
+    is(Local::Moved->new->status, 302, 'prepare_status extended: its own default');
+    is(Local::Moved->new(status => 301)->status, 301, 'and yours wins');
+    my $steps = Local::Steps->new('abc', checksum => 1, cookies => [['a', 1]]);
+    is $steps->content_type, 'text/csv', 'prepare_content_type extended';
+    ok $steps->trailers, 'prepare_trailers extended';
+    is $steps->{seen_cookies}, [['a', 1]], 'prepare_cookies is called with the arguments';
+};
+
+subtest 'prepare: content_type and trailers as given' => sub {
+    is(PAGI::Response->new('abc', content_type => 'image/png')->content_type, 'image/png', 'content_type');
+    is(PAGI::Response->new('abc', content_type => undef)->start_headers, [['content-length', 3]], 'content_type undef: none sent');
+    ok(PAGI::Response->new('abc', trailers => 1)->trailers, 'trailers');
+    ok(!PAGI::Response->new('abc')->trailers, 'no trailers by default');
+};
 
 subtest 'a format of your own' => sub {
     my $res = get(Local::CSV->new([[1, 2], [3, 4]]));

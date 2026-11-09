@@ -19,25 +19,89 @@ sub BUILDARGS {
 # default Content-Type are worked out when the start is sent.
 sub BUILD {
     my ($self, $args) = @_;
-    $self->{status}   = $args->{status} // 200;
-    $self->{trailers} = $args->{trailers} ? 1 : 0;
-    $self->{content_type} = $args->{content_type} if exists $args->{content_type};
-    # Copied, so changing your list later changes nothing; names are bytes,
-    # so tr changes ASCII letters only.
+    $self->prepare($args);
+}
+
+# The constructor's arguments, made into the response's fields: one step
+# per argument. A subclass with arguments of its own extends this, or the
+# step for the argument it adds to.
+sub prepare {
+    my ($self, $args) = @_;
+    $self->prepare_status($args);
+    $self->prepare_headers($args);
+    $self->prepare_content_type($args);
+    $self->prepare_trailers($args);
+    $self->prepare_cookies($args);
+    $self->prepare_body($args);
+    return;
+}
+
+# The status: yours, else 200.
+sub prepare_status {
+    my ($self, $args) = @_;
+    $self->{status} = $args->{status} // 200;
+    return;
+}
+
+# Your headers, copied, so changing your list later changes nothing; names
+# are bytes, so tr changes ASCII letters only.
+sub prepare_headers {
+    my ($self, $args) = @_;
     $self->{headers} = [ map { my $name = $_->[0]; $name =~ tr/A-Z/a-z/; [$name, $_->[1]] } @{ $args->{headers} // [] } ];
+    return;
+}
+
+# The type you gave, undef included; none given leaves the class's default
+# to be worked out when the start is sent.
+sub prepare_content_type {
+    my ($self, $args) = @_;
+    $self->{content_type} = $args->{content_type} if exists $args->{content_type};
+    return;
+}
+
+# Whether trailers follow the body.
+sub prepare_trailers {
+    my ($self, $args) = @_;
+    $self->{trailers} = $args->{trailers} ? 1 : 0;
+    return;
+}
+
+# Cookies: none here. The step where a response takes its cookies.
+sub prepare_cookies { return }
+
+# The content, rendered to bytes once.
+sub prepare_body {
+    my ($self, $args) = @_;
     $self->{body} = $self->render($args->{content});
+    return;
 }
 
 # The getters. Given a value, each croaks: nothing about a response changes.
-# headers returns the response's own list, as a Moose 'ro' attribute would:
-# don't change it.
-for my $name (qw(status headers trailers body)) {
-    no strict 'refs';
-    *{$name} = sub {
-        my $self = shift;
-        _immutable($name) if @_;
-        return $self->{$name};
-    };
+
+sub status {
+    my $self = shift;
+    _immutable('status') if @_;
+    return $self->{status};
+}
+
+# The response's own list, as a Moose 'ro' attribute returns it: don't
+# change it.
+sub headers {
+    my $self = shift;
+    _immutable('headers') if @_;
+    return $self->{headers};
+}
+
+sub trailers {
+    my $self = shift;
+    _immutable('trailers') if @_;
+    return $self->{trailers};
+}
+
+sub body {
+    my $self = shift;
+    _immutable('body') if @_;
+    return $self->{body};
 }
 
 # The type you gave (undef included), else the class's default, except on a
@@ -62,14 +126,12 @@ sub _without_content {
     return $status < 200 || $status == 204 || $status == 304;
 }
 
-# The content as bytes. A Perl string doesn't say whether it's bytes, so we
-# refuse what can't be: a reference, or a character above 0xFF.
+# The content as bytes: here, as given, and no content is an empty body.
+# Whether a body is bytes is checked where every send is, by the server
+# (and PAGI::Test::Client), not here.
 sub render {
     my ($self, $content) = @_;
-    return '' unless defined $content;
-    Carp::croak(ref($self) . ' content must be bytes: encode it first, or use PAGI::Response::Text')
-        if ref $content || $content =~ /[^\x00-\xFF]/;
-    return $content;
+    return defined $content ? $content : '';
 }
 
 # Bytes with no type given are sent as what RFC 9110 8.3 says a recipient
@@ -176,16 +238,16 @@ time it's sent, so there's no stale length to keep in step. When you want a
 variation, build a new response: rendering it is the only work, and it
 happens once.
 
-Where else we differ from Starlette, it's for Perl or for PAGI. A Perl string doesn't say
-whether it's bytes, so C<render> refuses what can't be. Bytes with no type
-are sent as C<application/octet-stream>. We don't add a charset to the
+Where else we differ from Starlette, it's for Perl or for PAGI. Bytes with
+no type are sent as C<application/octet-stream>. We don't add a charset to the
 type you give. And PAGI has trailers, so we do too.
 
 =head1 DESCRIPTION
 
 Use C<PAGI::Response> as it is for bytes, or for a response with no body.
 For text, HTML or JSON, use the class for it. For a format of your own,
-override C<render> and C<default_content_type>; see L</COOKBOOK>.
+override C<render> and C<default_content_type>; for arguments of your own,
+extend C<prepare> or one of its steps; see L</COOKBOOK>.
 
 =head1 CONSTRUCTOR ARGUMENTS
 
@@ -198,7 +260,10 @@ override C<render> and C<default_content_type>; see L</COOKBOOK>.
 
 What to send: one argument before the others is the content. It's rendered
 to bytes once, by C<render>, and kept as C<body>. Here it must already be
-bytes; with none, or C<undef>, the body is empty.
+bytes: a string with a character above 0xFF, or a reference, fails when
+it's sent, as the PAGI spec has a server refuse it (L<PAGI::Test::Client>
+refuses it too, so your tests see it). With none, or C<undef>, the body is
+empty.
 
 =item status
 
@@ -257,14 +322,56 @@ The response as a PAGI application; C<to_app> returns a code reference that
 calls it. It sends the start, the body as one event and, if declared, the
 trailers. The start carries C<start_headers>.
 
+=head2 prepare
+
+    sub prepare ($self, $args) { ... }
+
+Makes the constructor's arguments into the response's fields, once, when
+you build it (C<BUILD> calls it with the arguments by name), one step per
+argument, in this order: C<prepare_status>, C<prepare_headers>,
+C<prepare_content_type>, C<prepare_trailers>, C<prepare_cookies>,
+C<prepare_body>. A subclass with arguments of its own extends it, or the
+step for the argument it adds to, calling the class it inherits from
+first:
+
+    sub prepare_headers ($self, $args) {
+        $self->SUPER::prepare_headers($args);
+        push $self->{headers}->@*, ['location', $args->{location}];
+    }
+
+=head2 prepare_status
+
+The status you gave, else 200. Extend it for another default.
+
+=head2 prepare_headers
+
+Your C<headers>, copied, with each name lowercased (ASCII letters only).
+
+=head2 prepare_content_type
+
+The C<content_type> you gave, C<undef> included. With none, the class's
+C<default_content_type> is worked out when the start is sent.
+
+=head2 prepare_trailers
+
+Whether C<trailers> follow the body.
+
+=head2 prepare_cookies
+
+Cookies: none here. It's the step where a response takes its cookies.
+
+=head2 prepare_body
+
+The content, rendered to bytes once, by C<render>.
+
 =head2 render
 
     my $bytes = $response->render($content);
 
 The content as bytes, called once, when you build the response. Here,
-C<undef> is an empty body, and bytes are kept as they are; a reference or a
-character above 0xFF croaks (encode it first, or use
-L<PAGI::Response::Text>). Override it for a format of your own.
+C<undef> is an empty body, and bytes are kept as they are. Override it for a
+format of your own, returning bytes: encode text first, or use
+L<PAGI::Response::Text>.
 
 =head2 default_content_type
 

@@ -141,7 +141,8 @@ sub _request {
     # %HTTP_EXTENSIONS) -- one source of truth, not two lists that can drift.
     # Validated events are handed to PAGI::Test::Response's one captured-wire
     # decoder.
-    my $sv = PAGI::Utils::_SendValidation->new(scope_type => 'http', extensions => $scope->{extensions});
+    my $sv = PAGI::Utils::_SendValidation->new(
+        scope_type => 'http', extensions => $scope->{extensions}, http_version => $scope->{http_version});
     my $response = PAGI::Test::Response->new(events => []);
     # Whether the response may carry content: not for HEAD, nor for a 204
     # or 304 status (PAGI::Spec::Www, "HEAD Requests" and "Statuses Without
