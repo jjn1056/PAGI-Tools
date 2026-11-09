@@ -35,27 +35,28 @@ subtest 'statuses without a body get no content-length' => sub {
         is $res->status, $status, "$status served";
         is sent_headers($res), [], "$status: no headers";
     }
-    is(PAGI::Response->new(status => 101)->start_headers, [], '1xx');
+    is(PAGI::Response->new(status => 101)->headers, [], '1xx');
     is get(PAGI::Response->new(status => 205))->header('content-length'), 0, '205: its body is empty';
 };
 
 subtest 'statuses without content get no default content-type' => sub {
     for my $status (204, 304) {
-        is(PAGI::Response->new('abc', status => $status)->start_headers, [], "$status: no type, no length");
+        is(PAGI::Response->new('abc', status => $status)->headers, [], "$status: no type, no length");
     }
-    is(PAGI::Response->new(status => 304, content_type => 'image/png')->start_headers, [['content-type', 'image/png']],
+    is(PAGI::Response->new(status => 304, content_type => 'image/png')->headers, [['content-type', 'image/png']],
         'a content_type you give is sent');
-    is(PAGI::Response->new(status => 304, headers => [['Content-Type', 'image/png']])->start_headers, [['content-type', 'image/png']],
+    is(PAGI::Response->new(status => 304, headers => [['Content-Type', 'image/png']])->headers, [['content-type', 'image/png']],
         'and so is a content-type header');
-    is(PAGI::Response->new('abc', status => 205)->start_headers, [['content-length', 3], ['content-type', 'application/octet-stream']],
+    is(PAGI::Response->new('abc', status => 205)->headers, [['content-length', 3], ['content-type', 'application/octet-stream']],
         '205 is not one of them');
 };
 
 subtest 'immutable: read, never written' => sub {
     my $res = PAGI::Response->new('abc', status => 201, headers => [['X-Id', 7]], content_type => 'text/csv');
     is $res->status, 201, 'status';
-    is $res->headers, [['x-id', 7]], 'headers: yours, lowercased';
-    is $res->start_headers, [['x-id', 7], ['content-length', 3], ['content-type', 'text/csv']], 'start_headers: what the start sends';
+    is $res->headers, [['x-id', 7], ['content-length', 3], ['content-type', 'text/csv']],
+        'headers: yours, lowercased, then the derived ones -- what the start sends';
+    ok !$res->can('start_headers'), 'one list, not two';
     is $res->content_type, 'text/csv', 'content_type';
     is $res->body, 'abc', 'body';
     ok !$res->trailers, 'trailers';
@@ -71,7 +72,8 @@ subtest 'what you gave new is copied' => sub {
     my $built = PAGI::Response->new('abc', headers => $given);
     push @$given, ['x-leak', 1];
     $given->[0][1] = 'changed';
-    is $built->headers, [['x-id', 7]], 'changing your list later changes nothing';
+    is $built->headers, [['x-id', 7], ['content-length', 3], ['content-type', 'application/octet-stream']],
+        'changing your list later changes nothing';
 };
 
 subtest 'headers: yours, lowercased, and they win' => sub {
@@ -139,7 +141,7 @@ package main;
 
 subtest 'prepare: a subclass adds its own arguments' => sub {
     my $res = Local::Located->new(status => 302, location => '/there', headers => [['X-Id', 7]]);
-    is $res->headers, [['x-id', 7], ['location', '/there']], 'prepare_headers extended: yours, then its own';
+    is $res->headers, [['x-id', 7], ['content-length', 0], ['location', '/there']], 'prepare_headers extended: the list, then its own';
     is $res->status, 302, 'and the rest prepared as usual';
     is(Local::Moved->new->status, 302, 'prepare_status extended: its own default');
     is(Local::Moved->new(status => 301)->status, 301, 'and yours wins');
@@ -158,7 +160,7 @@ subtest 'default_content_type is given the body' => sub {
 
 subtest 'prepare: content_type and trailers as given' => sub {
     is(PAGI::Response->new('abc', content_type => 'image/png')->content_type, 'image/png', 'content_type');
-    is(PAGI::Response->new('abc', content_type => undef)->start_headers, [['content-length', 3]], 'content_type undef: none sent');
+    is(PAGI::Response->new('abc', content_type => undef)->headers, [['content-length', 3]], 'content_type undef: none sent');
     ok(PAGI::Response->new('abc', trailers => 1)->trailers, 'trailers');
     ok(!PAGI::Response->new('abc')->trailers, 'no trailers by default');
 };

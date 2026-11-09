@@ -15,8 +15,8 @@ sub BUILDARGS {
 }
 
 # A response is immutable: built once, from what you give it, and only
-# read after that. The Content-Length is worked out when the start is sent,
-# from the body, so it's never stored to go stale.
+# read after that. Everything, the headers included, is worked out here,
+# once; nothing can change after, so nothing derived can go stale.
 sub BUILD {
     my ($self, $args) = @_;
     $self->prepare($args);
@@ -28,11 +28,11 @@ sub BUILD {
 sub prepare {
     my ($self, $args) = @_;
     $self->prepare_status($args);
-    $self->prepare_headers($args);
     $self->prepare_body($args);
     $self->prepare_content_type($args);   # after the body: the default may depend on it
     $self->prepare_trailers($args);
     $self->prepare_cookies($args);
+    $self->prepare_headers($args);        # last: the headers depend on all of the above
     return;
 }
 
@@ -43,11 +43,22 @@ sub prepare_status {
     return;
 }
 
-# Your headers, copied, so changing your list later changes nothing; names
-# are bytes, so tr changes ASCII letters only.
+# The headers the start sends, worked out once: yours, copied (so changing
+# your list later changes nothing) with each name lowercased (names are
+# bytes, so tr changes ASCII letters only), then the body's length and the
+# type unless you gave them. No length on a status that has no body (RFC
+# 9110), nor with trailers, which HTTP/1.1 sends only in chunked coding, nor
+# without a body.
 sub prepare_headers {
     my ($self, $args) = @_;
-    $self->{headers} = [ map { my $name = $_->[0]; $name =~ tr/A-Z/a-z/; [$name, $_->[1]] } @{ $args->{headers} // [] } ];
+    my @headers = map { my $name = $_->[0]; $name =~ tr/A-Z/a-z/; [$name, $_->[1]] } @{ $args->{headers} // [] };
+    my %has = map { $_->[0] => 1 } @headers;
+    push @headers, ['content-length', length $self->{body}]
+        if defined $self->{body} && !$has{'content-length'} && !$self->{trailers}
+        && !_without_content($self->{status});
+    push @headers, ['content-type', $self->{content_type}]
+        if defined $self->{content_type} && !$has{'content-type'};
+    $self->{headers} = \@headers;
     return;
 }
 
@@ -87,8 +98,10 @@ sub status {
     return $self->{status};
 }
 
-# The response's own list, as a Moose 'ro' attribute returns it: don't
-# change it.
+# Not only the headers you gave: those, normalized (names lowercased), plus
+# the ones worked out for you (Content-Length, Content-Type). This is what
+# the start sends. The response's own list, as a Moose 'ro' attribute
+# returns it: don't change it.
 sub headers {
     my $self = shift;
     _immutable('headers') if @_;
@@ -141,28 +154,12 @@ sub default_content_type {
     return length($body // '') ? 'application/octet-stream' : undef;
 }
 
-# The headers the start sends, worked out each time: yours, then the body's
-# length and the type unless you gave them. No length on a status that has
-# no body (RFC 9110), nor with trailers, which HTTP/1.1 sends only in
-# chunked coding. A new list each call, so a middleware may edit it.
-sub start_headers {
-    my ($self) = @_;
-    my @headers = map { [@$_] } @{ $self->headers };
-    my %has = map { $_->[0] => 1 } @headers;
-    push @headers, ['content-length', length $self->body]
-        if defined $self->body && !$has{'content-length'} && !$self->trailers
-        && !_without_content($self->status);
-    push @headers, ['content-type', $self->content_type]
-        if defined $self->content_type && !$has{'content-type'};
-    return \@headers;
-}
-
 async sub call {
     my ($self, $scope, $receive, $send) = @_;
     await $send->({
         type    => 'http.response.start',
         status  => $self->status,
-        headers => $self->start_headers,
+        headers => [map { [@$_] } @{ $self->headers }],   # a copy: a middleware may edit it
         ($self->trailers ? (trailers => 1) : ()),
     });
     await $send->({ type => 'http.response.body', body => $self->body });
@@ -297,22 +294,16 @@ only in chunked coding), and C<trailers_for> gives them. Defaults to false.
 
     my $status = $response->status;
 
-What the response was built with: C<headers> is yours, lowercased, as you
-gave them; C<content_type> is the one you gave, else the class's default
-(none on 1xx, 204 and 304); C<body> is the rendered content. They only
-read: given a value, each croaks, since a response can't be changed (see
-L</RATIONALE>). C<headers> returns the response's own list, as a Moose
-C<ro> attribute does: don't change what's in it.
+What the response was built with: C<content_type> is the one you gave,
+else the class's default (none on 1xx, 204 and 304); C<body> is the
+rendered content. They only read: given a value, each croaks, since a
+response can't be changed (see L</RATIONALE>).
 
-=head2 start_headers
-
-    my $headers = $response->start_headers;   # [[name, value], ...]
-
-The headers the start sends, worked out each time: yours, then the
-Content-Length unless you gave one (none on 1xx, 204 and 304, which have no
-body, nor with trailers, which HTTP/1.1 sends only in chunked coding), then
-the Content-Type unless you gave one. A new list each call, so a middleware
-that changes it changes only that request.
+C<headers> is not only the headers you set: it's those, normalized (each
+name lowercased), plus the ones worked out for you, the Content-Length and
+the Content-Type. It's the list the start sends, as
+C<[[name, value], ...]>. It's the response's own list, as a Moose C<ro>
+attribute returns it: don't change what's in it.
 
 =head2 call
 
@@ -320,7 +311,8 @@ that changes it changes only that request.
 
 The response as a PAGI application; C<to_app> returns a code reference that
 calls it. It sends the start, the body as one event and, if declared, the
-trailers. The start carries C<start_headers>.
+trailers. The start carries a copy of C<headers>, so a middleware that
+changes it changes only that request.
 
 =head2 prepare
 
@@ -328,11 +320,11 @@ trailers. The start carries C<start_headers>.
 
 Makes the constructor's arguments into the response's fields, once, when
 you build it (C<BUILD> calls it with the arguments by name), one step per
-argument, in this order: C<prepare_status>, C<prepare_headers>,
-C<prepare_body>, C<prepare_content_type>, C<prepare_trailers>,
-C<prepare_cookies>. A subclass with arguments of its own extends it, or the
-step for the argument it adds to, calling the class it inherits from
-first:
+argument, in this order: C<prepare_status>, C<prepare_body>,
+C<prepare_content_type>, C<prepare_trailers>, C<prepare_cookies>, and
+C<prepare_headers> last, since the headers depend on the rest. A subclass
+with arguments of its own extends it, or the step for the argument it adds
+to, calling the class it inherits from first:
 
     sub prepare_headers ($self, $args) {
         $self->SUPER::prepare_headers($args);
@@ -345,7 +337,11 @@ The status you gave, else 200. Extend it for another default.
 
 =head2 prepare_headers
 
-Your C<headers>, copied, with each name lowercased (ASCII letters only).
+The headers the start sends, worked out once: your C<headers>, copied, with
+each name lowercased (ASCII letters only), then the Content-Length unless
+you gave one (none without a body, on 1xx, 204 and 304, which have no
+body, or with trailers, which HTTP/1.1 sends only in chunked coding), then
+the Content-Type unless you gave one.
 
 =head2 prepare_content_type
 
