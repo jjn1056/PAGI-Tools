@@ -854,6 +854,15 @@
     It used to build the class with new and no arguments, ignoring BUILD_APP.
 
   [Fixed]
+  - PAGI::Middleware::Lint and PAGI::Test::Client now refuse a body that is
+    not bytes -- a string with a character above 0xFF, which PAGI::Server
+    refuses too, or a plain reference, which would go out as ARRAY(0x...) --
+    and, over HTTP/1.x, http.response.trailers on a response that declared a
+    Content-Length, which PAGI::Server refuses (trailers there need chunked
+    coding; HTTP/2 has no such limit). Both passed these before, so a test or
+    a Lint run said yes to a response the server fails or garbles. The rules live in the shared
+    PAGI::Utils::_SendValidation, which now takes the scope's http_version;
+    Lint's advice for each names the fix.
   - PAGI::App::WrapPSGI reports psgi.nonblocking as false. A delayed
     response's writer is collected and sent when the responder callback
     returns, so a PSGI app that took the old true value at its word and wrote

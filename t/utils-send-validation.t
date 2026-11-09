@@ -35,6 +35,48 @@ subtest 'http: legal happy path with declared trailers' => sub {
     is $sv->finalize, undef, 'finalize legal';
 };
 
+subtest 'http: a body that is not bytes (as PAGI::Server rejects it)' => sub {
+    my $sv = PAGI::Utils::_SendValidation->new(scope_type => 'http');
+    is $sv->check({ type => 'http.response.start', status => 200 }), undef, 'start';
+    my $err = $sv->check({ type => 'http.response.body', body => "caf\x{e9} \x{263A}" });
+    ok $err, 'a character above 0xFF is refused';
+    is $err->category, 'malformed', 'malformed';
+    is $err->message, "http.response.body 'body' contains a character above 0xFF (encode it to bytes)", "the server's words";
+    is $sv->complete, 0, 'and it changed nothing';
+    is $sv->check({ type => 'http.response.body', body => "caf\xE9" }), undef, 'bytes 128-255 are bytes';
+};
+
+subtest 'http: a body that is a reference' => sub {
+    my $sv = PAGI::Utils::_SendValidation->new(scope_type => 'http');
+    $sv->check({ type => 'http.response.start', status => 200 });
+    my $err = $sv->check({ type => 'http.response.body', body => [1] });
+    ok $err, 'refused: a body is bytes (PAGI Www.pod)';
+    is $err && $err->category, 'malformed', 'malformed';
+    is $err && $err->message, "http.response.body 'body' must be bytes, not a ARRAY reference", 'names the reference';
+};
+
+subtest 'http/1.x: trailers after a content-length (as PAGI::Server rejects them)' => sub {
+    my $sends = sub {
+        my ($sv) = @_;
+        $sv->check({ type => 'http.response.start', status => 200, trailers => 1, headers => [['Content-Length', 3]] });
+        $sv->check({ type => 'http.response.body', body => 'abc' });
+        return $sv->check({ type => 'http.response.trailers', headers => [] });
+    };
+    for my $version ('1.1', '1.0') {
+        my $err = $sends->(PAGI::Utils::_SendValidation->new(scope_type => 'http', http_version => $version));
+        ok $err, "HTTP/$version: refused";
+        is $err && $err->category, 'sequence', "HTTP/$version: sequence";
+        is $err && $err->message, 'http.response.trailers requires chunked framing (response declared content-length)', "HTTP/$version: the server's words";
+    }
+    is $sends->(PAGI::Utils::_SendValidation->new(scope_type => 'http', http_version => '2')), undef,
+        'HTTP/2 carries trailers after a content-length';
+    is $sends->(PAGI::Utils::_SendValidation->new(scope_type => 'http')), undef, 'no version given: not checked';
+    my $chunked = PAGI::Utils::_SendValidation->new(scope_type => 'http', http_version => '1.1');
+    $chunked->check({ type => 'http.response.start', status => 200, trailers => 1, headers => [] });
+    $chunked->check({ type => 'http.response.body', body => 'abc' });
+    is $chunked->check({ type => 'http.response.trailers', headers => [] }), undef, 'HTTP/1.1 without a content-length: fine';
+};
+
 subtest 'http: missing type (verbatim probed class)' => sub {
     my $sv = PAGI::Utils::_SendValidation->new(scope_type => 'http');
     my $err = $sv->check({ status => 200 });

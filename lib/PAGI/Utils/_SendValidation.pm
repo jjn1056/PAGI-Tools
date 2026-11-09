@@ -4,6 +4,7 @@ use strict;
 use warnings;
 use namespace::autoclean;
 use Carp qw(croak);
+use Scalar::Util ();
 
 =head1 NAME
 
@@ -58,14 +59,17 @@ legal given what has already been sent.
 
     my $sv = PAGI::Utils::_SendValidation->new(
         scope_type => 'http' | 'websocket' | 'sse' | 'lifespan',
-        extensions => \%advertised,   # optional, default {}
+        extensions   => \%advertised,   # optional, default {}
+        http_version => '1.1',          # optional: the scope's
     );
 
 C<scope_type> is required and must be one of the four listed values;
 anything else croaks. C<extensions> is an optional hash reference of
 extension names the scope advertised (the same shape as the PAGI
 C<extensions> scope key); omitted or false defaults to an empty hash
-reference. Construction is the only place this module croaks on ordinary
+reference. C<http_version> is the scope's C<http_version>, when known: the
+HTTP/1.x-only rule below (trailers after a Content-Length) applies only when
+it starts with C<1.>. Construction is the only place this module croaks on ordinary
 misuse -- it represents a caller bug (wiring the validator up wrong), not an
 application-supplied event to reject.
 
@@ -90,6 +94,7 @@ sub new {
     return bless {
         scope_type        => $args{scope_type},
         extensions         => $args{extensions} || {},
+        http_version       => $args{http_version},   # the scope's, when known
         state              => $INITIAL_STATE{$args{scope_type}}, # undef for lifespan
         trailers_declared  => 0,
         refusal_http_state => 'initial',
@@ -215,7 +220,12 @@ count as terminal); C<http.response.trailers> without
 C<trailers =E<gt> 1> declared on start, or before the body has reached its
 terminal chunk; any event at all once trailers have been sent;
 C<http.fullflush> when C<fullflush> is not in the scope's C<extensions>, or
-when sent before C<http.response.start> or once C<complete>.
+when sent before C<http.response.start> or once C<complete>; a body that
+isn't bytes -- a plain reference, or a string with a character above 0xFF
+(both C<malformed>; PAGI::Server refuses the second); over HTTP/1.x
+(C<http_version>), C<http.response.trailers> on a response whose start
+declared a C<Content-Length>, since trailers there need chunked coding
+(C<sequence>, as PAGI::Server refuses it).
 
 C<http.fullflush>, when the C<fullflush> extension is declared, is legal in
 any non-C<initial>, non-C<complete> state -- including C<awaiting_trailers>
@@ -342,6 +352,25 @@ sub finalize {
 # HTTP -- see "=head2 http" in RULES above for the enforced rules.
 # =============================================================================
 
+# Bytes are characters <= 0xFF, whatever Perl's internal UTF-8 flag says; a
+# wider character can't be written to a socket (PAGI::Server refuses it too).
+sub _is_bytes {
+    my $copy = $_[0];
+    return utf8::downgrade($copy, 1);
+}
+
+# Whether a start's headers declare a content-length (names are bytes: tr).
+sub _declares_content_length {
+    my ($headers) = @_;
+    return 0 unless ref $headers eq 'ARRAY';
+    for my $pair (@$headers) {
+        next unless ref $pair eq 'ARRAY' && defined $pair->[0];
+        (my $name = $pair->[0]) =~ tr/A-Z/a-z/;
+        return 1 if $name eq 'content-length';
+    }
+    return 0;
+}
+
 sub _http_body_is_terminal {
     my ($event) = @_;
     return 1 if defined $event->{file} || defined $event->{fh};
@@ -386,6 +415,7 @@ sub _check_http_response_event {
         my $declares_trailers = $event->{trailers} ? 1 : 0;
         $self->{$state_key}    = $declares_trailers ? 'started_t' : 'started';
         $self->{$trailers_key} = $declares_trailers;
+        $self->{"${state_key}_content_length"} = _declares_content_length($event->{headers});
         return undef;
     }
 
@@ -394,6 +424,12 @@ sub _check_http_response_event {
             if $state eq 'initial';
         return $self->_error(sequence => 'cannot send http.response.body: body already terminal, awaiting trailers')
             if $state eq 'awaiting_trailers';
+        # A body is bytes (PAGI Www.pod): not a plain reference, which would go
+        # out as ARRAY(0x...), nor a string with a character above 0xFF.
+        return $self->_error(malformed => "http.response.body 'body' must be bytes, not a " . ref($event->{body}) . ' reference')
+            if ref $event->{body} && !Scalar::Util::blessed($event->{body});
+        return $self->_error(malformed => "http.response.body 'body' contains a character above 0xFF (encode it to bytes)")
+            if defined $event->{body} && !ref $event->{body} && !_is_bytes($event->{body});
         if (_http_body_is_terminal($event)) {
             $self->{$state_key} = ($state eq 'started_t') ? 'awaiting_trailers' : 'complete';
         }
@@ -404,6 +440,11 @@ sub _check_http_response_event {
         if $state eq 'initial';
     return $self->_error(sequence => 'cannot send http.response.trailers: trailers were not declared or body is not complete')
         unless $state eq 'awaiting_trailers';
+    # HTTP/1.x carries trailers only in chunked coding, which a declared
+    # content-length rules out; HTTP/2 has no such limit (PAGI Www.pod
+    # "Response Trailers").
+    return $self->_error(sequence => 'http.response.trailers requires chunked framing (response declared content-length)')
+        if $self->{"${state_key}_content_length"} && ($self->{http_version} // '') =~ /\A1\./;
     $self->{$state_key} = 'complete';
     return undef;
 }
