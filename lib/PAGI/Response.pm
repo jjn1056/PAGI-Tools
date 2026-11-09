@@ -98,7 +98,7 @@ sub prepare_headers {
 
 sub status {
     my $self = shift;
-    $self->_immutable('status') if @_;
+    _immutable('status') if @_;
     return $self->{status};
 }
 
@@ -108,30 +108,30 @@ sub status {
 # returns it: don't change it.
 sub headers {
     my $self = shift;
-    $self->_immutable('headers') if @_;
+    _immutable('headers') if @_;
     return $self->{headers};
 }
 
 sub has_trailers {
     my $self = shift;
-    $self->_immutable('has_trailers') if @_;
+    _immutable('has_trailers') if @_;
     return $self->{has_trailers};
 }
 
 sub body {
     my $self = shift;
-    $self->_immutable('body') if @_;
+    _immutable('body') if @_;
     return $self->{body};
 }
 
 sub content_type {
     my $self = shift;
-    $self->_immutable('content_type') if @_;
+    _immutable('content_type') if @_;
     return $self->{content_type};
 }
 
 sub _immutable {
-    my (undef, $name) = @_;
+    my ($name) = @_;
     Carp::croak("response is immutable: \$response->$name can't be set; build a new response");
 }
 
