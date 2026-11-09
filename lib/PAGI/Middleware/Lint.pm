@@ -145,8 +145,9 @@ sub wrap {
         my $scope_type = $scope->{type} // '';
         my $sv = ($scope_type eq 'http' || $scope_type eq 'websocket' || $scope_type eq 'sse')
             ? PAGI::Utils::_SendValidation->new(
-                scope_type => $scope_type,
-                extensions => $scope->{extensions},
+                scope_type   => $scope_type,
+                extensions   => $scope->{extensions},
+                http_version => $scope->{http_version},
             )
             : undef;
 
@@ -389,7 +390,17 @@ sub _context_for_send_error {
 
     my $type     = defined $event->{type} ? $event->{type} : '(missing)';
     my $category = $err->category;
+    my $message  = $err->message;
 
+    if ($category eq 'malformed' && $message =~ /above 0xFF/) {
+        return "app sent a body with a character above 0xFF ($message) -- a body is bytes: "
+             . "encode text first (Encode::encode('UTF-8', \$text)), or send it with a "
+             . "response class that encodes text.";
+    }
+    if ($category eq 'malformed' && $message =~ /must be bytes, not a/) {
+        return "app sent a body that is a reference ($message) -- a body is bytes; it "
+             . "would go out as its address, like ARRAY(0x...).";
+    }
     if ($category eq 'malformed') {
         return "app sent a malformed event to \$send (" . $err->message . ") -- check the "
              . "hashref you're passing; every PAGI event needs a 'type' key.";
@@ -403,6 +414,11 @@ sub _context_for_send_error {
         return $err->message . " -- declare it in the scope's 'extensions' key before "
              . "sending events that require it, or don't send them if it isn't really "
              . "implemented.";
+    }
+    if ($category eq 'sequence' && $message =~ /requires chunked framing/) {
+        return "app sent http.response.trailers on a response whose start declared a "
+             . "content-length ($message) -- over HTTP/1.1 trailers travel only in chunked "
+             . "coding: drop the content-length, or the trailers.";
     }
     if ($category eq 'sequence' && $type eq 'http.response.trailers') {
         return "app sent http.response.trailers without declaring trailers on "

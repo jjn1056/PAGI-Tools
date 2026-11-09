@@ -20,6 +20,7 @@ sub make_scope {
         query_string => $opts{query_string},
         headers      => $opts{headers} // [],
         client       => $opts{client} // ['192.168.1.100', 12345],
+        (defined $opts{http_version} ? (http_version => $opts{http_version}) : ()),
     };
 }
 
@@ -154,6 +155,36 @@ subtest 'http.response.trailers sent without declaring trailers => 1 -- warn cit
 
     ok grep(/declar/i, @warnings), 'warning cites the trailers declaration rule';
     is scalar(@events), 3, 'non-strict still forwards the illegal event -- diagnostician, not enforcer';
+};
+
+subtest 'a body that is not bytes -- warn as the server would refuse it' => sub {
+    my @warnings;
+    my $lint = PAGI::Middleware::Lint->new(on_warning => sub { push @warnings, shift });
+    my $app = async sub {
+        my ($scope, $receive, $send) = @_;
+        await $send->({ type => 'http.response.start', status => 200, headers => [] });
+        await $send->({ type => 'http.response.body', body => "caf\x{e9} \x{263A}", more => 0 });
+    };
+    run_async { $lint->wrap($app)->(make_scope(), async sub { {} }, async sub { }) };
+    ok grep(/above 0xFF/, @warnings), 'warned: a character above 0xFF';
+    ok grep(/encode text first/, @warnings), 'and says to encode it';
+};
+
+subtest 'trailers after a content-length -- warn on HTTP/1.1 only' => sub {
+    for my $case (['1.1', 1], ['2', 0]) {
+        my ($version, $expect) = @$case;
+        my @warnings;
+        my $lint = PAGI::Middleware::Lint->new(on_warning => sub { push @warnings, shift });
+        my $app = async sub {
+            my ($scope, $receive, $send) = @_;
+            await $send->({ type => 'http.response.start', status => 200, trailers => 1, headers => [['content-length', 2]] });
+            await $send->({ type => 'http.response.body', body => 'OK', more => 0 });
+            await $send->({ type => 'http.response.trailers', headers => [] });
+        };
+        run_async { $lint->wrap($app)->(make_scope(http_version => $version), async sub { {} }, async sub { }) };
+        is scalar(grep /requires chunked framing/, @warnings), $expect, "HTTP/$version: " . ($expect ? 'warned' : 'no warning');
+        is scalar(grep /drop the content-length, or the trailers/, @warnings), $expect, "HTTP/$version: " . ($expect ? 'with the fix' : 'no advice');
+    }
 };
 
 # ===================================================================
