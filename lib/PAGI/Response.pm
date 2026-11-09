@@ -7,11 +7,14 @@ use Carp ();
 use Future::AsyncAwait;
 use Class::Tiny;   # new, BUILDARGS and BUILD; the fields are this class's own
 
-# One positional first argument is the content.
+# One positional first argument is the content; given that way, it can't
+# also be given by name.
 sub BUILDARGS {
     my ($class, @args) = @_;
-    unshift @args, 'content' if @args % 2;
-    return {@args};
+    return +{@args} unless @args % 2;
+    my ($content, %args) = @args;
+    Carp::croak("content given twice: positionally and as content =>") if exists $args{content};
+    return +{content=>$content, %args};
 }
 
 # A response is immutable: built once, from what you give it, and only
@@ -95,7 +98,7 @@ sub prepare_headers {
 
 sub status {
     my $self = shift;
-    _immutable('status') if @_;
+    $self->_immutable('status') if @_;
     return $self->{status};
 }
 
@@ -105,31 +108,31 @@ sub status {
 # returns it: don't change it.
 sub headers {
     my $self = shift;
-    _immutable('headers') if @_;
+    $self->_immutable('headers') if @_;
     return $self->{headers};
 }
 
 sub has_trailers {
     my $self = shift;
-    _immutable('has_trailers') if @_;
+    $self->_immutable('has_trailers') if @_;
     return $self->{has_trailers};
 }
 
 sub body {
     my $self = shift;
-    _immutable('body') if @_;
+    $self->_immutable('body') if @_;
     return $self->{body};
 }
 
 sub content_type {
     my $self = shift;
-    _immutable('content_type') if @_;
+    $self->_immutable('content_type') if @_;
     return $self->{content_type};
 }
 
 sub _immutable {
-    my ($name) = @_;
-    Carp::croak("PAGI::Response is immutable: \$response->$name can't be set; build a new response");
+    my ($self, $name) = @_;
+    Carp::croak(ref($self) . " is immutable: \$response->$name can't be set; build a new response");
 }
 
 # 204 and 304 responses cannot contain content (RFC 9110 6.4.1), nor can a
@@ -256,7 +259,8 @@ extend C<prepare> or one of its steps; see L</COOKBOOK>.
 
 =item content
 
-What to send: one argument before the others is the content. It's rendered
+What to send: one argument before the others is the content, or give it
+by name; not both, which croaks. It's rendered
 to bytes once, by C<render>, and kept as C<body>. Here it must already be
 bytes: a string with a character above 0xFF, or a reference, fails when
 it's sent, as the PAGI spec has a server refuse it (L<PAGI::Test::Client>

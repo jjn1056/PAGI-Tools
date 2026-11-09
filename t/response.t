@@ -22,6 +22,14 @@ subtest 'bytes: the start, then the body' => sub {
     is(PAGI::Response->new(content => 'abc')->body, 'abc', 'content by name');
 };
 
+subtest 'content is given once: positionally or by name' => sub {
+    like(dies { PAGI::Response->new('abc', content => 'xyz') },
+        qr/\Acontent given twice: positionally and as content =>/, 'both croaks');
+    like(dies { Local::CSV->new([[1]], content => [[2]]) }, qr/\Acontent given twice/, 'in a subclass too');
+    is(PAGI::Response->new('abc')->body, 'abc', 'positionally');
+    is(PAGI::Response->new(content => 'abc')->body, 'abc', 'by name');
+};
+
 subtest 'no content' => sub {
     my $res = get(PAGI::Response->new);
     is $res->content, '', 'an empty body';
@@ -64,6 +72,8 @@ subtest 'immutable: read, never written' => sub {
         like(dies { $res->$name(1) }, qr/\APAGI::Response is immutable: \$response->$name can't be set; build a new response/, "$name can't be set");
     }
     is $res->status, 201, 'and nothing changed';
+    like(dies { Local::CSV->new([[1]])->status(204) }, qr/\ALocal::CSV is immutable: \$response->status can't be set/,
+        "a subclass's own name");
     is(PAGI::Response->new('abc')->content_type, 'application/octet-stream', 'content_type: the default when none was given');
 };
 
