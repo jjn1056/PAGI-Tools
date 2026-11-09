@@ -59,8 +59,8 @@ subtest 'immutable: read, never written' => sub {
     ok !$res->can('start_headers'), 'one list, not two';
     is $res->content_type, 'text/csv', 'content_type';
     is $res->body, 'abc', 'body';
-    ok !$res->trailers, 'trailers';
-    for my $name (qw(status headers content_type body trailers)) {
+    ok !$res->has_trailers, 'has_trailers';
+    for my $name (qw(status headers content_type body has_trailers)) {
         like(dies { $res->$name(1) }, qr/\APAGI::Response is immutable: \$response->$name can't be set; build a new response/, "$name can't be set");
     }
     is $res->status, 201, 'and nothing changed';
@@ -125,18 +125,24 @@ subtest 'content must be bytes: the send says so, as a server would' => sub {
 package Local::ByBody { use parent -norequire, 'PAGI::Response';
     sub default_content_type { my ($self, $body) = @_; ($body // '') =~ /\A\{/ ? 'application/json' : 'text/plain' } }
 package Local::Steps { use parent -norequire, 'PAGI::Response';
-    sub prepare_content_type { my ($self, $args) = @_; $self->{content_type} = $args->{format} // 'text/csv' }
-    sub prepare_trailers { my ($self, $args) = @_; $self->{trailers} = $args->{checksum} ? 1 : 0 }
-    sub prepare_cookies { my ($self, $args) = @_; $self->{seen_cookies} = $args->{cookies} } }
+    sub prepare_content_type { my ($self, $args) = @_; return $args->{format} // 'text/csv' }
+    sub prepare_has_trailers { my ($self, $args) = @_; return $args->{checksum} ? 1 : 0 }
+    sub prepare_cookies { my ($self, $args) = @_; $Local::Steps::SEEN_COOKIES = $args->{cookies}; return } }
 package Local::Moved { use parent -norequire, 'PAGI::Response';
-    sub prepare_status { my ($self, $args) = @_; $self->{status} = $args->{status} // 302 } }
+    sub prepare_status { my ($self, $args) = @_; return $args->{status} // 302 } }
 package Local::Located { use parent -norequire, 'PAGI::Response';
-    sub prepare_headers { my ($self, $args) = @_; $self->SUPER::prepare_headers($args); push @{ $self->{headers} }, ['location', $args->{location}] } }
+    sub prepare_headers { my ($self, $args, %prepared) = @_;
+        my $headers = $self->SUPER::prepare_headers($args, %prepared);
+        push @$headers, ['location', $args->{location}];
+        return $headers } }
+package Local::Given { use parent -norequire, 'PAGI::Response';
+    sub prepare_content_type { my ($self, $args, %prepared) = @_; $Local::Given::TYPE_GOT = {%prepared};
+        return $prepared{body} =~ /\A\{/ ? 'application/json' : 'text/plain' }
+    sub prepare_headers { my ($self, $args, %prepared) = @_; $Local::Given::HEADERS_GOT = {%prepared};
+        return $self->SUPER::prepare_headers($args, %prepared) } }
 package Local::CSV { use parent -norequire, 'PAGI::Response';
     sub default_content_type { 'text/csv' }
     sub render { my ($self, $rows) = @_; join '', map { join(',', @$_) . "\r\n" } @$rows } }
-package Local::Checksum { use parent -norequire, 'PAGI::Response';
-    sub trailers_for { my ($self, $scope) = @_; [['x-checksum', "sha256=$scope->{method}"]] } }
 package main;
 
 subtest 'prepare: a subclass adds its own arguments' => sub {
@@ -147,8 +153,16 @@ subtest 'prepare: a subclass adds its own arguments' => sub {
     is(Local::Moved->new(status => 301)->status, 301, 'and yours wins');
     my $steps = Local::Steps->new('abc', checksum => 1, cookies => [['a', 1]]);
     is $steps->content_type, 'text/csv', 'prepare_content_type extended';
-    ok $steps->trailers, 'prepare_trailers extended';
-    is $steps->{seen_cookies}, [['a', 1]], 'prepare_cookies is called with the arguments';
+    ok $steps->has_trailers, 'prepare_has_trailers extended';
+    is $Local::Steps::SEEN_COOKIES, [['a', 1]], 'prepare_cookies is called with the arguments';
+};
+
+subtest 'each step is given what it depends on' => sub {
+    my $res = Local::Given->new('{"a":1}', status => 201, has_trailers => 1);
+    is $Local::Given::TYPE_GOT, { status => 201, body => '{"a":1}' }, 'prepare_content_type: the status and the body';
+    is $res->content_type, 'application/json', 'and decides from them';
+    is $Local::Given::HEADERS_GOT, { status => 201, body => '{"a":1}', content_type => 'application/json', has_trailers => 1 },
+        'prepare_headers: everything it is worked out from';
 };
 
 subtest 'default_content_type is given the body' => sub {
@@ -158,11 +172,11 @@ subtest 'default_content_type is given the body' => sub {
     is(PAGI::Response->default_content_type(''), undef, 'an empty body: no type');
 };
 
-subtest 'prepare: content_type and trailers as given' => sub {
+subtest 'prepare: content_type and has_trailers as given' => sub {
     is(PAGI::Response->new('abc', content_type => 'image/png')->content_type, 'image/png', 'content_type');
     is(PAGI::Response->new('abc', content_type => undef)->headers, [['content-length', 3]], 'content_type undef: none sent');
-    ok(PAGI::Response->new('abc', trailers => 1)->trailers, 'trailers');
-    ok(!PAGI::Response->new('abc')->trailers, 'no trailers by default');
+    ok(PAGI::Response->new('abc', has_trailers => 1)->has_trailers, 'has_trailers');
+    ok(!PAGI::Response->new('abc')->has_trailers, 'none by default');
 };
 
 subtest 'a format of your own' => sub {
@@ -171,13 +185,16 @@ subtest 'a format of your own' => sub {
     is $res->content_type, 'text/csv', 'its type';
 };
 
-subtest 'trailers' => sub {
-    my $res = get(Local::Checksum->new('abc', trailers => 1));
+subtest 'has_trailers: declared at new, sent empty after a buffered body' => sub {
+    my $res;
+    is warnings { $res = get(PAGI::Response->new('abc', has_trailers => 1)) }, [],
+        'the response completes: declared trailers are sent (the client warns if they never come)';
+    ok !$res->exception, 'and the strict client accepts the declaration';
     is $res->content, 'abc', 'the body';
-    is $res->header('content-length'), undef, 'no content-length';
-    is $res->trailer_pairs, [['x-checksum', 'sha256=GET']], 'sent after the body, per request';
-    is get(PAGI::Response->new('abc', trailers => 1))->trailer_pairs, [], 'none given: empty';
-    is get(Local::Checksum->new('abc'))->trailer_pairs, [], 'not declared: none sent';
+    is $res->header('content-length'), undef, 'no content-length: HTTP/1.1 sends trailers only in chunked coding';
+    is $res->trailer_pairs, [], 'an empty trailers event: a buffered body has nothing to put in one';
+    is get(PAGI::Response->new('abc'))->trailer_pairs, [], 'not declared: none sent';
+    ok !PAGI::Response->can('trailers_for'), 'no per-request trailers hook';
 };
 
 done_testing;

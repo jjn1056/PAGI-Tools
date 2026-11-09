@@ -23,71 +23,72 @@ sub BUILD {
 }
 
 # The constructor's arguments, made into the response's fields: one step
-# per argument. A subclass with arguments of its own extends this, or the
-# step for the argument it adds to.
+# per argument. Each step returns its value and prepare keeps it; a step
+# that depends on others is given their values, never left to read fields
+# another step may not have set yet. A subclass with arguments of its own
+# extends this, or the step for the argument it adds to.
 sub prepare {
     my ($self, $args) = @_;
-    $self->prepare_status($args);
-    $self->prepare_body($args);
-    $self->prepare_content_type($args);   # after the body: the default may depend on it
-    $self->prepare_trailers($args);
+    my $status   = $self->{status}   = $self->prepare_status($args);
+    my $body     = $self->{body}     = $self->prepare_body($args);
+    my $type     = $self->{content_type}
+                 = $self->prepare_content_type($args, status => $status, body => $body);
+    my $has_trailers = $self->{has_trailers} = $self->prepare_has_trailers($args);
     $self->prepare_cookies($args);
-    $self->prepare_headers($args);        # last: the headers depend on all of the above
+    $self->{headers} = $self->prepare_headers($args,
+        status => $status, body => $body, content_type => $type, has_trailers => $has_trailers);
     return;
 }
 
 # The status: yours, else 200.
 sub prepare_status {
     my ($self, $args) = @_;
-    $self->{status} = $args->{status} // 200;
-    return;
+    return $args->{status} // 200;
 }
 
-# The headers the start sends, worked out once: yours, copied (so changing
-# your list later changes nothing) with each name lowercased (names are
-# bytes, so tr changes ASCII letters only), then the body's length and the
-# type unless you gave them. No length on a status that has no body (RFC
-# 9110), nor with trailers, which HTTP/1.1 sends only in chunked coding, nor
-# without a body.
-sub prepare_headers {
+# The content, rendered to bytes once.
+sub prepare_body {
     my ($self, $args) = @_;
-    my @headers = map { my $name = $_->[0]; $name =~ tr/A-Z/a-z/; [$name, $_->[1]] } @{ $args->{headers} // [] };
-    my %has = map { $_->[0] => 1 } @headers;
-    push @headers, ['content-length', length $self->{body}]
-        if defined $self->{body} && !$has{'content-length'} && !$self->{trailers}
-        && !_without_content($self->{status});
-    push @headers, ['content-type', $self->{content_type}]
-        if defined $self->{content_type} && !$has{'content-type'};
-    $self->{headers} = \@headers;
-    return;
+    return $self->render($args->{content});
 }
 
-# The type you gave, undef included; else the class's default, except on a
-# status without content (RFC 9110 15.4.5: a 304 doesn't describe a
-# representation).
+# The type you gave, undef included; else the class's default for the body,
+# except on a status without content (RFC 9110 15.4.5: a 304 doesn't
+# describe a representation).
 sub prepare_content_type {
-    my ($self, $args) = @_;
-    $self->{content_type} = exists $args->{content_type}  ? $args->{content_type}
-                          : _without_content($self->{status}) ? undef
-                          :                                  $self->default_content_type($self->{body});
-    return;
+    my ($self, $args, %prepared) = @_;
+    return $args->{content_type} if exists $args->{content_type};
+    return undef if _without_content($prepared{status});
+    return $self->default_content_type($prepared{body});
 }
 
-# Whether trailers follow the body.
-sub prepare_trailers {
+# Whether this response declares trailers. It's decided at new because the
+# start, sent before the body, must say so; the values come from whatever
+# sends the body, at its end.
+sub prepare_has_trailers {
     my ($self, $args) = @_;
-    $self->{trailers} = $args->{trailers} ? 1 : 0;
-    return;
+    return $args->{has_trailers} ? 1 : 0;
 }
 
 # Cookies: none here. The step where a response takes its cookies.
 sub prepare_cookies { return }
 
-# The content, rendered to bytes once.
-sub prepare_body {
-    my ($self, $args) = @_;
-    $self->{body} = $self->render($args->{content});
-    return;
+# The headers the start sends, worked out once from what the other steps
+# prepared: yours, copied (so changing your list later changes nothing)
+# with each name lowercased (names are bytes, so tr changes ASCII letters
+# only), then the body's length and the type unless you gave them. No
+# length on a status that has no body (RFC 9110), nor when trailers are declared, which
+# HTTP/1.1 sends only in chunked coding, nor without a body.
+sub prepare_headers {
+    my ($self, $args, %prepared) = @_;
+    my @headers = map { my $name = $_->[0]; $name =~ tr/A-Z/a-z/; [$name, $_->[1]] } @{ $args->{headers} // [] };
+    my %has = map { $_->[0] => 1 } @headers;
+    push @headers, ['content-length', length $prepared{body}]
+        if defined $prepared{body} && !$has{'content-length'} && !$prepared{has_trailers}
+        && !_without_content($prepared{status});
+    push @headers, ['content-type', $prepared{content_type}]
+        if defined $prepared{content_type} && !$has{'content-type'};
+    return \@headers;
 }
 
 # The getters. Given a value, each croaks: nothing about a response changes.
@@ -108,10 +109,10 @@ sub headers {
     return $self->{headers};
 }
 
-sub trailers {
+sub has_trailers {
     my $self = shift;
-    _immutable('trailers') if @_;
-    return $self->{trailers};
+    _immutable('has_trailers') if @_;
+    return $self->{has_trailers};
 }
 
 sub body {
@@ -160,15 +161,14 @@ async sub call {
         type    => 'http.response.start',
         status  => $self->status,
         headers => [map { [@$_] } @{ $self->headers }],   # a copy: a middleware may edit it
-        ($self->trailers ? (trailers => 1) : ()),
+        ($self->has_trailers ? (trailers => 1) : ()),
     });
     await $send->({ type => 'http.response.body', body => $self->body });
-    await $send->({ type => 'http.response.trailers', headers => $self->trailers_for($scope) })
-        if $self->trailers;
+    # Declared trailers end the response, so a buffered body, which has
+    # nothing to put in them, sends them empty.
+    await $send->({ type => 'http.response.trailers', headers => [] })
+        if $self->has_trailers;
 }
-
-# The trailers for one request, when trailers are declared: none here.
-sub trailers_for { [] }
 
 1;
 
@@ -237,7 +237,8 @@ it happens once.
 
 Where else we differ from Starlette, it's for Perl or for PAGI. Bytes with
 no type are sent as C<application/octet-stream>. We don't add a charset to the
-type you give. And PAGI has trailers, so we do too.
+type you give. And PAGI has trailers, so a response can declare them;
+see L</Trailers>.
 
 =head1 DESCRIPTION
 
@@ -280,17 +281,19 @@ C<default_content_type>, except on a 1xx, 204 or 304 response, which has no
 content to describe. One you give is sent as given, on any status: no
 charset is added, and C<undef> sends none.
 
-=item trailers
+=item has_trailers
 
-True to send trailers after the body (L<PAGI::Spec::Www/Response Trailers>):
-the start declares them, there's no Content-Length (HTTP/1.1 sends trailers
-only in chunked coding), and C<trailers_for> gives them. Defaults to false.
+True to declare that trailers follow the body (L<PAGI::Spec::Www/Response
+Trailers>): the start says so, and there's no Content-Length (HTTP/1.1
+sends trailers only in chunked coding). It's decided here, at C<new>,
+because the start goes out before the body. Defaults to false. See
+L</Trailers> for where their values come from.
 
 =back
 
 =head1 METHODS
 
-=head2 status, headers, content_type, trailers, body
+=head2 status, headers, content_type, has_trailers, body
 
     my $status = $response->status;
 
@@ -321,46 +324,63 @@ changes it changes only that request.
 Makes the constructor's arguments into the response's fields, once, when
 you build it (C<BUILD> calls it with the arguments by name), one step per
 argument, in this order: C<prepare_status>, C<prepare_body>,
-C<prepare_content_type>, C<prepare_trailers>, C<prepare_cookies>, and
-C<prepare_headers> last, since the headers depend on the rest. A subclass
-with arguments of its own extends it, or the step for the argument it adds
-to, calling the class it inherits from first:
+C<prepare_content_type>, C<prepare_has_trailers>, C<prepare_cookies>, and
+C<prepare_headers> last. Each step returns its value, and C<prepare> keeps
+it. A step that depends on others is given their values, after the
+arguments, as name/value pairs, so it never reads a field another step
+may not have set yet.
 
-    sub prepare_headers ($self, $args) {
-        $self->SUPER::prepare_headers($args);
-        push $self->{headers}->@*, ['location', $args->{location}];
+A subclass with arguments of its own extends the step for the argument it
+adds to, calling the class it inherits from first and returning the
+value:
+
+    sub prepare_headers ($self, $args, %prepared) {
+        my $headers = $self->SUPER::prepare_headers($args, %prepared);
+        push @$headers, ['location', $args->{location}];
+        return $headers;
     }
 
 =head2 prepare_status
 
+    my $status = $response->prepare_status($args);
+
 The status you gave, else 200. Extend it for another default.
 
-=head2 prepare_headers
+=head2 prepare_body
 
-The headers the start sends, worked out once: your C<headers>, copied, with
-each name lowercased (ASCII letters only), then the Content-Length unless
-you gave one (none without a body, on 1xx, 204 and 304, which have no
-body, or with trailers, which HTTP/1.1 sends only in chunked coding), then
-the Content-Type unless you gave one.
+    my $body = $response->prepare_body($args);
+
+The content, rendered to bytes once, by C<render>.
 
 =head2 prepare_content_type
 
+    my $type = $response->prepare_content_type($args, status => $status, body => $body);
+
 The C<content_type> you gave, C<undef> included; else the class's
-C<default_content_type>, except on a 1xx, 204 or 304 response, which has no
-content to describe. It runs after C<prepare_body>, since the default may
-depend on the body.
+C<default_content_type> for the body, except on a 1xx, 204 or 304
+response, which has no content to describe.
 
-=head2 prepare_trailers
+=head2 prepare_has_trailers
 
-Whether C<trailers> follow the body.
+    my $has_trailers = $response->prepare_has_trailers($args);
+
+Whether the response declares trailers: C<has_trailers>.
 
 =head2 prepare_cookies
 
 Cookies: none here. It's the step where a response takes its cookies.
 
-=head2 prepare_body
+=head2 prepare_headers
 
-The content, rendered to bytes once, by C<render>.
+    my $headers = $response->prepare_headers($args,
+        status => $status, body => $body, content_type => $type, has_trailers => $has_trailers);
+
+The headers the start sends, worked out once from what the other steps
+prepared: your C<headers>, copied, with each name lowercased (ASCII
+letters only), then the Content-Length unless you gave one (none without a
+body, on 1xx, 204 and 304, which have no body, or when trailers are declared, which
+HTTP/1.1 sends only in chunked coding), then the Content-Type unless you
+gave one.
 
 =head2 render
 
@@ -380,12 +400,6 @@ when there is a body, since RFC 9110 8.3 says a recipient may assume that
 anyway, and none when there isn't. It's given the body rather than reading
 the response's, so it depends on nothing else having been prepared.
 Override it for a format of your own.
-
-=head2 trailers_for
-
-    sub trailers_for ($self, $scope) { [[name, value], ...] }
-
-The trailers for one request, when C<trailers> is declared: none here.
 
 =head1 COOKBOOK
 
@@ -411,18 +425,16 @@ value fails there, not halfway through a request:
 
 =head2 Trailers
 
-Trailers are headers sent after the body. For a buffered body, give them
-with C<trailers_for>, which runs for each request:
+Trailers are headers sent after the body, for what's only known once the
+body has gone out: a running length, a checksum over a stream. A buffered
+body is known in full before the start is sent, so anything you'd put in a
+trailer about it goes in a header instead.
 
-    package Signed {
-        use v5.40;
-        use parent 'PAGI::Response';
-        use Digest::SHA qw(sha256_hex);
-
-        sub trailers_for ($self, $scope) { [['x-checksum', 'sha256=' . sha256_hex($self->body)]] }
-    }
-
-    my $download = Signed->new("%PDF-1.7 ...", content_type => 'application/pdf', trailers => 1);
+A response declares trailers with C<< has_trailers => 1 >>, at C<new>,
+because the start, which goes out first, must say so. Their values come
+from whatever sends the body, at its end; a response that streams its body
+is where that happens. A buffered response that declares them sends them
+empty, so the response still completes.
 
 Many clients, browsers among them, don't show trailers to the application,
 so don't put anything there a client can't do without.
