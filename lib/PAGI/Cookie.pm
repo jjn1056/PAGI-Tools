@@ -3,26 +3,86 @@ package PAGI::Cookie;
 use v5.24;
 use warnings;
 use Carp ();
+# The getters are this class's own (read-only), so they're declared before
+# Class::Tiny is loaded, which then makes no accessors of its own.
+use subs qw(name value path domain expires max_age samesite secure httponly partitioned);
+use Class::Tiny qw(name value path domain expires max_age samesite secure httponly partitioned);
 
-# Built from name => value pairs, checked once (_check): a cookie that
-# exists is one a browser can carry. It can't be changed after.
-sub new {
-    my ($class, @args) = @_;
-    Carp::croak("cookie arguments are name => value pairs: new(name => 'id', value => 'abc')")
-        if @args % 2;
-    my $self = bless { path => '/', value => '', @args }, $class;
+# A cookie is immutable: built once, from what you give it, and checked
+# then (_check): a cookie that exists is one a browser can carry. Nothing
+# about it changes after.
+sub BUILD {
+    my ($self) = @_;
     $self->_check;
-    return $self;
 }
 
-# Read-only getters: given a value, each croaks.
-for my $field (qw(name value path domain expires max_age samesite secure httponly partitioned)) {
-    no strict 'refs';
-    *{__PACKAGE__ . "::$field"} = sub {
-        my $self = shift;
-        Carp::croak("cookie is immutable: \$cookie->$field can't be set; build a new cookie") if @_;
-        return $self->{$field};
-    };
+# The getters. Given a value, each croaks: nothing about a cookie changes.
+
+sub name {
+    my $self = shift;
+    _immutable('name') if @_;
+    return $self->{name};
+}
+
+# Yours, else empty.
+sub value {
+    my $self = shift;
+    _immutable('value') if @_;
+    return exists $self->{value} ? $self->{value} : '';
+}
+
+# Yours, undef included (no Path at all), else '/'.
+sub path {
+    my $self = shift;
+    _immutable('path') if @_;
+    return exists $self->{path} ? $self->{path} : '/';
+}
+
+sub domain {
+    my $self = shift;
+    _immutable('domain') if @_;
+    return $self->{domain};
+}
+
+sub expires {
+    my $self = shift;
+    _immutable('expires') if @_;
+    return $self->{expires};
+}
+
+sub max_age {
+    my $self = shift;
+    _immutable('max_age') if @_;
+    return $self->{max_age};
+}
+
+sub samesite {
+    my $self = shift;
+    _immutable('samesite') if @_;
+    return $self->{samesite};
+}
+
+sub secure {
+    my $self = shift;
+    _immutable('secure') if @_;
+    return $self->{secure};
+}
+
+sub httponly {
+    my $self = shift;
+    _immutable('httponly') if @_;
+    return $self->{httponly};
+}
+
+sub partitioned {
+    my $self = shift;
+    _immutable('partitioned') if @_;
+    return $self->{partitioned};
+}
+
+sub _immutable {
+    my ($name) = @_;
+    Carp::croak("cookie is immutable: \$cookie->$name can't be set; build a new cookie");
 }
 
 # The header, ready for a response's headers or a start event's.
@@ -33,15 +93,15 @@ sub header {
 
 sub as_string {
     my ($self) = @_;
-    my @parts = ("$self->{name}=$self->{value}");
-    push @parts, "Path=$self->{path}"                       if defined $self->{path};
-    push @parts, "Domain=$self->{domain}"                   if defined $self->{domain};
-    push @parts, 'Expires=' . _date($self->{expires})       if defined $self->{expires};
-    push @parts, "Max-Age=$self->{max_age}"                 if defined $self->{max_age};
-    push @parts, 'SameSite=' . ucfirst lc $self->{samesite} if defined $self->{samesite};
-    push @parts, 'Secure'      if $self->{secure};
-    push @parts, 'HttpOnly'    if $self->{httponly};
-    push @parts, 'Partitioned' if $self->{partitioned};
+    my @parts = ($self->name . '=' . $self->value);
+    push @parts, 'Path=' . $self->path                     if defined $self->path;
+    push @parts, 'Domain=' . $self->domain                 if defined $self->domain;
+    push @parts, 'Expires=' . _date($self->expires)        if defined $self->expires;
+    push @parts, 'Max-Age=' . $self->max_age               if defined $self->max_age;
+    push @parts, 'SameSite=' . ucfirst lc $self->samesite  if defined $self->samesite;
+    push @parts, 'Secure'      if $self->secure;
+    push @parts, 'HttpOnly'    if $self->httponly;
+    push @parts, 'Partitioned' if $self->partitioned;
     return join '; ', @parts;
 }
 
@@ -49,12 +109,15 @@ sub as_string {
 # browser removes the one it has.
 sub expired {
     my ($self) = @_;
-    return ref($self)->new(%$self, value => '', max_age => 0, expires => 0);
+    return ref($self)->new(
+        (map { $_ => $self->$_ } qw(name path domain samesite secure httponly partitioned)),
+        value => '', max_age => 0, expires => 0,
+    );
 }
 
 sub _check {
     my ($self) = @_;
-    my ($name, $value) = @$self{qw(name value)};
+    my ($name, $value) = ($self->name, $self->value);
     Carp::croak('a cookie needs a name') unless defined $name && length $name;
     Carp::croak("cookie name contains '$1': a name is an RFC 6265 token")
         if $name =~ /([^!#\$%&'*+\-.^_`|~0-9A-Za-z])/;
@@ -63,13 +126,13 @@ sub _check {
     Carp::croak("cookie value contains '$1', which browsers can't carry: encode it first (Base64 or URI::Escape)")
         if $value =~ /([^\x21\x23-\x2B\x2D-\x3A\x3C-\x5B\x5D-\x7E])/;
     for my $attr (qw(path domain)) {
-        _plain_text($attr, $self->{$attr}) if defined $self->{$attr};
+        _plain_text($attr, $self->$attr) if defined $self->$attr;
     }
-    _plain_text('expires', $self->{expires}) if defined $self->{expires} && $self->{expires} !~ /\A\d+\z/;
+    _plain_text('expires', $self->expires) if defined $self->expires && $self->expires !~ /\A\d+\z/;
     Carp::croak('max_age must be a whole number of seconds')
-        if defined $self->{max_age} && $self->{max_age} !~ /\A-?\d+\z/;
+        if defined $self->max_age && $self->max_age !~ /\A-?\d+\z/;
     Carp::croak('samesite must be lax, strict or none')
-        if defined $self->{samesite} && $self->{samesite} !~ /\A(?:lax|strict|none)\z/i;
+        if defined $self->samesite && $self->samesite !~ /\A(?:lax|strict|none)\z/i;
     _check_together($self);
     my $bytes = length $self->as_string;
     Carp::croak("cookie $name is $bytes bytes: browsers ignore one over 4096") if $bytes > 4096;
@@ -80,13 +143,13 @@ sub _check {
 # the fix rather than adding it: you see what's sent.
 sub _check_together {
     my ($self) = @_;
-    my $name = $self->{name};
-    Carp::croak("a $1 cookie needs secure => 1") if $name =~ /\A(__Secure-|__Host-)/ && !$self->{secure};
+    my $name = $self->name;
+    Carp::croak("a $1 cookie needs secure => 1") if $name =~ /\A(__Secure-|__Host-)/ && !$self->secure;
     Carp::croak("a __Host- cookie needs path => '/' and no domain")
-        if $name =~ /\A__Host-/ && (($self->{path} // '') ne '/' || defined $self->{domain});
+        if $name =~ /\A__Host-/ && (($self->path // '') ne '/' || defined $self->domain);
     Carp::croak('samesite => none needs secure => 1: browsers drop it otherwise')
-        if defined $self->{samesite} && lc $self->{samesite} eq 'none' && !$self->{secure};
-    Carp::croak('partitioned needs secure => 1') if $self->{partitioned} && !$self->{secure};
+        if defined $self->samesite && lc $self->samesite eq 'none' && !$self->secure;
+    Carp::croak('partitioned needs secure => 1') if $self->partitioned && !$self->secure;
 }
 
 # No ; and no control character: either would end or break the header.
@@ -135,6 +198,13 @@ PAGI::Cookie - One correct Set-Cookie header
     PAGI::Response->new(status => 303,
         headers => [['location', '/login'], session_cookie()->expired->header]);
 
+=head1 INHERITANCE
+
+    PAGI::Cookie
+      Class::Tiny::Object
+
+C<new> comes from L<Class::Tiny>; the getters are this class's own.
+
 =head1 DESCRIPTION
 
 A cookie is a header: C<Set-Cookie>, with a name, a value and attributes.
@@ -161,8 +231,6 @@ cookie you built is the one sent.
 =head1 CONSTRUCTOR ARGUMENTS
 
     my $cookie = PAGI::Cookie->new(name => $name, value => $value, %attributes);
-
-Name/value pairs, never a hash reference: C<< new({ ... }) >> croaks.
 
 =over 4
 

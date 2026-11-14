@@ -40,13 +40,6 @@ subtest 'expired: the same cookie, emptied and expired' => sub {
         '__Host-id=; Path=/; Expires=Thu, 01 Jan 1970 00:00:00 GMT; Max-Age=0; Secure', 'a prefixed cookie expires too');
 };
 
-subtest 'arguments are name => value pairs' => sub {
-    like dies { cookie({ name => 'id', value => 'abc' }) },
-        qr/\Acookie arguments are name => value pairs: new\(name => 'id', value => 'abc'\)/, 'a hash reference croaks';
-    like dies { cookie(name => 'id', 'value') },
-        qr/\Acookie arguments are name => value pairs/, 'an odd list croaks';
-};
-
 subtest 'getters: read, never written' => sub {
     my $c = cookie(name => 'id', value => 'v', domain => 'example.com', max_age => 5, secure => 1);
     is [map { $c->$_ } qw(name value path domain max_age secure)], ['id', 'v', '/', 'example.com', 5, 1], 'what it was built with';
