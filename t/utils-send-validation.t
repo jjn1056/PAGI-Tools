@@ -732,6 +732,12 @@ subtest 'http/1.x: a body is counted against its content-length' => sub {
     is message_for(http => [start_length(3), body_of(fh => $fh, length => 4)]),
         'http.response.body would send 4 bytes, 1 more than the declared content-length (3)', 'an fh with a length';
     is message_for(http => [start_length(3), body_of(fh => $fh)]), undef, 'an fh without one is not counted';
+    is message_for(http => [start_length($size + 5), body_of(file => __FILE__, length => $size + 5)]),
+        'http.response.body ends the response 5 bytes short of the declared content-length (' . ($size + 5) . ')',
+        'a file counts what it holds, not a longer length';
+    is message_for(http => [start_length($size + 5), body_of(fh => $fh, length => $size + 5)]),
+        'http.response.body ends the response 5 bytes short of the declared content-length (' . ($size + 5) . ')',
+        'so does an fh on a file';
     close $fh;
 
     is message_for(http => [start_length(2), body_of(body => 'abcd')], method => 'HEAD'), undef, 'not for HEAD';

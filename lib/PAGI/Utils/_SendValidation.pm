@@ -241,9 +241,10 @@ WebSocket refusal's status is 300 or above (a C<sequence> failure).
 Over HTTP/1.x (C<http_version>), a response that declares a
 C<content-length> is counted: a body send that would go past it, or a
 terminal one that leaves bytes owing, fails (C<sequence>) and changes
-nothing, so the right bytes may still be sent. A C<file> counts its
-C<length>, or its size less its C<offset>; an C<fh> counts its C<length>,
-and one without a C<length> is not counted. HEAD (C<method>), 204 and 304
+nothing, so the right bytes may still be sent. A C<file> counts what it
+holds from its C<offset>, at most its C<length>; an C<fh> counts its
+C<length>, at most what it holds when it is on a file, and one without a
+C<length> is not counted. HEAD (C<method>), 204 and 304
 are not counted. Refusals are counted like any response.
 
 =head2 http
@@ -696,13 +697,22 @@ sub _count_problem {
 sub _body_send_bytes {
     my ($event) = @_;
     my ($file, $fh) = @$event{qw(file fh)};
-    if (defined $file) {
-        return undef unless -f $file;
-        my $bytes = $event->{length} // ((-s $file) - ($event->{offset} // 0));
-        return $bytes < 0 ? 0 : $bytes;
+    return length($event->{body} // '') unless defined $file || defined $fh;
+
+    # A file, or an fh on one, sends what it holds from its offset, and no
+    # more than a length you give.
+    my $length = $event->{length};
+    my $holds;
+    if (-f (defined $file ? $file : $fh)) {
+        $holds = (-s _) - ($event->{offset} // 0);
+        $holds = 0 if $holds < 0;
     }
-    return $event->{length} if defined $fh;
-    return length($event->{body} // '');
+    if (defined $file) {
+        return undef unless defined $holds;   # not there: the send that reads it says so
+        return defined $length && $length < $holds ? $length : $holds;
+    }
+    return undef unless defined $length;
+    return defined $holds && $holds < $length ? $holds : $length;
 }
 
 sub _http_body_is_opaque {

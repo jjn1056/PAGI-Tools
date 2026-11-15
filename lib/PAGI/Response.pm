@@ -364,6 +364,11 @@ it changes only that request), and, if declared, that trailers follow.
 The body. Here, the buffered C<body>, as one event. A subclass with a body
 of its own overrides it, sending its body events, and returns the trailer
 values it has by the body's end (C<[[name, value], ...]>), or nothing.
+Such a subclass has no buffered body, so its C<prepare_body> returns undef,
+as Starlette's C<StreamingResponse> has none: otherwise the start declares
+the buffered body's length (C<0> without content), and a server fails the
+body that doesn't match it. To declare a length, give C<content-length> in
+C<headers>.
 Returning values when C<has_trailers> wasn't declared is an error: the
 start has already gone out without saying trailers follow, so C<call>
 croaks once the body is sent.
