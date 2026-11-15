@@ -16,6 +16,8 @@ use Test2::V0;
 
 use Future::AsyncAwait;
 use PAGI::Test::Client;
+use Test::Lib;
+use PAGITest::LowercaseHeaders;
 
 # =============================================================================
 # SSE scope method tests

@@ -4,6 +4,8 @@ use utf8;
 use Test2::V0;
 use Future::AsyncAwait;
 use PAGI::Test::Client;
+use Test::Lib;
+use PAGITest::LowercaseHeaders;
 
 # With root_path, the client serves the app as a server configured with that
 # root path would behind a proxy that strips it: requests take the browser's

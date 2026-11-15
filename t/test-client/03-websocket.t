@@ -6,6 +6,8 @@ use Future::AsyncAwait;
 use Time::HiRes ();
 
 use PAGI::Test::Client;
+use Test::Lib;
+use PAGITest::LowercaseHeaders;
 
 # Simple echo WebSocket app
 my $echo_app = async sub {

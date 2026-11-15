@@ -3,6 +3,8 @@ use warnings;
 use Test2::V0;
 use Future;
 use PAGI::Test::Client;
+use Test::Lib;
+use PAGITest::LowercaseHeaders;
 
 use PAGI::Response;
 

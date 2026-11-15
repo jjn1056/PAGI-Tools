@@ -23,6 +23,7 @@ sub new {
         app        => $args{app},
         scope      => $args{scope},
         request_body => $args{request_body} // '',
+        lowercase_headers => $args{lowercase_headers} ? 1 : 0,
         recv_queue => [],      # Events from app -> test
         closed     => 0,
         started    => 0,
@@ -46,6 +47,7 @@ sub _start {
         scope_type   => 'sse',
         extensions   => $self->{scope}{extensions} // {},
         http_version => $self->{scope}{http_version},
+        lowercase_headers => $self->{lowercase_headers},
     );
 
     # Create receive coderef for the app.
@@ -372,10 +374,13 @@ real server tolerates writes racing a peer that has already gone away.
     my $sse = PAGI::Test::SSE->new(
         app   => $app,     # Required: PAGI app coderef
         scope => $scope,   # Required: SSE scope hashref
+        lowercase_headers => 1,  # Optional: 0 (default) or 1
     );
 
 Creates a new SSE test connection. Typically you don't call this directly;
-use L<PAGI::Test::Client>'s C<sse> method instead.
+use L<PAGI::Test::Client>'s C<sse> method instead. C<lowercase_headers> is
+L<PAGI::Test::Client/lowercase_headers>: when true, a header name with an
+uppercase letter in C<sse.start> or a refusal fails the send.
 
 =head1 METHODS
 

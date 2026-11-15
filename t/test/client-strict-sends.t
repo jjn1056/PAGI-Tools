@@ -1,5 +1,7 @@
 use strict; use warnings; use Test::More; use Future::AsyncAwait;
 use PAGI::Test::Client;
+use Test::Lib;
+use PAGITest::LowercaseHeaders;
 
 # ---------------------------------------------------------------------------
 # B1: Test::Client's http $send is strict -- illegal events fail the send

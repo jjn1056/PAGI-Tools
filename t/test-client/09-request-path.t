@@ -5,6 +5,8 @@ use Test2::V0;
 use Future::AsyncAwait;
 
 use PAGI::Test::Client;
+use Test::Lib;
+use PAGITest::LowercaseHeaders;
 
 # Test::Client builds path, raw_path and query_string as PAGI::Server does
 # from the request target: raw_path is the path as sent (percent-encoded

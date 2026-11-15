@@ -5,6 +5,8 @@ use Test2::V0;
 use Future::AsyncAwait;
 
 use PAGI::Test::Client;
+use Test::Lib;
+use PAGITest::LowercaseHeaders;
 
 # App that throws an exception
 my $broken_app = async sub {

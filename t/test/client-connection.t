@@ -1,5 +1,7 @@
 use strict; use warnings; use Test::More; use Future::AsyncAwait;
 use PAGI::Test::Client;
+use Test::Lib;
+use PAGITest::LowercaseHeaders;
 
 my ($seen, $completed);
 my $http_scope;

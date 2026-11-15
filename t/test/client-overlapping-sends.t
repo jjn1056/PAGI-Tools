@@ -5,6 +5,8 @@ use Future;
 use Future::AsyncAwait;
 
 use PAGI::Test::Client;
+use Test::Lib;
+use PAGITest::LowercaseHeaders;
 
 # PAGI::Test::Client advertises Www 0.7, so it keeps "Sends Are Sequential":
 # sends an application issues before earlier ones resolve are processed in

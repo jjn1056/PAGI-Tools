@@ -6,6 +6,8 @@ use Future::AsyncAwait;
 use Time::HiRes ();
 
 use PAGI::Test::Client;
+use Test::Lib;
+use PAGITest::LowercaseHeaders;
 
 # Simple SSE app
 my $sse_app = async sub {

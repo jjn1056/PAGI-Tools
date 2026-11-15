@@ -3,6 +3,8 @@ use warnings;
 use Test2::V0;
 use Future::AsyncAwait;
 use PAGI::Test::Client;
+use Test::Lib;
+use PAGITest::LowercaseHeaders;
 use PAGI::Test::ConnectionState;
 
 subtest 'terminal observers are isolated and see final peer metadata' => sub {

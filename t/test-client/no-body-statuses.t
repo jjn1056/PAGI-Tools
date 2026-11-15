@@ -3,6 +3,8 @@ use warnings;
 use Test2::V0;
 use Future::AsyncAwait;
 use PAGI::Test::Client;
+use Test::Lib;
+use PAGITest::LowercaseHeaders;
 
 # PAGI::Spec::Www, "Statuses Without Content": on a 204 or 304 response
 # the server writes no body bytes, opens no file or fh, and accepts and

@@ -3,6 +3,8 @@ use warnings;
 use Test2::V0;
 use Future::AsyncAwait;
 use PAGI::Test::Client;
+use Test::Lib;
+use PAGITest::LowercaseHeaders;
 
 # A request's body is $request->body; the test response says the same.
 my $app = async sub {

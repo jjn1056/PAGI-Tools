@@ -5,6 +5,8 @@ use Test2::V0;
 use Future::AsyncAwait;
 
 use PAGI::Test::Client;
+use Test::Lib;
+use PAGITest::LowercaseHeaders;
 
 # Realistic app with routing
 my $app = async sub {

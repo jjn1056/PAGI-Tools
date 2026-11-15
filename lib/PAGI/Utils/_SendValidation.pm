@@ -63,6 +63,7 @@ sequence.
         extensions   => \%advertised,   # optional, default {}
         http_version => '1.1',          # optional: the scope's
         method       => 'GET',          # optional: the request's
+        lowercase_headers => 1,         # optional: default 0
     );
 
 C<scope_type> is required and must be one of the four listed values;
@@ -72,7 +73,9 @@ C<extensions> scope key); omitted or false defaults to an empty hash
 reference. C<http_version> is the scope's C<http_version>, when known: the
 HTTP/1.x-only rules below (trailers after a Content-Length, and the body
 count) apply only when it starts with C<1.>. C<method> is the request's
-method, when known: a C<HEAD> response's body is not counted. Construction
+method, when known: a C<HEAD> response's body is not counted. With
+C<lowercase_headers> true, a header name with an uppercase letter fails
+(C<malformed>), on every event that carries headers. Construction
 is the only place this module croaks on ordinary
 misuse -- it represents a caller bug (wiring the validator up wrong), not an
 application-supplied event to reject.
@@ -100,6 +103,7 @@ sub new {
         extensions         => $args{extensions} || {},
         http_version       => $args{http_version},   # the scope's, when known
         method             => $args{method},         # the request's, when known
+        lowercase_headers  => $args{lowercase_headers} ? 1 : 0,
         state              => $INITIAL_STATE{$args{scope_type}}, # undef for lifespan
         trailers_declared  => 0,
         refusal_http_state => 'initial',
@@ -647,6 +651,23 @@ sub _lifespan_event_problem {
     return undef;
 }
 
+my %CARRIES_HEADERS = map { $_ => 1 }
+    qw(http.response.start http.response.trailers websocket.accept sse.start);
+
+# With lowercase_headers on, a response header name with an uppercase letter
+# (PAGI Www.pod: names an application sends SHOULD be lowercase). Names have
+# passed the token check, so they are shown as they are.
+sub _uppercase_name_problem {
+    my ($self, $event) = @_;
+    return undef unless $self->{lowercase_headers} && $CARRIES_HEADERS{$event->{type}};
+    my $headers = $event->{headers} // [];
+    for my $i (0 .. $#$headers) {
+        return "$event->{type} header $i: name '$headers->[$i][0]' has uppercase letters (lowercase_headers is on)"
+            if $headers->[$i][0] =~ /[A-Z]/;
+    }
+    return undef;
+}
+
 # A WebSocket refusal's status is 300 or above: 101 is the HTTP/1.1
 # acceptance and any HTTP/2 2xx answer to the CONNECT opens the tunnel.
 sub _refusal_status_problem {
@@ -785,7 +806,7 @@ sub _check_http {
             || $type eq 'http.fullflush';
 
     # Fields first, then the sequence.
-    if (my $problem = _http_event_problem($event)) {
+    if (my $problem = _http_event_problem($event) // $self->_uppercase_name_problem($event)) {
         return $self->_error(malformed => $problem);
     }
     return $self->_check_http_response_event($event, 'state', 'trailers_declared');
@@ -823,7 +844,7 @@ sub _check_websocket {
             || $type eq 'websocket.close' || $type eq 'websocket.keepalive';
 
     # Fields first, then the sequence.
-    if (my $problem = _websocket_event_problem($event)) {
+    if (my $problem = _websocket_event_problem($event) // $self->_uppercase_name_problem($event)) {
         return $self->_error(malformed => $problem);
     }
     if (my $problem = _refusal_status_problem($event)) {
@@ -913,7 +934,7 @@ sub _check_sse {
         || $type eq 'http.fullflush';
 
     # Fields first, then the sequence.
-    if (my $problem = _sse_event_problem($event)) {
+    if (my $problem = _sse_event_problem($event) // $self->_uppercase_name_problem($event)) {
         return $self->_error(malformed => $problem);
     }
 

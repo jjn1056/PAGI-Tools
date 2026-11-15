@@ -29,6 +29,7 @@ sub new {
         closed      => 0,
         accepted    => 0,
         close_mode  => $args{close_mode} // 'cooperative',
+        lowercase_headers => $args{lowercase_headers} ? 1 : 0,
         close_code  => undef,
         close_reason => '',
         refused     => 0,
@@ -48,6 +49,7 @@ sub _start {
         scope_type   => 'websocket',
         extensions   => $self->{scope}{extensions} // {},
         http_version => $self->{scope}{http_version},
+        lowercase_headers => $self->{lowercase_headers},
     );
 
     # Create receive coderef for the app. A receive that has to wait returns
@@ -527,10 +529,14 @@ connection itself and knows it.
     my $ws = PAGI::Test::WebSocket->new(
         app   => $app,     # Required: PAGI app coderef
         scope => $scope,   # Required: WebSocket scope hashref
+        lowercase_headers => 1,  # Optional: 0 (default) or 1
     );
 
 Creates a new WebSocket test connection. Typically you don't call this
 directly; use L<PAGI::Test::Client>'s C<websocket> method instead.
+C<lowercase_headers> is L<PAGI::Test::Client/lowercase_headers>: when true,
+a header name with an uppercase letter in C<websocket.accept> or a refusal
+fails the send.
 
 =head1 METHODS
 

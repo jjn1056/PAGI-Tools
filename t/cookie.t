@@ -2,6 +2,8 @@ use v5.24;
 use warnings;
 use Test2::V0;
 use PAGI::Test::Client;
+use Test::Lib;
+use PAGITest::LowercaseHeaders;
 
 use PAGI::Response;
 use PAGI::Cookie;

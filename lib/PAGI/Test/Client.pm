@@ -47,6 +47,7 @@ sub new {
         cookies              => {},
         lifespan             => $args{lifespan} // 0,
         raise_app_exceptions => $args{raise_app_exceptions} // 0,
+        lowercase_headers    => $args{lowercase_headers} ? 1 : 0,
         root_path            => $root_path,
         started              => 0,
     }, $class;
@@ -143,7 +144,7 @@ sub _request {
     # decoder.
     my $sv = PAGI::Utils::_SendValidation->new(
         scope_type => 'http', extensions => $scope->{extensions}, http_version => $scope->{http_version},
-        method => $method);
+        method => $method, lowercase_headers => $self->{lowercase_headers});
     my $response = PAGI::Test::Response->new(events => []);
     # Whether the response may carry content: not for HEAD, nor for a 204
     # or 304 status (PAGI::Spec::Www, "HEAD Requests" and "Statuses Without
@@ -444,7 +445,8 @@ sub websocket {
 
     $scope->{state} = $self->_state_copy if $self->{state};
 
-    my $ws = PAGI::Test::WebSocket->new(app => $self->{app}, scope => $scope, close_mode => $opts{close_mode});
+    my $ws = PAGI::Test::WebSocket->new(app => $self->{app}, scope => $scope, close_mode => $opts{close_mode},
+        lowercase_headers => $self->{lowercase_headers});
     my $weak_ws = $ws;
     weaken($weak_ws);
     $connection->_set_abort_hook(sub {
@@ -561,6 +563,7 @@ sub sse {
     my $sse = PAGI::Test::SSE->new(
         app => $self->{app}, scope => $scope,
         request_body => $opts{body} // '',
+        lowercase_headers => $self->{lowercase_headers},
     );
     my $weak_sse = $sse;
     weaken($weak_sse);
@@ -1135,6 +1138,7 @@ and C<http.response.body> refusal events are core WWW 0.6 behavior.
         app      => $app,           # Required: PAGI app coderef
         headers  => { ... },        # Optional: default headers
         lifespan => 1,              # Optional: 1 (strict), 'auto', or 0 (default)
+        lowercase_headers => 1,     # Optional: 0 (default) or 1
     );
 
 =head3 Options
@@ -1199,6 +1203,20 @@ L<PAGI::Spec::Lifespan>): an application that declines runs without
 lifespan, and C<stop> sends it no shutdown. Only
 C<lifespan.startup.failed> fails C<start>. Use it to run an application as
 a server would, as L<PAGI::App>'s command line does.
+
+=item lowercase_headers
+
+Off by default. When true, a response header name your application sends
+with an uppercase letter fails the send, on C<http.response.start>,
+C<http.response.trailers>, C<websocket.accept> and C<sse.start>, refusals
+included:
+
+    http.response.start header 0: name 'Set-Cookie' has uppercase letters (lowercase_headers is on)
+
+PAGI Www.pod says the names an application sends SHOULD be lowercase; a
+server accepts either. Turn it on to hold your application to that. The
+C<websocket> and C<sse> connections this client makes use the same setting;
+the request headers your test sends are not checked.
 
 =item raise_app_exceptions
 

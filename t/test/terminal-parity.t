@@ -5,6 +5,8 @@ use Future;
 use Future::AsyncAwait;
 
 use PAGI::Test::Client;
+use Test::Lib;
+use PAGITest::LowercaseHeaders;
 
 # PAGI::Test::Client records the disconnect detail PAGI::Server records for
 # each terminal outcome (PAGI-Server's lib/PAGI/Server/Connection.pm, cited

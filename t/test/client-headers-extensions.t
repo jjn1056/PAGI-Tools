@@ -1,5 +1,7 @@
 use strict; use warnings; use Test::More; use Future::AsyncAwait;
 use PAGI::Test::Client;
+use Test::Lib;
+use PAGITest::LowercaseHeaders;
 
 # helper: await a send, trapping a failure without dying the app
 async sub try_send {

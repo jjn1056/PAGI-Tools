@@ -6,6 +6,8 @@ use Future::AsyncAwait;
 use Time::HiRes ();
 
 use PAGI::Test::Client;
+use Test::Lib;
+use PAGITest::LowercaseHeaders;
 
 # Net against a regression that hangs the suite. Neither the old nor the fixed
 # start() should ever exceed a couple of seconds here; this only fires if a

@@ -6,6 +6,8 @@ use Future::AsyncAwait;
 use Future::IO;
 
 use PAGI::Test::Client;
+use Test::Lib;
+use PAGITest::LowercaseHeaders;
 
 # As on a server (PAGI::Spec::Www, "Meaning per scope"): an application may
 # cancel a pending receive -- Future->wait_any cancels the one that loses a

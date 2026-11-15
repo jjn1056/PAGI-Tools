@@ -7,6 +7,8 @@ use File::Temp qw(tempfile);
 use Time::HiRes ();
 
 use PAGI::Test::Client;
+use Test::Lib;
+use PAGITest::LowercaseHeaders;
 
 # Simple test app
 my $app = async sub {

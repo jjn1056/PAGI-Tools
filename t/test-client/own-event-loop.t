@@ -5,6 +5,7 @@ use Test2::V0;
 use Test::Lib;
 use PAGITest::FutureXS qw(old_future_xs);
 use PAGI::Test::Client;
+use PAGITest::LowercaseHeaders;
 use PAGITest::OwnLoopApp qw(own_loop_app);
 
 # Cancelling a timed-out IO::Async::Future trips the "lost a sequence Future"
