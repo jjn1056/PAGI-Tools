@@ -142,7 +142,8 @@ sub _request {
     # Validated events are handed to PAGI::Test::Response's one captured-wire
     # decoder.
     my $sv = PAGI::Utils::_SendValidation->new(
-        scope_type => 'http', extensions => $scope->{extensions}, http_version => $scope->{http_version});
+        scope_type => 'http', extensions => $scope->{extensions}, http_version => $scope->{http_version},
+        method => $method);
     my $response = PAGI::Test::Response->new(events => []);
     # Whether the response may carry content: not for HEAD, nor for a 204
     # or 304 status (PAGI::Spec::Www, "HEAD Requests" and "Statuses Without
@@ -1040,9 +1041,11 @@ delivery. These in-process facts do not model socket framing or timing.
 =head1 SEND STRICTNESS (http)
 
 The C<$send> coderef given to your app during an HTTP request is strict: it
-validates every event against the PAGI http send-sequencing rules via
+validates every event against the PAGI http send rules (its fields, then the sequence) via
 L<PAGI::Utils::_SendValidation> and fails the returned Future (the app's C<await
-$send->(...)> dies) for anything a real server would reject -- an
+$send->(...)> dies) for anything a real server would reject -- a field
+the PAGI spec or RFC 9110 rules out, such as a header value with a CR or a
+body longer than its content-length (C<malformed>/C<sequence>), an
 unrecognized or missing event C<type> (C<malformed>/C<unknown_type>), an
 out-of-order event such as a duplicate C<http.response.start> or a body
 chunk before it (C<sequence>), or undeclared C<http.response.trailers>

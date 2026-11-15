@@ -45,8 +45,9 @@ sub _start {
     # scope. Ordinary HTTP refusal events are core WWW 0.6 behavior and do
     # not require an extension.
     my $sv = PAGI::Utils::_SendValidation->new(
-        scope_type => 'websocket',
-        extensions => $self->{scope}{extensions} // {},
+        scope_type   => 'websocket',
+        extensions   => $self->{scope}{extensions} // {},
+        http_version => $self->{scope}{http_version},
     );
 
     # Create receive coderef for the app. A receive that has to wait returns
@@ -498,7 +499,7 @@ fully emulate transport timing or network buffering.
 =head1 SEND STRICTNESS
 
 The C<$send> coderef given to your app is strict: it validates every event
-against the PAGI websocket send-sequencing rules via
+against the PAGI websocket send rules (its fields, then the sequence) via
 L<PAGI::Utils::_SendValidation> and fails the returned Future (the app's C<await
 $send-E<gt>(...)> dies) for anything a real server would reject -- a
 C<websocket.send>/C<websocket.keepalive> before C<websocket.accept>, any

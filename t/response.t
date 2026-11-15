@@ -88,11 +88,11 @@ subtest 'what you gave new is copied' => sub {
 };
 
 subtest 'headers: yours, lowercased, and they win' => sub {
-    my $given = [['X-One', 'a'], ["X-\xC9tag", 'b']];
+    my $given = [['X-One', 'a'], ['X-One-Two', 'b']];
     my $res = get(PAGI::Response->new('abc', headers => $given));
-    is sent_headers($res), [['x-one', 'a'], ["x-\xC9tag", 'b'], ['content-length', 3], ['content-type', 'application/octet-stream']],
-        'names lowercased (ASCII letters only), then the length and type';
-    is $given, [['X-One', 'a'], ["X-\xC9tag", 'b']], 'yours are untouched';
+    is sent_headers($res), [['x-one', 'a'], ['x-one-two', 'b'], ['content-length', 3], ['content-type', 'application/octet-stream']],
+        'names lowercased, then the length and type';
+    is $given, [['X-One', 'a'], ['X-One-Two', 'b']], 'yours are untouched';
     is sent_headers(get(PAGI::Response->new('abc', headers => [['Content-Type', 'image/png'], ['Content-Length', 3]], content_type => 'x/y'))),
         [['content-type', 'image/png'], ['content-length', 3]], 'a content-type or content-length you give is the one sent';
     my $typed = get(PAGI::Response->new('abc', content_type => 'image/png', status => 201));
@@ -120,9 +120,9 @@ subtest 'a middleware that edits the start in place changes only that request' =
 
 subtest 'bytes 128-255 pass through unchanged (CONTRIBUTING.md)' => sub {
     for my $byte ("\x85", "\xA0", "\xC3\xA0", "\xC9") {
-        my $res = get(PAGI::Response->new("a${byte}b", headers => [["X-$byte", "v$byte "]]));
-        is sent_headers($res), [["x-$byte", "v$byte "], ['content-length', length "a${byte}b"], ['content-type', 'application/octet-stream']],
-            sprintf('%vX: the name keeps it, the value is untouched, the length counts bytes', $byte);
+        my $res = get(PAGI::Response->new("a${byte}b", headers => [['X-B', "v${byte}w"]]));
+        is sent_headers($res), [['x-b', "v${byte}w"], ['content-length', length "a${byte}b"], ['content-type', 'application/octet-stream']],
+            sprintf('%vX: the value is untouched, the length counts bytes', $byte);
         is $res->content, "a${byte}b", sprintf('%vX: the content is unchanged', $byte);
     }
 };
@@ -151,7 +151,10 @@ package Local::Given { use parent -norequire, 'PAGI::Response';
         return $prepared{body} =~ /\A\{/ ? 'application/json' : 'text/plain' }
     sub prepare_headers { my ($self, $args, %prepared) = @_; $Local::Given::HEADERS_GOT = {%prepared};
         return $self->SUPER::prepare_headers($args, %prepared) } }
+# Sends a body of its own, so it has no content to declare a length for (as
+# Starlette's StreamingResponse has no body).
 package Local::TwoChunks { use parent -norequire, 'PAGI::Response'; use Future::AsyncAwait;
+    sub prepare_body { return undef }
     async sub send_body { my ($self, $scope, $receive, $send) = @_;
         await $send->({ type => 'http.response.body', body => 'a', more => 1 });
         await $send->({ type => 'http.response.body', body => 'b' });

@@ -4,6 +4,7 @@ use strict;
 use warnings;
 use namespace::autoclean;
 use Carp qw(croak);
+use Encode ();
 use Scalar::Util ();
 
 =head1 NAME
@@ -47,11 +48,11 @@ mirror the categories and intent of the reference server's
 C<PAGI::Server::EventValidator> sequencing state machines, adapted to a
 never-dies, single-object-per-scope interface.
 
-This module does B<not> perform full event-shape validation (header byte
-safety, field types, and so on) -- that remains the sending environment's
-job. It validates only: whether the event type is recognized for the scope,
-whether an extension-gated type was advertised, and whether the event is
-legal given what has already been sent.
+It checks whether the event type is recognized for the scope, whether an
+extension-gated type was advertised, whether the event's fields are what the
+PAGI spec and RFC 9110 allow (see L</Fields>), and whether the event is legal
+given what has already been sent. Fields are checked first, then the
+sequence.
 
 =head1 CONSTRUCTOR
 
@@ -61,6 +62,7 @@ legal given what has already been sent.
         scope_type => 'http' | 'websocket' | 'sse' | 'lifespan',
         extensions   => \%advertised,   # optional, default {}
         http_version => '1.1',          # optional: the scope's
+        method       => 'GET',          # optional: the request's
     );
 
 C<scope_type> is required and must be one of the four listed values;
@@ -68,8 +70,10 @@ anything else croaks. C<extensions> is an optional hash reference of
 extension names the scope advertised (the same shape as the PAGI
 C<extensions> scope key); omitted or false defaults to an empty hash
 reference. C<http_version> is the scope's C<http_version>, when known: the
-HTTP/1.x-only rule below (trailers after a Content-Length) applies only when
-it starts with C<1.>. Construction is the only place this module croaks on ordinary
+HTTP/1.x-only rules below (trailers after a Content-Length, and the body
+count) apply only when it starts with C<1.>. C<method> is the request's
+method, when known: a C<HEAD> response's body is not counted. Construction
+is the only place this module croaks on ordinary
 misuse -- it represents a caller bug (wiring the validator up wrong), not an
 application-supplied event to reject.
 
@@ -95,6 +99,7 @@ sub new {
         scope_type        => $args{scope_type},
         extensions         => $args{extensions} || {},
         http_version       => $args{http_version},   # the scope's, when known
+        method             => $args{method},         # the request's, when known
         state              => $INITIAL_STATE{$args{scope_type}}, # undef for lifespan
         trailers_declared  => 0,
         refusal_http_state => 'initial',
@@ -203,9 +208,39 @@ scopes.
 
 =head1 RULES
 
-The enforced send-sequencing rules, one per scope type. These are what
-C<check> and C<finalize> actually enforce; read this section rather than the
-implementation to know what is legal to send.
+The enforced rules: the fields every scope checks first, then the send
+sequence, one per scope type. These are what C<check> and C<finalize>
+actually enforce; read this section rather than the implementation to know
+what is legal to send.
+
+=head2 Fields
+
+Checked before the sequence; a failure is C<malformed>. Every C<headers>
+list (on C<http.response.start>, C<http.response.trailers>,
+C<websocket.accept> and C<sse.start>) is an array of name/value pairs of
+defined strings, each name an RFC 9110 token (S5.1) and each value an RFC
+9110 field value (S5.5). The message names the event, the header's index
+and its escaped name, and never the value:
+C<http.response.start header 1 ('x-v'): value contains CR (\x0d) at offset 1>.
+
+A C<status>, required on C<http.response.start> and optional on
+C<sse.start>, is three digits from 200 to 599. An C<http.response.start>
+carries at most one C<content-length>, compared case-insensitively, holding
+one decimal number. The other fields have the types the PAGI spec gives
+them: C<trailers> and C<more> 0 or 1; at most one of C<body>/C<file>/C<fh>,
+with C<offset> and C<length> non-negative integers; C<websocket.send> exactly
+one of C<bytes>/C<text>; a C<websocket.close> C<reason> at most 123 bytes as
+UTF-8; a keepalive's C<interval> a non-negative number; C<sse.send>'s
+C<data> a string and its C<event> and C<id> without newlines; and so on. A
+WebSocket refusal's status is 300 or above (a C<sequence> failure).
+
+Over HTTP/1.x (C<http_version>), a response that declares a
+C<content-length> is counted: a body send that would go past it, or a
+terminal one that leaves bytes owing, fails (C<sequence>) and changes
+nothing, so the right bytes may still be sent. A C<file> counts its
+C<length>, or its size less its C<offset>; an C<fh> counts its C<length>,
+and one without a C<length> is not counted. HEAD (C<method>), 204 and 304
+are not counted. Refusals are counted like any response.
 
 =head2 http
 
@@ -352,6 +387,13 @@ sub finalize {
 # HTTP -- see "=head2 http" in RULES above for the enforced rules.
 # =============================================================================
 
+# Event fields (PAGI Www.pod, RFC 9110). Each *_problem function returns
+# undef for a good event, else the message.
+
+sub _is_nonneg_int    { my ($v) = @_; return defined $v && !ref $v && $v =~ /\A[0-9]+\z/ }
+sub _is_bool01        { my ($v) = @_; return defined $v && !ref $v && $v =~ /\A[01]\z/ }
+sub _is_nonneg_number { my ($v) = @_; return defined $v && !ref $v && $v =~ /\A[0-9]+(?:\.[0-9]+)?\z/ }
+
 # Bytes are characters <= 0xFF, whatever Perl's internal UTF-8 flag says; a
 # wider character can't be written to a socket (PAGI::Server refuses it too).
 sub _is_bytes {
@@ -359,38 +401,312 @@ sub _is_bytes {
     return utf8::downgrade($copy, 1);
 }
 
-# Whether a start's headers declare a content-length (names are bytes: tr).
-sub _declares_content_length {
-    my ($headers) = @_;
-    return 0 unless ref $headers eq 'ARRAY';
-    for my $pair (@$headers) {
-        next unless ref $pair eq 'ARRAY' && defined $pair->[0];
-        (my $name = $pair->[0]) =~ tr/A-Z/a-z/;
-        return 1 if $name eq 'content-length';
+# A response's status is final: three digits, 200 to 599. 1xx belongs to the
+# server, and a leading zero, sign, fraction or padding would go to the wire
+# as given.
+sub _status_problem {
+    my ($event_type, $status) = @_;
+    return undef if defined $status && !ref $status && $status =~ /\A[2-5][0-9]{2}\z/;
+    my $got = defined $status ? _escape_nonprintable("$status") : 'undef';
+    return "$event_type 'status' must be 200 to 599 (got '$got')";
+}
+
+# A header name is an RFC 9110 token (S5.1). A value is an RFC 9110 field
+# value (S5.5): empty, or bytes 0x21-0x7E and 0x80-0xFF with SP and HTAB only
+# between two of them. A message shows the offending character by code and
+# offset; it may show the name, escaped, and never shows the value.
+
+my %CHAR_NAME = ("\t" => 'HTAB', ' ' => 'SP', "\r" => 'CR', "\n" => 'LF',
+    "\0" => 'NUL', "\x7F" => 'DEL');
+
+sub _describe_char {
+    my ($c) = @_;
+    my $ord = ord $c;
+    return "a character above 0xFF (" . sprintf('\x{%x}', $ord) . ")" if $ord > 0xFF;
+    my $code = sprintf '\x%02x', $ord;
+    return "$CHAR_NAME{$c} ($code)"       if exists $CHAR_NAME{$c};
+    return "a control character ($code)" if $ord < 0x20;
+    return "a non-ASCII byte ($code)"    if $ord >= 0x80;
+    return "'$c' ($code)";
+}
+
+sub _escape_nonprintable {
+    my ($text) = @_;
+    $text =~ s/([^\x20-\x7E])/ord $1 > 0xFF ? sprintf('\x{%x}', ord $1) : sprintf('\x%02x', ord $1)/ge;
+    return $text;
+}
+
+sub _header_name_problem {
+    my ($name) = @_;
+    return 'name is empty' if $name eq '';
+    return undef unless $name =~ /[^!#\$%&'*+\-.^_`|~0-9A-Za-z]/;
+    my $at = $-[0];
+    return "name '" . _escape_nonprintable($name) . "' contains " . _describe_char(substr $name, $at, 1)
+        . " at offset $at (a header name must be an RFC 9110 token)";
+}
+
+sub _header_value_problem {
+    my ($value) = @_;
+    if ($value =~ /[^\t\x20-\x7E\x80-\xFF]/) {
+        my $at = $-[0];
+        my $c  = substr $value, $at, 1;
+        return 'value contains ' . _describe_char($c) . " at offset $at"
+            . (ord $c > 0xFF ? ' (encode it to bytes)' : '');
     }
-    return 0;
+    return 'value starts with ' . _describe_char($1) . '; trim it' if $value =~ /\A([ \t])/;
+    return 'value ends with '   . _describe_char($1) . '; trim it' if $value =~ /([ \t])\z/;
+    return undef;
+}
+
+sub _headers_problem {
+    my ($headers, $event_type) = @_;
+    return "$event_type 'headers' must be an array reference"
+        unless ref $headers eq 'ARRAY';
+    for my $i (0 .. $#$headers) {
+        my $h = $headers->[$i];
+        return "$event_type headers: each header must be a 2-element array reference"
+            unless ref $h eq 'ARRAY' && @$h == 2;
+        return "$event_type headers: header name and value must be defined strings"
+            if !defined $h->[0] || !defined $h->[1] || ref $h->[0] || ref $h->[1];
+        if (defined(my $problem = _header_name_problem($h->[0]))) {
+            return "$event_type header $i: $problem";
+        }
+        if (defined(my $problem = _header_value_problem($h->[1]))) {
+            return "$event_type header $i ('" . _escape_nonprintable($h->[0]) . "'): $problem";
+        }
+    }
+    return undef;
+}
+
+# A response frames its body by content-length, so it may carry one field
+# line holding one decimal number (RFC 9110 S8.6). A list ('5, 5') or a
+# second line, equal or not, is a framing ambiguity.
+sub _content_length_problem {
+    my ($headers, $event_type) = @_;
+    my $first;
+    for my $i (0 .. $#$headers) {
+        my ($name, $value) = @{ $headers->[$i] };
+        next unless lc $name eq 'content-length';
+        my $where = "$event_type header $i ('" . _escape_nonprintable($name) . "')";
+        return "$where: content-length appears more than once (also header $first)"
+            if defined $first;
+        return "$where: content-length must be one decimal number"
+            unless $value =~ /\A[0-9]+\z/;
+        $first = $i;
+    }
+    return undef;
+}
+
+# The body length that headers already checked declare, or undef.
+sub _declared_content_length {
+    my ($headers) = @_;
+    for my $h (@{ $headers // [] }) {
+        return 0 + $h->[1] if lc $h->[0] eq 'content-length';
+    }
+    return undef;
+}
+
+sub _http_start_problem {
+    my ($event) = @_;
+    return "http.response.start requires 'status' field"
+        unless exists $event->{status};
+    my $problem = _status_problem('http.response.start', $event->{status});
+    return $problem if $problem;
+    if (defined $event->{headers}) {
+        $problem = _headers_problem($event->{headers}, 'http.response.start')
+            // _content_length_problem($event->{headers}, 'http.response.start');
+        return $problem if $problem;
+    }
+    return "http.response.start 'trailers' must be 0 or 1"
+        if defined $event->{trailers} && !_is_bool01($event->{trailers});
+    return undef;
+}
+
+sub _http_body_problem {
+    my ($event) = @_;
+    my $count = grep { exists $event->{$_} } qw(body file fh);
+    return "http.response.body requires exactly one of body/file/fh (got $count)"
+        if $count > 1;   # none is an empty body
+    # A body is bytes (PAGI Www.pod): not a plain reference, which would go
+    # out as ARRAY(0x...), nor a string with a character above 0xFF.
+    return "http.response.body 'body' must be bytes, not a " . ref($event->{body}) . ' reference'
+        if ref $event->{body} && !Scalar::Util::blessed($event->{body});
+    return "http.response.body 'body' contains a character above 0xFF (encode it to bytes)"
+        if defined $event->{body} && !ref $event->{body} && !_is_bytes($event->{body});
+    for my $field (qw(offset length)) {
+        return "http.response.body '$field' must be a non-negative integer"
+            if defined $event->{$field} && !_is_nonneg_int($event->{$field});
+    }
+    return "http.response.body 'more' must be 0 or 1"
+        if defined $event->{more} && !_is_bool01($event->{more});
+    return undef;
+}
+
+# The http.response.* events, on an http scope or as a refusal.
+sub _http_event_problem {
+    my ($event) = @_;
+    my $type = $event->{type};
+    return _http_start_problem($event) if $type eq 'http.response.start';
+    return _http_body_problem($event)  if $type eq 'http.response.body';
+    return _headers_problem($event->{headers}, 'http.response.trailers')
+        if $type eq 'http.response.trailers' && defined $event->{headers};
+    return undef;
+}
+
+sub _keepalive_problem {
+    my ($event) = @_;
+    my $type = $event->{type};
+    return "$type requires 'interval' field" unless exists $event->{interval};
+    return "$type 'interval' must be a non-negative number"
+        unless _is_nonneg_number($event->{interval});
+    return undef;
+}
+
+sub _websocket_event_problem {
+    my ($event) = @_;
+    my $type = $event->{type};
+    return _http_event_problem($event) if $type =~ /\Ahttp\./;
+    return _headers_problem($event->{headers}, 'websocket.accept')
+        if $type eq 'websocket.accept' && defined $event->{headers};
+    if ($type eq 'websocket.send') {
+        my $count = grep { defined $event->{$_} } qw(bytes text);
+        return "websocket.send requires exactly one of bytes/text (got $count)"
+            unless $count == 1;
+        return "websocket.send 'bytes' must be bytes, not a " . ref($event->{bytes}) . ' reference'
+            if ref $event->{bytes} && !Scalar::Util::blessed($event->{bytes});
+        return "websocket.send 'bytes' contains a character above 0xFF (encode it to bytes, or send text)"
+            if defined $event->{bytes} && !ref $event->{bytes} && !_is_bytes($event->{bytes});
+    }
+    if ($type eq 'websocket.close') {
+        return "websocket.close 'code' must be a non-negative integer"
+            if defined $event->{code} && !_is_nonneg_int($event->{code});
+        if (defined $event->{reason}) {
+            return "websocket.close 'reason' must be a string" if ref $event->{reason};
+            # RFC 6455 5.5: a close frame's payload is at most 125 bytes, the
+            # 2-byte code and the reason, which is sent as UTF-8.
+            my $bytes = $event->{reason};
+            utf8::encode($bytes);
+            return "websocket.close 'reason' must be at most 123 bytes as UTF-8 (got " . length($bytes) . ')'
+                if length($bytes) > 123;
+        }
+    }
+    if ($type eq 'websocket.keepalive') {
+        my $problem = _keepalive_problem($event);
+        return $problem if $problem;
+        return "websocket.keepalive 'timeout' must be a non-negative number"
+            if defined $event->{timeout} && !_is_nonneg_number($event->{timeout});
+    }
+    return undef;
+}
+
+sub _sse_event_problem {
+    my ($event) = @_;
+    my $type = $event->{type};
+    return _http_event_problem($event) if $type =~ /\Ahttp\./;
+    if ($type eq 'sse.start') {
+        my $problem = defined $event->{status} ? _status_problem('sse.start', $event->{status}) : undef;
+        return $problem if $problem;
+        return _headers_problem($event->{headers}, 'sse.start') if defined $event->{headers};
+    }
+    if ($type eq 'sse.send') {
+        return "sse.send requires 'data' field" unless exists $event->{data};
+        return "sse.send 'data' must be a string" unless defined $event->{data} && !ref $event->{data};
+        for my $field (qw(event id)) {
+            next unless defined $event->{$field};
+            return "sse.send '$field' must be a string" if ref $event->{$field};
+            return "sse.send '$field' must not contain newline characters"
+                if $event->{$field} =~ /[\r\n]/;
+        }
+        return "sse.send 'retry' must be a non-negative integer"
+            if defined $event->{retry} && !_is_nonneg_int($event->{retry});
+    }
+    if ($type eq 'sse.comment') {
+        return "sse.comment requires 'comment' field" unless exists $event->{comment};
+        return "sse.comment 'comment' must be a string"
+            unless defined $event->{comment} && !ref $event->{comment};
+    }
+    if ($type eq 'sse.keepalive') {
+        my $problem = _keepalive_problem($event);
+        return $problem if $problem;
+        # A copy: Encode::encode with FB_CROAK consumes its input.
+        my $comment = $event->{comment};
+        return "sse.keepalive 'comment' must be a UTF-8-encodable string"
+            if defined $comment
+                && (ref $comment || !eval { Encode::encode('UTF-8', $comment, Encode::FB_CROAK); 1 });
+    }
+    return "sse.close 'reason' must be a string"
+        if $type eq 'sse.close' && ref $event->{reason};
+    return undef;
+}
+
+sub _lifespan_event_problem {
+    my ($event) = @_;
+    my $type = $event->{type};
+    return "$type 'message' must be a string"
+        if $type =~ /\.failed\z/ && ref $event->{message};
+    return undef;
+}
+
+# A WebSocket refusal's status is 300 or above: 101 is the HTTP/1.1
+# acceptance and any HTTP/2 2xx answer to the CONNECT opens the tunnel.
+sub _refusal_status_problem {
+    my ($event) = @_;
+    return undef unless $event->{type} eq 'http.response.start' && $event->{status} < 300;
+    return "WebSocket refusal status must be 300 or above (got $event->{status})";
+}
+
+# One body send counted against a declared content-length: undef when it
+# fits, else the problem.
+sub _count_problem {
+    my ($count, $bytes, $terminal) = @_;
+    my ($declared, $remaining) = @$count{qw(declared remaining)};
+    return "http.response.body would send $bytes bytes, " . ($bytes - $remaining)
+        . " more than the declared content-length ($declared)"
+        if $bytes > $remaining;
+    my $left = $remaining - $bytes;
+    return "http.response.body ends the response $left bytes short of the declared content-length ($declared)"
+        if $terminal && $left > 0;
+    return undef;
+}
+
+# The bytes a body send writes, known when it is sent; undef for an fh
+# without a length, whose size is known only once it is read, and for a
+# file that isn't there (the send that reads it says so).
+sub _body_send_bytes {
+    my ($event) = @_;
+    my ($file, $fh) = @$event{qw(file fh)};
+    if (defined $file) {
+        return undef unless -f $file;
+        my $bytes = $event->{length} // ((-s $file) - ($event->{offset} // 0));
+        return $bytes < 0 ? 0 : $bytes;
+    }
+    return $event->{length} if defined $fh;
+    return length($event->{body} // '');
+}
+
+sub _http_body_is_opaque {
+    my ($event) = @_;
+    return defined $event->{file} || defined $event->{fh};
 }
 
 sub _http_body_is_terminal {
     my ($event) = @_;
-    return 1 if defined $event->{file} || defined $event->{fh};
+    return 1 if _http_body_is_opaque($event);
     return !($event->{more} // 0);
 }
 
-sub _check_http_start_fields {
-    my ($self, $event, $minimum_status) = @_;
-
-    return $self->_error(sequence => "websocket refusal status must be 300 or above")
-        if defined $minimum_status
-            && defined $event->{status}
-            && !ref $event->{status}
-            && $event->{status} =~ /\A[0-9]+\z/
-            && $event->{status} < $minimum_status;
-    return undef;
+# The declared content-length a response start begins counting, or undef.
+# HTTP/1.x frames the body by it; HEAD, 204 and 304 carry no body to count.
+sub _body_count {
+    my ($self, $event) = @_;
+    return undef unless ($self->{http_version} // '') =~ /\A1\./;
+    return undef if ($self->{method} // '') eq 'HEAD' || $event->{status} == 204 || $event->{status} == 304;
+    my $declared = _declared_content_length($event->{headers});
+    return defined $declared ? +{ declared => $declared, remaining => $declared } : undef;
 }
 
 sub _check_http_response_event {
-    my ($self, $event, $state_key, $trailers_key, $minimum_status) = @_;
+    my ($self, $event, $state_key, $trailers_key) = @_;
     my $type  = $event->{type};
     my $state = $self->{$state_key};
 
@@ -410,12 +726,11 @@ sub _check_http_response_event {
     if ($type eq 'http.response.start') {
         return $self->_error(sequence => 'cannot send duplicate http.response.start')
             unless $state eq 'initial';
-        my $err = $self->_check_http_start_fields($event, $minimum_status);
-        return $err if $err;
         my $declares_trailers = $event->{trailers} ? 1 : 0;
         $self->{$state_key}    = $declares_trailers ? 'started_t' : 'started';
         $self->{$trailers_key} = $declares_trailers;
-        $self->{"${state_key}_content_length"} = _declares_content_length($event->{headers});
+        $self->{"${state_key}_content_length"} = defined _declared_content_length($event->{headers});
+        $self->{"${state_key}_count"} = $self->_body_count($event);
         return undef;
     }
 
@@ -424,12 +739,19 @@ sub _check_http_response_event {
             if $state eq 'initial';
         return $self->_error(sequence => 'cannot send http.response.body: body already terminal, awaiting trailers')
             if $state eq 'awaiting_trailers';
-        # A body is bytes (PAGI Www.pod): not a plain reference, which would go
-        # out as ARRAY(0x...), nor a string with a character above 0xFF.
-        return $self->_error(malformed => "http.response.body 'body' must be bytes, not a " . ref($event->{body}) . ' reference')
-            if ref $event->{body} && !Scalar::Util::blessed($event->{body});
-        return $self->_error(malformed => "http.response.body 'body' contains a character above 0xFF (encode it to bytes)")
-            if defined $event->{body} && !ref $event->{body} && !_is_bytes($event->{body});
+        # A response's body is inline events or one file/fh event, never both
+        # (PAGI Www.pod "Payload kinds do not mix within a response").
+        return $self->_error(sequence => 'cannot send a file/fh body after inline body bytes')
+            if _http_body_is_opaque($event) && $self->{"${state_key}_inline"};
+
+        my $count = $self->{"${state_key}_count"};
+        my $bytes = $count && _body_send_bytes($event);
+        if (defined $bytes) {
+            my $problem = _count_problem($count, $bytes, _http_body_is_terminal($event));
+            return $self->_error(sequence => $problem) if $problem;
+            $self->{"${state_key}_count"} = +{ %$count, remaining => $count->{remaining} - $bytes };
+        }
+        $self->{"${state_key}_inline"} = 1 unless _http_body_is_opaque($event);
         if (_http_body_is_terminal($event)) {
             $self->{$state_key} = ($state eq 'started_t') ? 'awaiting_trailers' : 'complete';
         }
@@ -462,9 +784,11 @@ sub _check_http {
             || $type eq 'http.response.trailers'
             || $type eq 'http.fullflush';
 
-    return $self->_check_http_response_event(
-        $event, 'state', 'trailers_declared', undef,
-    );
+    # Fields first, then the sequence.
+    if (my $problem = _http_event_problem($event)) {
+        return $self->_error(malformed => $problem);
+    }
+    return $self->_check_http_response_event($event, 'state', 'trailers_declared');
 }
 
 sub _finalize_http {
@@ -498,6 +822,14 @@ sub _check_websocket {
         unless $is_http || $type eq 'websocket.accept' || $type eq 'websocket.send'
             || $type eq 'websocket.close' || $type eq 'websocket.keepalive';
 
+    # Fields first, then the sequence.
+    if (my $problem = _websocket_event_problem($event)) {
+        return $self->_error(malformed => $problem);
+    }
+    if (my $problem = _refusal_status_problem($event)) {
+        return $self->_error(sequence => $problem);
+    }
+
     if ($self->{state} eq 'closed') {
         return $self->_error(sequence => "cannot send '$type' after websocket.close");
     }
@@ -509,7 +841,7 @@ sub _check_websocket {
         if ($type eq 'websocket.accept') { $self->{state} = 'accepted'; return undef; }
         if ($is_http) {
             my $err = $self->_check_http_response_event(
-                $event, 'refusal_http_state', 'refusal_trailers_declared', 300,
+                $event, 'refusal_http_state', 'refusal_trailers_declared',
             );
             return $err if $err;
             $self->{state} = $self->{refusal_http_state} eq 'complete'
@@ -522,7 +854,7 @@ sub _check_websocket {
     if ($self->{state} eq 'refusing') {
         if ($is_http) {
             my $err = $self->_check_http_response_event(
-                $event, 'refusal_http_state', 'refusal_trailers_declared', 300,
+                $event, 'refusal_http_state', 'refusal_trailers_declared',
             );
             return $err if $err;
             $self->{state} = 'refusal_complete'
@@ -580,6 +912,11 @@ sub _check_sse {
         || $type eq 'http.response.trailers'
         || $type eq 'http.fullflush';
 
+    # Fields first, then the sequence.
+    if (my $problem = _sse_event_problem($event)) {
+        return $self->_error(malformed => $problem);
+    }
+
     if ($self->{state} eq 'closed') {
         return undef if $type eq 'sse.close'; # idempotent, like the reference server
         return $self->_error(sequence => "cannot send '$type' after sse.close");
@@ -591,7 +928,7 @@ sub _check_sse {
         if ($type eq 'sse.start') { $self->{state} = 'streaming'; return undef; }
         if ($is_http) {
             my $err = $self->_check_http_response_event(
-                $event, 'refusal_http_state', 'refusal_trailers_declared', undef,
+                $event, 'refusal_http_state', 'refusal_trailers_declared',
             );
             return $err if $err;
             $self->{state} = $self->{refusal_http_state} eq 'complete'
@@ -619,7 +956,7 @@ sub _check_sse {
     # $self->{state} eq 'refusing'
     if ($is_http) {
         my $err = $self->_check_http_response_event(
-            $event, 'refusal_http_state', 'refusal_trailers_declared', undef,
+            $event, 'refusal_http_state', 'refusal_trailers_declared',
         );
         return $err if $err;
         $self->{state} = 'refusal_complete'
@@ -660,6 +997,9 @@ sub _check_lifespan {
         if $type eq '';
     return $self->_error(unknown_type => "unrecognized event type '$type' for lifespan protocol")
         unless $LIFESPAN_RECOGNIZED{$type};
+    if (my $problem = _lifespan_event_problem($event)) {
+        return $self->_error(malformed => $problem);
+    }
 
     my $expected_phase = ($type =~ /^lifespan\.startup\./) ? 'startup' : 'shutdown';
     return $self->_error(sequence => "cannot send '$type' during lifespan phase '$self->{phase}'")
@@ -717,8 +1057,8 @@ One of:
 
 =item * C<malformed> -- the argument to C<check> was not even a usable
 event: not a hash reference, or a hash reference with no C<type> field
-(missing key, or an undefined/empty value). There is no type string to
-evaluate at all.
+(missing key, or an undefined/empty value), so there is no type string to
+evaluate; or an event whose fields break L</Fields>.
 
 =item * C<unknown_type> -- C<type> is a defined, non-empty string, but not
 one this scope recognizes (and, where applicable, not a declared
@@ -726,7 +1066,8 @@ extension's type either).
 
 =item * C<sequence> -- the event's C<type> is recognized, but it is out of
 order for what has already been sent (or, for lifespan, sent in the wrong
-phase, or a second result for a phase already reported).
+phase, or a second result for a phase already reported), including a body
+that doesn't fit its declared content-length.
 
 =item * C<extension> -- the event's type requires an advertised extension
 (currently just C<http.fullflush>) that is not present in this scope's

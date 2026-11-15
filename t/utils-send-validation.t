@@ -239,7 +239,8 @@ subtest 'websocket: refusal status comparison is safe and failure does not commi
         };
         is $died, undef, 'malformed status does not die under a throwing warning handler';
         is \@warnings, [], 'malformed status does not warn';
-        is $err, undef, 'sequencing validator leaves malformed status to shape validation';
+        like $err, qr/\Ahttp\.response\.start 'status' must be 200 to 599 \(got '/,
+            'malformed status fails its field check, as on the server';
     }
 
     my $sv = PAGI::Utils::_SendValidation->new(scope_type => 'websocket');
@@ -571,6 +572,236 @@ subtest 'websocket.keepalive treatment across connecting/accepted/closed' => sub
     $err = $sv->check({ type => 'websocket.keepalive', interval => 1 });
     ok $err, 'keepalive after close is illegal';
     is $err->category, 'sequence', 'category sequence';
+};
+
+# ==========================================================================
+# Event fields (PAGI Www.pod, RFC 9110): checked before the sequence
+# ==========================================================================
+
+# The message check gives the last event, after the ones before it pass;
+# undef when it passes too. Options go to new.
+sub message_for {
+    my ($scope_type, $events, %opts) = @_;
+    my $sv = PAGI::Utils::_SendValidation->new(scope_type => $scope_type, http_version => '1.1', %opts);
+    my @first = @$events;
+    my $last  = pop @first;
+    for my $event (@first) {
+        my $err = $sv->check($event);
+        return "an earlier event failed: $err" if $err;
+    }
+    my $err = $sv->check($last);
+    return $err ? $err->message : undef;
+}
+
+sub start_with { +{ type => 'http.response.start', status => 200, headers => [@_] } }
+sub start_length { start_with(['content-length', $_[0]]) }
+sub body_of { +{ type => 'http.response.body', @_ } }
+
+subtest 'a header name is an RFC 9110 token' => sub {
+    for my $name ('x-ok', 'X-Ok', "!#\$%&'*+-.^_`|~09AZaz") {
+        is message_for(http => [start_with([$name, 'v'])]), undef, "'$name' passes";
+    }
+    my $token = '(a header name must be an RFC 9110 token)';
+    my %fails = (
+        ''                  => 'name is empty',
+        'x a'               => "name 'x a' contains SP (\\x20) at offset 1 $token",
+        'set-cookie:a=b; x' => "name 'set-cookie:a=b; x' contains ':' (\\x3a) at offset 10 $token",
+        ':status'           => "name ':status' contains ':' (\\x3a) at offset 0 $token",
+        "\x85x"             => "name '\\x85x' contains a non-ASCII byte (\\x85) at offset 0 $token",
+        "x\x01y"            => "name 'x\\x01y' contains a control character (\\x01) at offset 1 $token",
+        "x\r\ny"            => "name 'x\\x0d\\x0ay' contains CR (\\x0d) at offset 1 $token",
+        "x\x{263a}"         => "name 'x\\x{263a}' contains a character above 0xFF (\\x{263a}) at offset 1 $token",
+    );
+    for my $name (sort keys %fails) {
+        is message_for(http => [start_with(['a', 'ok'], [$name, 'v'])]), "http.response.start header 1: $fails{$name}",
+            "the message names the event, the index and the problem: " . ($fails{$name} =~ s/ \(a header.*//r);
+    }
+};
+
+subtest 'a header value is an RFC 9110 field value' => sub {
+    for my $value ('', 'v', "a\tb", 'a b', "caf\xE9", "x\xFFy") {
+        is message_for(http => [start_with(['x-v', $value])]), undef, 'a value of ' . length($value) . ' bytes passes';
+    }
+    my %fails = (
+        "a\r\nb"     => 'value contains CR (\x0d) at offset 1',
+        "a\nb"       => 'value contains LF (\x0a) at offset 1',
+        "a\0b"       => 'value contains NUL (\x00) at offset 1',
+        "a\x01b"     => 'value contains a control character (\x01) at offset 1',
+        "a\x7Fb"     => 'value contains DEL (\x7f) at offset 1',
+        ' v'         => 'value starts with SP (\x20); trim it',
+        'v '         => 'value ends with SP (\x20); trim it',
+        "\tv"        => 'value starts with HTAB (\x09); trim it',
+        "ok\x{263a}" => 'value contains a character above 0xFF (\x{263a}) at offset 2 (encode it to bytes)',
+    );
+    for my $value (sort keys %fails) {
+        is message_for(http => [start_with(['a', 'ok'], ['X-V', $value])]), "http.response.start header 1 ('X-V'): $fails{$value}",
+            "the message names the header, never the value: $fails{$value}";
+    }
+    my $secret = message_for(http => [start_with(['x-v', "secret\nmore"])]);
+    unlike $secret, qr/secret|more/, 'the value is never shown';
+};
+
+subtest 'headers: their shape, and the same rules on every event that carries them' => sub {
+    is message_for(http => [{ type => 'http.response.start', status => 200, headers => 'x' }]),
+        "http.response.start 'headers' must be an array reference", 'not an array';
+    is message_for(http => [start_with(['x'])]), 'http.response.start headers: each header must be a 2-element array reference',
+        'not pairs';
+    is message_for(http => [start_with([undef, 'v'])]), 'http.response.start headers: header name and value must be defined strings',
+        'an undefined name';
+    my $cr = "header 0 ('x-v'): value contains CR (\\x0d) at offset 1";
+    is message_for(http => [{ type => 'http.response.start', status => 200, trailers => 1 }, body_of(body => 'x'),
+        { type => 'http.response.trailers', headers => [['x-v', "a\rb"]] }]), "http.response.trailers $cr", 'trailers';
+    is message_for(websocket => [{ type => 'websocket.accept', headers => [['x-v', "a\rb"]] }]), "websocket.accept $cr", 'websocket.accept';
+    is message_for(sse => [{ type => 'sse.start', headers => [['x-v', "a\rb"]] }]), "sse.start $cr", 'sse.start';
+    is message_for(websocket => [{ type => 'http.response.start', status => 403, headers => [['x-v', "a\rb"]] }]),
+        "http.response.start $cr", 'a websocket refusal';
+    is message_for(sse => [{ type => 'http.response.start', status => 404, headers => [['x-v', "a\rb"]] }]),
+        "http.response.start $cr", 'an sse refusal';
+};
+
+subtest 'a status is 200 to 599, written as three digits' => sub {
+    is message_for(http => [{ type => 'http.response.start', status => $_ }]), undef, "$_ passes" for 200, '204', 599;
+    is message_for(http => [{ type => 'http.response.start' }]), "http.response.start requires 'status' field", 'none';
+    for my $status ('abc', '0204', 101, 600, '200.0', -1) {
+        is message_for(http => [{ type => 'http.response.start', status => $status }]),
+            "http.response.start 'status' must be 200 to 599 (got '$status')", "'$status' fails";
+    }
+    is message_for(http => [{ type => 'http.response.start', status => undef }]),
+        "http.response.start 'status' must be 200 to 599 (got 'undef')", 'undef fails';
+    like message_for(http => [{ type => 'http.response.start', status => [200] }]),
+        qr/\Ahttp\.response\.start 'status' must be 200 to 599 \(got 'ARRAY\(0x[0-9a-f]+\)'\)\z/, 'a reference fails';
+    is message_for(http => [{ type => 'http.response.start', status => " 200\n" }]),
+        "http.response.start 'status' must be 200 to 599 (got ' 200\\x0a')", 'the status is shown escaped';
+    is message_for(sse => [{ type => 'sse.start', status => 101 }]), "sse.start 'status' must be 200 to 599 (got '101')",
+        'sse.start, when it gives one';
+    is message_for(sse => [{ type => 'http.response.start', status => 101 }]),
+        "http.response.start 'status' must be 200 to 599 (got '101')", 'an sse refusal';
+};
+
+subtest 'a response carries one content-length, a decimal number' => sub {
+    is message_for(http => [start_length('5')]), undef, '5 passes';
+    for my $value ('abc', '-1', '+5', '', '5, 5') {
+        is message_for(http => [start_with(['x-a', 1], ['content-length', $value])]),
+            "http.response.start header 1 ('content-length'): content-length must be one decimal number", "'$value' fails";
+    }
+    is message_for(http => [start_with(['content-length', 5], ['x-a', 1], ['Content-Length', 5])]),
+        "http.response.start header 2 ('Content-Length'): content-length appears more than once (also header 0)",
+        'a second line, equal or not, compared case-insensitively';
+    is message_for(sse => [{ type => 'sse.start', headers => [['content-length', 'abc']] }]), undef,
+        'not sse.start, which sends no length-framed body';
+};
+
+subtest 'the other fields of a response' => sub {
+    is message_for(http => [{ type => 'http.response.start', status => 200, trailers => $_ }]),
+        "http.response.start 'trailers' must be 0 or 1", "trailers '$_' fails" for 2, 'yes';
+    my $start = start_with();
+    is message_for(http => [$start, body_of(body => 'x', file => __FILE__)]),
+        'http.response.body requires exactly one of body/file/fh (got 2)', 'a body and a file';
+    is message_for(http => [$start, body_of(file => __FILE__, offset => -1)]),
+        "http.response.body 'offset' must be a non-negative integer", 'offset';
+    is message_for(http => [$start, body_of(file => __FILE__, length => 'x')]),
+        "http.response.body 'length' must be a non-negative integer", 'length';
+    is message_for(http => [$start, body_of(body => 'x', more => 2)]), "http.response.body 'more' must be 0 or 1", 'more';
+    is message_for(http => [$start, body_of(body => 'x', more => 1), body_of(file => __FILE__)]),
+        'cannot send a file/fh body after inline body bytes', 'a file after inline bytes';
+};
+
+subtest 'http/1.x: a body is counted against its content-length' => sub {
+    is message_for(http => [start_length(2), body_of(body => 'ok')]), undef, 'the declared length';
+    is message_for(http => [start_length(3), body_of(body => 'abcd')]),
+        'http.response.body would send 4 bytes, 1 more than the declared content-length (3)', 'over';
+    is message_for(http => [start_length(10), body_of(body => 'abcde')]),
+        'http.response.body ends the response 5 bytes short of the declared content-length (10)', 'short';
+    is message_for(http => [start_length(5), body_of(body => 'abc', more => 1), body_of(body => 'abc', more => 1)]),
+        'http.response.body would send 3 bytes, 1 more than the declared content-length (5)', 'chunks add up';
+    is message_for(http => [start_with(['Content-Length', 3]), body_of(body => 'abcd')]),
+        'http.response.body would send 4 bytes, 1 more than the declared content-length (3)', 'whatever the case of the name';
+
+    my $sv = PAGI::Utils::_SendValidation->new(scope_type => 'http', http_version => '1.1');
+    $sv->check(start_length(3));
+    my $err = $sv->check(body_of(body => 'abcd'));
+    is $err->category, 'sequence', 'a sequence error';
+    is $sv->check(body_of(body => 'abc')), undef, 'that changed nothing: the right bytes still go';
+
+    my $size = -s __FILE__;
+    is message_for(http => [start_length($size), body_of(file => __FILE__)]), undef, 'a file counts its size';
+    is message_for(http => [start_length($size - 10), body_of(file => __FILE__, offset => 10)]), undef, 'less its offset';
+    is message_for(http => [start_length(3), body_of(file => __FILE__, length => 4)]),
+        'http.response.body would send 4 bytes, 1 more than the declared content-length (3)', 'or its length';
+    open my $fh, '<', __FILE__ or die "open: $!";
+    is message_for(http => [start_length(3), body_of(fh => $fh, length => 4)]),
+        'http.response.body would send 4 bytes, 1 more than the declared content-length (3)', 'an fh with a length';
+    is message_for(http => [start_length(3), body_of(fh => $fh)]), undef, 'an fh without one is not counted';
+    close $fh;
+
+    is message_for(http => [start_length(2), body_of(body => 'abcd')], method => 'HEAD'), undef, 'not for HEAD';
+    is message_for(http => [{ %{ start_length(5) }, status => 304 }, body_of(body => '')]), undef, 'nor 304';
+    is message_for(http => [start_length(2), body_of(body => 'abcd')], http_version => '2'), undef, 'nor HTTP/2';
+    is message_for(websocket => [{ %{ start_length(3) }, status => 403 }, body_of(body => 'abcd')]),
+        'http.response.body would send 4 bytes, 1 more than the declared content-length (3)', 'a websocket refusal is counted';
+    is message_for(sse => [{ %{ start_length(3) }, status => 404 }, body_of(body => 'ab')]),
+        'http.response.body ends the response 1 bytes short of the declared content-length (3)', 'so is an sse refusal';
+};
+
+subtest 'websocket: event fields' => sub {
+    my $accept = { type => 'websocket.accept' };
+    my %fails = (
+        'websocket.send requires exactly one of bytes/text (got 0)' => { type => 'websocket.send' },
+        'websocket.send requires exactly one of bytes/text (got 2)' => { type => 'websocket.send', bytes => 'a', text => 'b' },
+        "websocket.send 'bytes' must be bytes, not a ARRAY reference" => { type => 'websocket.send', bytes => [1] },
+        "websocket.send 'bytes' contains a character above 0xFF (encode it to bytes, or send text)"
+            => { type => 'websocket.send', bytes => "\x{263a}" },
+        "websocket.close 'code' must be a non-negative integer" => { type => 'websocket.close', code => 'abc' },
+        "websocket.close 'reason' must be at most 123 bytes as UTF-8 (got 124)" => { type => 'websocket.close', reason => 'r' x 124 },
+        "websocket.close 'reason' must be a string" => { type => 'websocket.close', reason => [] },
+        "websocket.keepalive requires 'interval' field" => { type => 'websocket.keepalive' },
+        "websocket.keepalive 'interval' must be a non-negative number" => { type => 'websocket.keepalive', interval => -1 },
+        "websocket.keepalive 'timeout' must be a non-negative number"
+            => { type => 'websocket.keepalive', interval => 1, timeout => 'x' },
+    );
+    is message_for(websocket => [$accept, $fails{$_}]), $_, $_ for sort keys %fails;
+    is message_for(websocket => [$accept, { type => 'websocket.close', reason => "\x{e9}" x 61 }]), undef,
+        'a reason of 122 bytes as UTF-8 passes';
+    is message_for(websocket => [{ type => 'http.response.start', status => 299 }]),
+        'WebSocket refusal status must be 300 or above (got 299)', 'a refusal status below 300';
+    is message_for(websocket => [{ type => 'http.response.start', status => 101 }]),
+        "http.response.start 'status' must be 200 to 599 (got '101')", '101 is not a status a response sends';
+};
+
+subtest 'sse: event fields' => sub {
+    my $start = { type => 'sse.start' };
+    my %fails = (
+        "sse.send requires 'data' field"                  => { type => 'sse.send' },
+        "sse.send 'data' must be a string"                => { type => 'sse.send', data => [] },
+        "sse.send 'event' must not contain newline characters" => { type => 'sse.send', data => 'd', event => "a\nb" },
+        "sse.send 'id' must not contain newline characters"    => { type => 'sse.send', data => 'd', id => "a\rb" },
+        "sse.send 'retry' must be a non-negative integer" => { type => 'sse.send', data => 'd', retry => -1 },
+        "sse.comment requires 'comment' field"            => { type => 'sse.comment' },
+        "sse.comment 'comment' must be a string"          => { type => 'sse.comment', comment => [] },
+        "sse.keepalive requires 'interval' field"         => { type => 'sse.keepalive' },
+        "sse.keepalive 'comment' must be a UTF-8-encodable string" => { type => 'sse.keepalive', interval => 1, comment => [] },
+        "sse.close 'reason' must be a string"             => { type => 'sse.close', reason => [] },
+    );
+    is message_for(sse => [$start, $fails{$_}]), $_, $_ for sort keys %fails;
+    is message_for(sse => [{ type => 'sse.start', status => 'abc' }]), "sse.start 'status' must be 200 to 599 (got 'abc')",
+        'sse.start status';
+    is message_for(sse => [$start, { type => 'sse.keepalive', interval => 1, comment => "caf\x{e9}" }]), undef,
+        'a keepalive comment of characters passes';
+};
+
+subtest 'lifespan: a failure message is a string' => sub {
+    is message_for(lifespan => [{ type => 'lifespan.startup.failed', message => [] }]),
+        "lifespan.startup.failed 'message' must be a string", 'a reference fails';
+    is message_for(lifespan => [{ type => 'lifespan.startup.failed', message => 'no db' }]), undef, 'a string passes';
+};
+
+subtest 'fields are checked before the sequence' => sub {
+    is message_for(http => [start_with(), { type => 'http.response.start', status => 999 }]),
+        "http.response.start 'status' must be 200 to 599 (got '999')", 'a bad duplicate start: its field';
+    is message_for(http => [body_of(body => 'x', more => 2)]), "http.response.body 'more' must be 0 or 1",
+        'a bad body before the start: its field';
+    is message_for(websocket => [{ type => 'websocket.accept' }, { type => 'http.response.start', status => 101 }]),
+        "http.response.start 'status' must be 200 to 599 (got '101')", 'a bad refusal after accept: its field';
 };
 
 done_testing;

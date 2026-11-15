@@ -50,7 +50,7 @@ subtest 'B1: duplicate http.response.start fails the send Future' => sub {
         my ($scope, $receive, $send) = @_;
         await $send->({ type => 'http.response.start', status => 201, headers => [] });
 
-        my $err = await try_send($send, { type => 'http.response.start', status => 999, headers => [] });
+        my $err = await try_send($send, { type => 'http.response.start', status => 404, headers => [] });
         ok $err, 'send Future failed';
         like $err, qr/duplicate/i, 'error names the duplicate start';
 
@@ -228,6 +228,76 @@ subtest 'B3: exception before any send still 500s (regression)' => sub {
     my $res = PAGI::Test::Client->new(app => $app)->get('/');
     is $res->status, 500, 'still the synthetic 500';
     is_deeply \@events, ['disc:server_error'], 'still an abnormal disconnect, not on_complete';
+};
+
+# ---------------------------------------------------------------------------
+# B5: event fields are checked too (PAGI Www.pod, RFC 9110), on every send
+# path, before the sequence.
+# ---------------------------------------------------------------------------
+
+# An app that sends these events, letting a failed send fail the app.
+sub sends {
+    my @events = @_;
+    return async sub {
+        my ($scope, $receive, $send) = @_;
+        for my $event (@events) { await $send->($event) }
+    };
+}
+
+subtest 'B5: an app that lets a failed send through gets a 500' => sub {
+    my $res = PAGI::Test::Client->new(app => sends(
+        { type => 'http.response.start', status => 200, headers => [['x-v', "a\r\nx-injected: 1"]] },
+        { type => 'http.response.body', body => 'ok' },
+    ))->get('/');
+    is $res->status, 500, 'a header value with CR LF';
+    is $res->exception, "http.response.start header 0 ('x-v'): value contains CR (\\x0d) at offset 1\n",
+        'the exception names the header and the problem';
+    is(PAGI::Test::Client->new(app => sends({ type => 'http.response.body', body => 'early' }))->get('/')->status, 500,
+        'as a body before the start does');
+};
+
+subtest 'B5: a body that does not match its content-length fails the send' => sub {
+    my $app = async sub {
+        my ($scope, $receive, $send) = @_;
+        await $send->({ type => 'http.response.start', status => 200, headers => [['content-length', 2]] });
+        my $err = await try_send($send, { type => 'http.response.body', body => 'abc' });
+        is $err, "http.response.body would send 3 bytes, 1 more than the declared content-length (2)\n", 'over';
+        await $send->({ type => 'http.response.body', body => 'ok' });
+    };
+    my $res = PAGI::Test::Client->new(app => $app)->get('/');
+    is $res->status, 200, 'the app sent the right bytes after';
+    is $res->content, 'ok', 'and they are the body';
+
+    my $head = PAGI::Test::Client->new(app => sends(
+        { type => 'http.response.start', status => 200, headers => [['content-length', 4]] },
+        { type => 'http.response.body', body => 'abcd' },
+    ))->head('/');
+    is $head->status, 200, 'a HEAD response carrying the GET body is not counted';
+    is $head->header('content-length'), 4, 'and keeps its length';
+};
+
+subtest 'B5: websocket and sse sends are checked the same way' => sub {
+    my $err;
+    my $ws_app = async sub {
+        my ($scope, $receive, $send) = @_;
+        await $receive->();
+        await $send->({ type => 'websocket.accept' });
+        $err = await try_send($send, { type => 'websocket.send', bytes => "\x{263a}" });
+        await $send->({ type => 'websocket.close' });
+    };
+    PAGI::Test::Client->new(app => $ws_app)->websocket('/', sub { });
+    is $err, "websocket.send 'bytes' contains a character above 0xFF (encode it to bytes, or send text)\n",
+        'websocket.send';
+
+    undef $err;
+    my $sse_app = async sub {
+        my ($scope, $receive, $send) = @_;
+        await $send->({ type => 'sse.start' });
+        $err = await try_send($send, { type => 'sse.send', data => 'd', event => "a\nb" });
+        await $send->({ type => 'sse.close' });
+    };
+    PAGI::Test::Client->new(app => $sse_app)->sse('/', sub { });
+    is $err, "sse.send 'event' must not contain newline characters\n", 'sse.send';
 };
 
 # ---------------------------------------------------------------------------

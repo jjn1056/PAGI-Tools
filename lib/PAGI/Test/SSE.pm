@@ -43,8 +43,9 @@ sub _start {
     # the mock implements no sse extensions); the // {} guards direct
     # construction of this class with a scope that omits the key.
     my $sv = PAGI::Utils::_SendValidation->new(
-        scope_type => 'sse',
-        extensions => $self->{scope}{extensions} // {},
+        scope_type   => 'sse',
+        extensions   => $self->{scope}{extensions} // {},
+        http_version => $self->{scope}{http_version},
     );
 
     # Create receive coderef for the app.
@@ -347,7 +348,7 @@ the server. See L<PAGI::Test::Client/sse>.
 =head1 SEND STRICTNESS
 
 The C<$send> coderef given to your app is strict: it validates every event
-against the PAGI sse send-sequencing rules via L<PAGI::Utils::_SendValidation> and
+against the PAGI sse send rules (its fields, then the sequence) via L<PAGI::Utils::_SendValidation> and
 fails the returned Future (the app's C<await $send-E<gt>(...)> dies) for
 anything a real server would reject -- a duplicate C<sse.start>, a decline
 event after C<sse.start>, any stream event after a decline has started, or
