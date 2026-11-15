@@ -8,6 +8,7 @@ requires 'perl', '5.024';  # see "Perl version support" in PAGI
 requires 'Class::Tiny', '1.008';
 
 # Applications are written against Futures, with async/await
+requires 'Future', '0.54';
 requires 'Future::AsyncAwait', '0.66';
 
 # PAGI::Test::Client: classes keep their imports out of their methods
@@ -19,8 +20,8 @@ on 'test' => sub {
     requires 'Test2::V0', '0.000159';
     # Fixtures that must be real module files live in t/lib
     requires 'Test::Lib', '0.003';
-    # Tests build Futures by hand
-    requires 'Future', '0.54';
+    # Tests that need files make them under ./tmp, kept when a test fails
+    requires 'Test::TempDir::Tiny', '0.018';
     # PAGI::App's Moose subtests skip without these
     recommends 'Moose', '2.2200';
     recommends 'MooseX::NonMoose', '0.27';
