@@ -4,18 +4,8 @@ use v5.24;
 use warnings;
 use parent 'PAGI::App';
 use Carp ();
-use Future::AsyncAwait;
+use Future;
 use Class::Tiny;   # new, BUILDARGS and BUILD; the fields are this class's own
-
-# One positional first argument is the content; given that way, it can't
-# also be given by name.
-sub BUILDARGS {
-    my ($class, @args) = @_;
-    return +{@args} unless @args % 2;
-    my ($content, %args) = @args;
-    Carp::croak("content given twice: positionally and as content =>") if exists $args{content};
-    return +{content=>$content, %args};
-}
 
 # A response is immutable: built once, from what you give it, and only
 # read after that. Everything, the headers included, is worked out here,
@@ -36,10 +26,8 @@ sub prepare {
     my $body     = $self->{body}     = $self->prepare_body($args);
     my $type     = $self->{content_type}
                  = $self->prepare_content_type($args, status => $status, body => $body);
-    my $has_trailers = $self->{has_trailers} = $self->prepare_has_trailers($args);
-    $self->prepare_cookies($args);
     $self->{headers} = $self->prepare_headers($args,
-        status => $status, body => $body, content_type => $type, has_trailers => $has_trailers);
+        status => $status, body => $body, content_type => $type);
     return;
 }
 
@@ -55,40 +43,26 @@ sub prepare_body {
     return $self->render($args->{content});
 }
 
-# The type you gave, undef included; else the class's default for the body,
-# except on a status without content (RFC 9110 15.4.5: a 304 doesn't
-# describe a representation).
+# The type you gave, undef included; else the class's default, on every
+# status: a 204 or 304 sends what it's given, and the server drops what it
+# can't carry.
 sub prepare_content_type {
     my ($self, $args, %prepared) = @_;
     return $args->{content_type} if exists $args->{content_type};
-    return undef if _without_content($prepared{status});
-    return $self->default_content_type($prepared{body});
+    return $self->default_content_type;
 }
-
-# Whether this response declares trailers. It's decided at new because the
-# start, sent before the body, must say so; the values come from whatever
-# sends the body, at its end.
-sub prepare_has_trailers {
-    my ($self, $args) = @_;
-    return $args->{has_trailers} ? 1 : 0;
-}
-
-# Cookies: none here. The step where a response takes its cookies.
-sub prepare_cookies { return }
 
 # The headers the start sends, worked out once from what the other steps
 # prepared: yours, copied (so changing your list later changes nothing)
 # with each name lowercased (names are bytes, so tr changes ASCII letters
 # only), then the body's length and the type unless you gave them. No
-# length on a status that has no body (RFC 9110), nor when trailers are declared, which
-# HTTP/1.1 sends only in chunked coding, nor without a body.
+# length on a status that has no body (RFC 9110), nor without a body.
 sub prepare_headers {
     my ($self, $args, %prepared) = @_;
     my @headers = map { my $name = $_->[0]; $name =~ tr/A-Z/a-z/; [$name, $_->[1]] } @{ $args->{headers} // [] };
     my %has = map { $_->[0] => 1 } @headers;
     push @headers, ['content-length', length $prepared{body}]
-        if defined $prepared{body} && !$has{'content-length'} && !$prepared{has_trailers}
-        && !_without_content($prepared{status});
+        if defined $prepared{body} && !$has{'content-length'} && !_without_content($prepared{status});
     push @headers, ['content-type', $prepared{content_type}]
         if defined $prepared{content_type} && !$has{'content-type'};
     return \@headers;
@@ -112,6 +86,8 @@ sub headers {
     return $self->{headers};
 }
 
+# Always false here: a buffered body is known before the start goes out, so
+# what a trailer would carry goes in a header. A streaming subclass sets it.
 sub has_trailers {
     my $self = shift;
     _immutable('has_trailers') if @_;
@@ -135,11 +111,12 @@ sub _immutable {
     Carp::croak("response is immutable: \$response->$name can't be set; build a new response");
 }
 
-# 204 and 304 responses cannot contain content (RFC 9110 6.4.1), nor can a
-# 1xx, which is never a final response (RFC 9110 15.2).
+# 204 and 304 responses cannot contain content (RFC 9110 6.4.1), so the
+# length of the content given isn't theirs to declare: a 204 MUST NOT carry
+# one, and a 304's would be its 200's.
 sub _without_content {
     my ($status) = @_;
-    return $status < 200 || $status == 204 || $status == 304;
+    return $status == 204 || $status == 304;
 }
 
 # The content as bytes: here, as given, and no content is an empty body.
@@ -150,27 +127,43 @@ sub render {
     return defined $content ? $content : '';
 }
 
-# The class's type for a body: here, what RFC 9110 8.3 says a recipient may
-# assume for bytes with no type, and none for an empty body. Given the body
-# rather than reading it, so it can be called at any point, by anyone.
-sub default_content_type {
-    my ($self, $body) = @_;
-    return length($body // '') ? 'application/octet-stream' : undef;
+# The class's type: none here, as Starlette's Response has no media_type. A
+# format sets its own.
+sub default_content_type { return undef }
+
+# Serving the response: the start, then the body as one event, issued once
+# the start's send has succeeded. The Future returned is this call's own,
+# settled from the sends' Futures, so a caller that cancels it (a timeout)
+# cancels neither of the server's sends. It aborts the connection instead:
+# the start has gone out, so the response can't be finished, and the client
+# gets a cut connection rather than a last body event saying it's complete.
+# No body follows; a send already issued is left to settle.
+sub call {
+    my ($self, $scope, $receive, $send) = @_;
+    my $done  = Future->new;
+    my $start = Future->call(sub { $self->send_start($send) });
+    $done->on_cancel(sub {
+        my $connection = $scope->{'pagi.connection'};
+        $connection->abort('response cancelled by caller') if $connection;
+    });
+    $start->on_ready(sub {
+        my ($started) = @_;
+        return if $done->is_cancelled;
+        return _settle($done, $started, 'start') unless $started->is_done;
+        Future->call(sub { $send->({ type => 'http.response.body', body => $self->body, more => 0 }) })
+            ->on_ready(sub { _settle($done, $_[0], 'body') });
+    });
+    return $done;
 }
 
-# Serving the response, in steps, as prepare builds it in steps: the start,
-# the body, and, if declared, the trailers. A subclass with a body of its own
-# overrides send_body, which returns the trailer values it has by its end.
-async sub call {
-    my ($self, $scope, $receive, $send) = @_;
-    await $self->send_start($send);
-    my $trailers = await $self->send_body($scope, $receive, $send);
-    # Values with no declaration can never be sent: the start went out
-    # without saying trailers follow. That's a mistake in the class.
-    Carp::croak("send_body returned trailers, but has_trailers wasn't declared at new")
-        if !$self->has_trailers && $trailers && @$trailers;
-    return unless $self->has_trailers;
-    await $self->send_trailers($send, $trailers // []);
+# Settles call's Future from a send's: its failure, details included, else
+# done. A send Future cancelled by someone else fails it, rather than leave
+# call waiting or say the response went out.
+sub _settle {
+    my ($done, $sent, $what) = @_;
+    return $done->fail($sent->failure) if $sent->is_failed;
+    return $done->fail("the ${what}'s send was cancelled\n") if $sent->is_cancelled;
+    return $done->done;
 }
 
 # The start: the status, a copy of the headers (a middleware may edit it),
@@ -182,23 +175,6 @@ sub send_start {
         status  => $self->status,
         headers => [map { [@$_] } @{ $self->headers }],
         ($self->has_trailers ? (trailers => 1) : ()),
-    });
-}
-
-# The body: here, the buffered one, as one event. A buffered body has no
-# trailer values to give, so none are returned.
-async sub send_body {
-    my ($self, $scope, $receive, $send) = @_;
-    await $send->({ type => 'http.response.body', body => $self->body, more => 0 });
-    return;
-}
-
-# The trailers, names lowercased as headers are (names are bytes: tr).
-sub send_trailers {
-    my ($self, $send, $trailers) = @_;
-    return $send->({
-        type    => 'http.response.trailers',
-        headers => [ map { my $name = $_->[0]; $name =~ tr/A-Z/a-z/; [$name, $_->[1]] } @$trailers ],
     });
 }
 
@@ -218,7 +194,7 @@ PAGI::Response - An HTTP response, and the base for every other kind
     use PAGI::Response;
 
     open my $fh, '<:raw', 'logo.png' or die "Can't read logo.png: $!\n";
-    my $logo  = PAGI::Response->new(do { local $/; <$fh> }, content_type => 'image/png');
+    my $logo  = PAGI::Response->new(content => do { local $/; <$fh> }, content_type => 'image/png');
     my $empty = PAGI::Response->new(status => 204);
 
     # A format of your own: say how content becomes bytes.
@@ -234,7 +210,7 @@ PAGI::Response - An HTTP response, and the base for every other kind
         }
     }
 
-    my $report = CSV->new([[1, 2], [3, 4]]);   # each is an application: serve it, or call it from yours
+    my $report = CSV->new(content => [[1, 2], [3, 4]]);   # each is an application: serve it, or call it from yours
 
 =head1 INHERITANCE
 
@@ -246,31 +222,39 @@ C<to_app> comes from L<PAGI::App>, and C<new> from L<Class::Tiny>.
 
 =head1 RATIONALE
 
-This is Starlette's C<Response>, ported. You give it content, and it
-renders the body to bytes once, when you build it. Serving it sends the
-start, with the Content-Length and Content-Type filled in unless you gave
-them, and then the body.
+This is Starlette's C<Response>, ported, with one change that shapes the
+rest: once you've built a response, it can't be changed.
 
-Unlike Starlette's, a response can't be changed once it's built. We do that
-to make it safer and simpler.
+Starlette works a response out when you build it, then lets you keep
+changing it, so what it worked out can fall behind: change the body after
+and the Content-Length is wrong. We decide everything once, when you build
+it, from what you gave it: the status, the headers, the body's bytes, its
+Content-Length and its Content-Type. Nothing changes after, so nothing has
+to be checked again when it's sent, and nothing can go stale. When you want
+something different, build a new one.
 
-Safer, because a response is a value you build once and serve many times:
-the not-found page you make at startup and return for every missing path.
-If it could be changed, a handler that added something to it for one
-request (a cookie, a header) would change it for every request after, and
-one user's session cookie would go out to the next. Nothing here can be
-changed, so that can't happen.
+So everything goes to C<new>, cookies included. Starlette adds a cookie with
+C<set_cookie> after the response is built; here a cookie is a header you
+give, from L<PAGI::Cookie>:
 
-Simpler, because there's nothing to keep in step. Everything is decided
-once, when you build it, from what you gave it, and nothing can change
-after: no status that moves while its Content-Length stays put. When you
-want a variation, build a new response: rendering it is the only work, and
-it happens once.
+    PAGI::Response::Text->new(
+        content => "Welcome back\n",
+        headers => [ $cookie->header ],
+    );
 
-Where else we differ from Starlette, it's for Perl or for PAGI. Bytes with
-no type are sent as C<application/octet-stream>. We don't add a charset to the
-type you give. And PAGI has trailers, so a response can declare them;
-see L</Trailers>.
+Code that adds a header to a response it didn't build does it the way
+middleware does: on the start event, as it's sent.
+
+Where else we differ from Starlette, it's for Perl or for PAGI. The base
+sends no Content-Type unless you give one; L<PAGI::Response::Text> and
+L<PAGI::Response::JSON> have their own. We don't add a charset to a type you
+give. And trailers belong to L<PAGI::Response::Stream>, whose body has them
+at its end.
+
+Build a response for each request, in the handler that answers it. One
+that's the same for everyone can be sent more than once, but that's not what
+it's for, and one that carries anything about a user (a cookie, a name) must
+never be.
 
 =head1 DESCRIPTION
 
@@ -281,20 +265,25 @@ extend C<prepare> or one of its steps; see L</COOKBOOK>.
 
 =head1 CONSTRUCTOR ARGUMENTS
 
-    PAGI::Response->new($content, %args);
     PAGI::Response->new(content => $content, %args);
 
 =over 4
 
 =item content
 
-What to send: one argument before the others is the content, or give it
-by name; not both, which croaks. It's rendered
-to bytes once, by C<render>, and kept as C<body>. Here it must already be
-bytes: a string with a character above 0xFF, or a reference, fails when
-it's sent, as the PAGI spec has a server refuse it (L<PAGI::Test::Client>
-refuses it too, so your tests see it). With none, or C<undef>, the body is
-empty.
+What to send, given by name. It's rendered to bytes once, by C<render>,
+and kept as C<body>. Here it must already be bytes: a string with a
+character above 0xFF, or a reference, fails when it's sent, as the PAGI
+spec has a server refuse it (L<PAGI::Test::Client> refuses it too, so your
+tests see it). With none, or C<undef>, the body is empty.
+
+Always give it by name. Content on its own, C<< new('abc') >>, dies with
+Class::Tiny's odd-number-of-arguments error. A reference on its own is
+worse: Class::Tiny takes a lone hash reference as the arguments, not the
+content, so nothing tells you it went wrong:
+
+    PAGI::Response::JSON->new(content => { hello => 'world' });   # {"hello":"world"}
+    PAGI::Response::JSON->new({ hello => 'world' });              # null: hello isn't an argument
 
 =item status
 
@@ -310,17 +299,8 @@ the one sent.
 =item content_type
 
 The Content-Type, when C<headers> has none. Defaults to the class's
-C<default_content_type>, except on a 1xx, 204 or 304 response, which has no
-content to describe. One you give is sent as given, on any status: no
-charset is added, and C<undef> sends none.
-
-=item has_trailers
-
-True to declare that trailers follow the body (L<PAGI::Spec::Www/Response
-Trailers>): the start says so, and there's no Content-Length (HTTP/1.1
-sends trailers only in chunked coding). It's decided here, at C<new>,
-because the start goes out before the body. Defaults to false. See
-L</Trailers> for where their values come from.
+C<default_content_type>, which is none here, on every status. One you give
+is sent as given: no charset is added, and C<undef> sends none.
 
 =back
 
@@ -331,9 +311,16 @@ L</Trailers> for where their values come from.
     my $status = $response->status;
 
 What the response was built with: C<content_type> is the one you gave,
-else the class's default (none on 1xx, 204 and 304); C<body> is the
-rendered content. They only read: given a value, each croaks, since a
+else the class's default; C<has_trailers> is always false, since a
+buffered body is known before the start goes out and what a trailer would
+carry goes in a header. They only read: given a value, each croaks, since a
 response can't be changed (see L</RATIONALE>).
+
+C<body> is the rendered content, as bytes, here and in the classes that
+render content. On a L<PAGI::Response::Stream> it's the code you gave,
+which writes the body when the response is served. Code that looks at
+responses it didn't build checks C<< $response->isa('PAGI::Response::Stream') >>
+before treating C<body> as bytes.
 
 C<headers> is not only the headers you set: it's those, normalized (each
 name lowercased), plus the ones worked out for you, the Content-Length and
@@ -346,40 +333,27 @@ attribute returns it: don't change what's in it.
     await $response->call($scope, $receive, $send);
 
 The response as a PAGI application; C<to_app> returns a code reference that
-calls it. It serves the response in steps, as C<prepare> builds it in
-steps: C<send_start>, then C<send_body>, then, if trailers are declared,
-C<send_trailers> with the values C<send_body> returned.
+calls it. It sends the start (C<send_start>), then, once the start's send
+has succeeded, the body as one event, the last. On a 204 or 304 the body is
+sent as it is, and the server discards it.
+
+It returns a Future of its own, settled by the sends: it fails with a send's
+error when one fails (no body is sent if the start failed), and is done once
+the body has gone. Cancelling it cancels neither of the server's sends.
+
+Cancelling it (a timeout, say) aborts the response: the start has already
+gone out, so C<call> calls C<< $scope->{'pagi.connection'}->abort('response
+cancelled by caller') >> and sends no body, and the client gets a cut
+connection rather than a response that looks complete. With no
+C<pagi.connection> in the scope it just sends no body.
 
 =head2 send_start
 
     await $response->send_start($send);
 
 The start: the status, a copy of C<headers> (so a middleware that changes
-it changes only that request), and, if declared, that trailers follow.
-
-=head2 send_body
-
-    async sub send_body ($self, $scope, $receive, $send) { ...; return $trailers }
-
-The body. Here, the buffered C<body>, as one event. A subclass with a body
-of its own overrides it, sending its body events, and returns the trailer
-values it has by the body's end (C<[[name, value], ...]>), or nothing.
-Such a subclass has no buffered body, so its C<prepare_body> returns undef,
-as Starlette's C<StreamingResponse> has none: otherwise the start declares
-the buffered body's length (C<0> without content), and a server fails the
-body that doesn't match it. To declare a length, give C<content-length> in
-C<headers>.
-Returning values when C<has_trailers> wasn't declared is an error: the
-start has already gone out without saying trailers follow, so C<call>
-croaks once the body is sent.
-
-=head2 send_trailers
-
-    await $response->send_trailers($send, $trailers);
-
-The trailers, C<[[name, value], ...]>, with each name lowercased. C<call>
-sends them only when C<has_trailers> was declared, and empty when
-C<send_body> returned none.
+it changes only that request), and, if C<has_trailers>, that trailers
+follow. It returns the send's Future.
 
 =head2 prepare
 
@@ -388,11 +362,10 @@ C<send_body> returned none.
 Makes the constructor's arguments into the response's fields, once, when
 you build it (C<BUILD> calls it with the arguments by name), one step per
 argument, in this order: C<prepare_status>, C<prepare_body>,
-C<prepare_content_type>, C<prepare_has_trailers>, C<prepare_cookies>, and
-C<prepare_headers> last. Each step returns its value, and C<prepare> keeps
-it. A step that depends on others is given their values, after the
-arguments, as name/value pairs, so it never reads a field another step
-may not have set yet.
+C<prepare_content_type>, and C<prepare_headers> last. Each step returns
+its value, and C<prepare> keeps it. A step that depends on others is given
+their values, after the arguments, as name/value pairs, so it never reads
+a field another step may not have set yet.
 
 A subclass with arguments of its own extends the step for the argument it
 adds to, calling the class it inherits from first and returning the
@@ -421,30 +394,19 @@ The content, rendered to bytes once, by C<render>.
     my $type = $response->prepare_content_type($args, status => $status, body => $body);
 
 The C<content_type> you gave, C<undef> included; else the class's
-C<default_content_type> for the body, except on a 1xx, 204 or 304
-response, which has no content to describe.
-
-=head2 prepare_has_trailers
-
-    my $has_trailers = $response->prepare_has_trailers($args);
-
-Whether the response declares trailers: C<has_trailers>.
-
-=head2 prepare_cookies
-
-Cookies: none here. It's the step where a response takes its cookies.
+C<default_content_type>, on every status. The status and body are given
+for a subclass that decides from them.
 
 =head2 prepare_headers
 
     my $headers = $response->prepare_headers($args,
-        status => $status, body => $body, content_type => $type, has_trailers => $has_trailers);
+        status => $status, body => $body, content_type => $type);
 
 The headers the start sends, worked out once from what the other steps
 prepared: your C<headers>, copied, with each name lowercased (ASCII
 letters only), then the Content-Length unless you gave one (none without a
-body, on 1xx, 204 and 304, which have no body, or when trailers are declared, which
-HTTP/1.1 sends only in chunked coding), then the Content-Type unless you
-gave one.
+body, or on 204 and 304, which have no body), then the Content-Type unless
+you gave one.
 
 =head2 render
 
@@ -457,13 +419,12 @@ L<PAGI::Response::Text>.
 
 =head2 default_content_type
 
-    my $type = $response->default_content_type($body);
+    my $type = $response->default_content_type;
 
-The type for C<$body> when none is given: here, C<application/octet-stream>
-when there is a body, since RFC 9110 8.3 says a recipient may assume that
-anyway, and none when there isn't. It's given the body rather than reading
-the response's, so it depends on nothing else having been prepared.
-Override it for a format of your own.
+The class's type, used when you give none. Here it's C<undef>: no
+Content-Type is sent. It takes no arguments. Override it for a format of
+your own; a type that depends on the content is decided in
+C<prepare_content_type>.
 
 =head1 COOKBOOK
 
@@ -485,41 +446,7 @@ value fails there, not halfway through a request:
         }
     }
 
-    my $report = CSV->new([['id', 'name'], [1, 'Ada']]);
-
-=head2 Trailers
-
-Trailers are headers sent after the body, for what's only known once the
-body has gone out: a running length, a checksum over a stream. A buffered
-body is known in full before the start is sent, so anything you'd put in a
-trailer about it goes in a header instead.
-
-A response declares trailers with C<< has_trailers => 1 >>, at C<new>,
-because the start, which goes out first, must say so. Their values come
-from whatever sends the body, at its end: C<send_body> returns them, and
-C<call> hands them to C<send_trailers>. A buffered response has none to
-give, so if it declares trailers it sends them empty and the response
-still completes.
-
-    package Counted {
-        use v5.40;
-        use parent 'PAGI::Response';
-        use Future::AsyncAwait;
-
-        async sub send_body ($self, $scope, $receive, $send) {
-            my @lines = ("one\n", "two\n");
-            for my $line (@lines) {
-                await $send->({ type => 'http.response.body', body => $line, more => 1 });
-            }
-            await $send->({ type => 'http.response.body', body => '', more => 0 });   # the last
-            return [['x-line-count', scalar @lines]];
-        }
-    }
-
-    my $counted = Counted->new(content_type => 'text/plain', has_trailers => 1);
-
-Many clients, browsers among them, don't show trailers to the application,
-so don't put anything there a client can't do without.
+    my $report = CSV->new(content => [['id', 'name'], [1, 'Ada']]);
 
 =head1 SEE ALSO
 
