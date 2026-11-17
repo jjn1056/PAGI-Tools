@@ -13,7 +13,8 @@ requires 'Future::AsyncAwait', '0.66';
 
 # PAGI::Test::Client: classes keep their imports out of their methods
 requires 'namespace::autoclean', '0.31';
-# PAGI::Test::Client: json => request bodies, and a response's ->json
+# PAGI::Response::JSON encodes with it; PAGI::Test::Client: json => request
+# bodies, and a response's ->json
 requires 'JSON::MaybeXS', '1.004003';
 
 on 'test' => sub {
