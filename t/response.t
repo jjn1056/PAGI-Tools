@@ -65,6 +65,12 @@ subtest 'content-length: the body\'s, except on 204 and 304' => sub {
         'one you give is sent, and no other added';
 };
 
+subtest 'a status that is not a number: the send refuses it, and the response says nothing' => sub {
+    my $res;
+    is warnings { $res = get(PAGI::Response->new(status => 'OK', content => 'hello')) }, [], 'no warning from the response';
+    like $res->exception, qr/'status' must be 200 to 599 \(got 'OK'\)/, 'the send refuses it, saying why';
+};
+
 subtest 'content_type: yours, else the class default, on every status' => sub {
     is sent_headers(get(PAGI::Response->new(content => 'x'))), [['content-length', 1]], 'the base has no default: none sent';
     for my $status (204, 304) {

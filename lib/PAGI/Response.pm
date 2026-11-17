@@ -116,7 +116,9 @@ sub _immutable {
 # one, and a 304's would be its 200's.
 sub _without_content {
     my ($status) = @_;
-    return $status == 204 || $status == 304;
+    # As strings: a status that isn't a number is the send's to refuse, not
+    # ours to warn about.
+    return $status eq '204' || $status eq '304';
 }
 
 # The content as bytes: here, as given, and no content is an empty body.
@@ -137,7 +139,10 @@ sub default_content_type { return undef }
 # cancels neither of the server's sends. It aborts the connection instead:
 # the start has gone out, so the response can't be finished, and the client
 # gets a cut connection rather than a last body event saying it's complete.
-# No body follows; a send already issued is left to settle.
+# No body follows; a send already issued is left to settle. It isn't an
+# async sub: cancelling one cancels the Future it's awaiting, here the
+# server's send, which the PAGI spec says an application shouldn't do, and
+# its CANCEL block, which would do the abort, is experimental.
 sub call {
     my ($self, $scope, $receive, $send) = @_;
     my $done  = Future->new;
@@ -195,22 +200,7 @@ PAGI::Response - An HTTP response, and the base for every other kind
 
     open my $fh, '<:raw', 'logo.png' or die "Can't read logo.png: $!\n";
     my $logo  = PAGI::Response->new(content => do { local $/; <$fh> }, content_type => 'image/png');
-    my $empty = PAGI::Response->new(status => 204);
-
-    # A format of your own: say how content becomes bytes.
-    package CSV {
-        use v5.40;
-        use parent 'PAGI::Response';
-        use Encode ();
-
-        sub default_content_type { 'text/csv; charset=utf-8' }
-
-        sub render ($self, $rows) {
-            Encode::encode('UTF-8', join '', map { join(',', @$_) . "\r\n" } @$rows);
-        }
-    }
-
-    my $report = CSV->new(content => [[1, 2], [3, 4]]);   # each is an application: serve it, or call it from yours
+    my $empty = PAGI::Response->new(status => 204);   # each is an application: serve it, or call it from yours
 
 =head1 INHERITANCE
 
@@ -247,9 +237,10 @@ middleware does: on the start event, as it's sent.
 
 Where else we differ from Starlette, it's for Perl or for PAGI. The base
 sends no Content-Type unless you give one; L<PAGI::Response::Text> and
-L<PAGI::Response::JSON> have their own. We don't add a charset to a type you
-give. And trailers belong to L<PAGI::Response::Stream>, whose body has them
-at its end.
+L<PAGI::Response::JSON> have their own. Nor does it add a charset to a type you
+give: it's given bytes, so it can't know their encoding. L<PAGI::Response::Text>
+encodes, so it does. And trailers belong to L<PAGI::Response::Stream>, whose
+body has them at its end.
 
 Build a response for each request, in the handler that answers it. One
 that's the same for everyone can be sent more than once, but that's not what
@@ -347,6 +338,12 @@ cancelled by caller') >> and sends no body, and the client gets a cut
 connection rather than a response that looks complete. With no
 C<pagi.connection> in the scope it just sends no body.
 
+A client that disconnects doesn't make C<call> fail: under the PAGI spec, a
+send to a connection that has closed succeeds and does nothing. So C<call>
+being done means the response was handed to the server, not that the client
+has it. Whether the client is still there is the connection's to say
+(C<< $scope->{'pagi.connection'} >>; see L<PAGI::Spec::Www>).
+
 =head2 send_start
 
     await $response->send_start($send);
@@ -432,21 +429,36 @@ C<prepare_content_type>.
 
 Override C<render> to say how your content becomes bytes, and give the
 class a type. The content is rendered when you build the response, so a bad
-value fails there, not halfway through a request:
+value fails there, not halfway through a request.
 
-    package CSV {
+If your content is text in UTF-8, subclass L<PAGI::Response::Text>
+instead: it does the encoding and the charset for you (see
+L<PAGI::Response::Text/SUBCLASSING>). Subclass C<PAGI::Response> when the
+bytes are yours to make, as they are for text in another charset.
+
+=head2 Text in another charset
+
+L<PAGI::Response::Text> is UTF-8 all the way through. For another encoding,
+subclass C<PAGI::Response>, which adds no charset: encode in C<render>, and
+name the charset in the type, so the two agree:
+
+    use v5.40;
+    use utf8;
+
+    package Latin1 {
         use v5.40;
         use parent 'PAGI::Response';
         use Encode ();
 
-        sub default_content_type { 'text/csv; charset=utf-8' }
+        sub default_content_type { 'text/plain; charset=iso-8859-1' }
 
-        sub render ($self, $rows) {
-            Encode::encode('UTF-8', join '', map { join(',', @$_) . "\r\n" } @$rows);
+        # A character Latin-1 can't hold croaks, rather than going out as '?'.
+        sub render ($self, $text) {
+            return Encode::encode('iso-8859-1', $text // '', Encode::FB_CROAK);
         }
     }
 
-    my $report = CSV->new(content => [['id', 'name'], [1, 'Ada']]);
+    my $hello = Latin1->new(content => "Grüße\n");   # 6 bytes, one for each character
 
 =head1 SEE ALSO
 
