@@ -8,8 +8,9 @@ use Future;
 use Class::Tiny;   # new, BUILDARGS and BUILD; the fields are this class's own
 
 # A response is immutable: built once, from what you give it, and only
-# read after that. Everything, the headers included, is worked out here,
-# once; nothing can change after, so nothing derived can go stale.
+# read after that, except that cookies can be added. Everything, the
+# headers included, is worked out here, once; nothing it's worked out
+# from can change after, so nothing derived can go stale.
 sub BUILD {
     my ($self, $args) = @_;
     $self->prepare($args);
@@ -77,9 +78,9 @@ sub status {
 }
 
 # Not only the headers you gave: those, normalized (names lowercased), plus
-# the ones worked out for you (Content-Length, Content-Type). This is what
-# the start sends. The response's own list, as a Moose 'ro' attribute
-# returns it: don't change it.
+# the ones worked out for you (Content-Length, Content-Type), then any
+# cookies set. This is what the start sends. The response's own list, as a
+# Moose 'ro' attribute returns it: don't change it; set_cookie adds to it.
 sub headers {
     my $self = shift;
     _immutable('headers') if @_;
@@ -109,6 +110,74 @@ sub content_type {
 sub _immutable {
     my ($name) = @_;
     Carp::croak("response is immutable: \$response->$name can't be set; build a new response");
+}
+
+# Cookies are the one thing added after a response is built. A Set-Cookie
+# header is worked out from nothing else, and nothing is worked out from
+# it, so adding one leaves nothing stale. The start sends the headers as
+# they are when it goes out, so add cookies before you serve the response.
+sub set_cookie {
+    my ($self, $name, $value, %attributes) = @_;
+    push @{ $self->{headers} }, ['set-cookie', _set_cookie($name, $value, %attributes)];
+    return $self;
+}
+
+# The cookie, emptied and expired. Given the attributes it was set with,
+# the same path and domain, the browser removes the one it has.
+sub delete_cookie {
+    my ($self, $name, %attributes) = @_;
+    return $self->set_cookie($name, '', %attributes, max_age => 0, expires => 0);
+}
+
+# A Set-Cookie header's value. Each field is checked on its own (RFC 6265),
+# and a bad one croaks with the fix rather than having it made for you, so
+# what you set is what's sent. The value is raw: encode it yourself. The
+# path is / unless you give one, and undef sends none.
+sub _set_cookie {
+    my ($name, $value, %attributes) = @_;
+    my %cookie = (path => '/', %attributes);
+    Carp::croak('a cookie needs a name') unless defined $name && length $name;
+    Carp::croak("cookie name contains '$1': a name is an RFC 6265 token")
+        if $name =~ /([^!#\$%&'*+\-.^_`|~0-9A-Za-z])/;
+    Carp::croak('cookie value must be a string, not ' . (defined $value ? 'a ' . ref($value) . ' reference' : 'undef'))
+        if !defined $value || ref $value;
+    Carp::croak("cookie value contains '$1', which browsers can't carry: encode it first (Base64 or URI::Escape)")
+        if $value =~ /([^\x21\x23-\x2B\x2D-\x3A\x3C-\x5B\x5D-\x7E])/;
+    my $bytes = length($name) + length($value);
+    Carp::croak("cookie $name is $bytes bytes of name and value: browsers ignore one over 4096") if $bytes > 4096;
+    # No ; and no control character: either would end or break the header.
+    # An epoch expires is digits, so only a date string can fail this.
+    for my $attribute (qw(path domain expires)) {
+        Carp::croak("cookie $attribute can't contain ';' or a control character")
+            if defined $cookie{$attribute} && $cookie{$attribute} =~ /[;\x00-\x1F\x7F]/;
+    }
+    Carp::croak('max_age must be a whole number of seconds')
+        if defined $cookie{max_age} && $cookie{max_age} !~ /\A-?\d+\z/;
+    Carp::croak('samesite must be lax, strict or none')
+        if defined $cookie{samesite} && $cookie{samesite} !~ /\A(?:lax|strict|none)\z/i;
+
+    my @parts = ("$name=$value");
+    push @parts, "Path=$cookie{path}"                      if defined $cookie{path};
+    push @parts, "Domain=$cookie{domain}"                  if defined $cookie{domain};
+    push @parts, 'Expires=' . _date($cookie{expires})      if defined $cookie{expires};
+    push @parts, "Max-Age=$cookie{max_age}"                if defined $cookie{max_age};
+    push @parts, 'SameSite=' . ucfirst lc $cookie{samesite} if defined $cookie{samesite};
+    push @parts, 'Secure'      if $cookie{secure};
+    push @parts, 'HttpOnly'    if $cookie{httponly};
+    push @parts, 'Partitioned' if $cookie{partitioned};
+    return join '; ', @parts;
+}
+
+my @DAY   = qw(Sun Mon Tue Wed Thu Fri Sat);
+my @MONTH = qw(Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec);
+
+# An epoch number as an HTTP date (RFC 9110 5.6.7); a string is yours, as given.
+sub _date {
+    my ($expires) = @_;
+    return $expires unless $expires =~ /\A\d+\z/;
+    my ($sec, $min, $hour, $mday, $mon, $year, $wday) = gmtime $expires;
+    return sprintf '%s, %02d %s %04d %02d:%02d:%02d GMT',
+        $DAY[$wday], $mday, $MONTH[$mon], $year + 1900, $hour, $min, $sec;
 }
 
 # 204 and 304 responses cannot contain content (RFC 9110 6.4.1), so the
@@ -213,24 +282,27 @@ C<to_app> comes from L<PAGI::App>, and C<new> from L<Class::Tiny>.
 =head1 RATIONALE
 
 This is Starlette's C<Response>, ported, with one change that shapes the
-rest: once you've built a response, it can't be changed.
+rest: once you've built a response, it can't be changed, apart from adding
+cookies.
 
 Starlette works a response out when you build it, then lets you keep
 changing it, so what it worked out can fall behind: change the body after
 and the Content-Length is wrong. We decide everything once, when you build
 it, from what you gave it: the status, the headers, the body's bytes, its
-Content-Length and its Content-Type. Nothing changes after, so nothing has
+Content-Length and its Content-Type. None of that changes after, so nothing has
 to be checked again when it's sent, and nothing can go stale. When you want
 something different, build a new one.
 
-So everything goes to C<new>, cookies included. Starlette adds a cookie with
-C<set_cookie> after the response is built; here a cookie is a header you
-give, from L<PAGI::Cookie>:
+Cookies are the exception, and you add them as you would with Starlette,
+with C<set_cookie> and C<delete_cookie> after the response is built. A
+Set-Cookie header is worked out from nothing else, and nothing is worked out
+from it, so adding one can't make anything stale:
 
-    PAGI::Response::Text->new(
-        content => "Welcome back\n",
-        headers => [ $cookie->header ],
-    );
+    PAGI::Response::Text->new(content => "Welcome back\n")
+        ->set_cookie(session => $id, httponly => 1, secure => 1);
+
+Unlike Starlette's, they add only what you ask for: Starlette sends
+SameSite=Lax unless you say otherwise, and we send no SameSite at all.
 
 Code that adds a header to a response it didn't build does it the way
 middleware does: on the start event, as it's sent.
@@ -317,7 +389,82 @@ C<headers> is not only the headers you set: it's those, normalized (each
 name lowercased), plus the ones worked out for you, the Content-Length and
 the Content-Type. It's the list the start sends, as
 C<[[name, value], ...]>. It's the response's own list, as a Moose C<ro>
-attribute returns it: don't change what's in it.
+attribute returns it: don't change what's in it. L</set_cookie> adds to it.
+
+=head2 set_cookie
+
+    $response->set_cookie($name, $value, %attributes);
+
+    PAGI::Response->new(status => 303, headers => [['location', '/']])
+        ->set_cookie(session => $id, max_age => 86400, httponly => 1, secure => 1);
+
+Adds a Set-Cookie header, after the others, and returns the response, so
+calls chain. Each call adds one; the same name set twice is sent twice. Add
+cookies before you serve the response: the start sends the headers as they
+are when it goes out.
+
+The name is an RFC 6265 token (letters, digits and C<!#$%&'*+-.^_`|~>). The
+value is sent as given, so it must be cookie-octets: no space, C<">, C<,>,
+C<;>, C<\>, control character or non-ASCII byte. Browsers end a value at
+C<;>, and other readers split on C<,> or strip quotes, so only these read
+back unchanged through every client. We don't encode anything else for
+you; L</"In a cookie"> says why, and what to do with text. A name and value
+over 4096 bytes together croak: browsers ignore the cookie (RFC 6265bis
+5.6).
+
+The attributes, each written only if you give it:
+
+=over 4
+
+=item path
+
+Defaults to C</>, the only default. Without a Path, a browser keeps the
+cookie for the directory of the page that set it (RFC 6265 5.1.4), so a
+session set by C</account/login> would be sent only under C</account/>.
+C<undef> sends no Path.
+
+=item domain
+
+=item expires
+
+An epoch number, sent as an HTTP date (C<time + 3600> for an hour from
+now), or a date string, sent as given.
+
+=item max_age
+
+Seconds, a whole number.
+
+=item samesite
+
+C<lax>, C<strict> or C<none>, any case; sent capitalized.
+
+=item secure, httponly, partitioned
+
+True to send the flag.
+
+=back
+
+A path, domain or expires string with a C<;> or a control character
+croaks, as does a bad C<max_age> or C<samesite>. Each croaks with what to
+fix, from the line that set the cookie; nothing is fixed for you. What
+browsers require of attributes together is yours to get right, and a
+browser drops a cookie that gets it wrong: a C<__Secure-> or C<__Host->
+name needs C<secure>, and C<__Host-> also the path C</> and no domain;
+C<< samesite => 'none' >> and C<partitioned> need C<secure>.
+
+=head2 delete_cookie
+
+    $response->delete_cookie($name, %attributes);
+
+Adds the Set-Cookie header that removes a cookie: this name, emptied, with
+C<< max_age => 0 >> and an expiry in 1970, and returns the response. A
+browser removes a cookie only when the name, path and domain match, so give
+it the attributes you set the cookie with. One hash used for both keeps
+them the same:
+
+    my %session = (path => '/app', httponly => 1, secure => 1);
+    $response->set_cookie(session => $id, %session);    # logging in
+    $response->delete_cookie('session', %session);      # logging out
 
 =head2 call
 
@@ -422,6 +569,70 @@ The class's type, used when you give none. Here it's C<undef>: no
 Content-Type is sent. It takes no arguments. Override it for a format of
 your own; a type that depends on the content is decided in
 C<prepare_content_type>.
+
+=head1 UTF-8
+
+A response sends bytes. Text is characters, so somewhere it has to become
+bytes, and we don't do that behind your back.
+
+=head2 In the body
+
+C<PAGI::Response> sends its content as given, so give it bytes. For text,
+encode it yourself, or use L<PAGI::Response::Text>, which takes characters,
+encodes them as UTF-8 and says so in its type:
+
+    use utf8;
+    use Encode ();
+
+    PAGI::Response->new(content => Encode::encode('UTF-8', "Hello, 🌍!\n"),
+        content_type => 'text/plain; charset=utf-8');
+    PAGI::Response::Text->new(content => "Hello, 🌍!\n");   # the same response
+
+For text in another charset, see L</"Text in another charset">.
+
+=head2 In a cookie
+
+We don't encode cookie values. A value is sent exactly as you give it, so it
+must be cookie-octets (see L</set_cookie>): ASCII, with no space, C<">,
+C<,>, C<;> or C<\>. Anything else croaks and tells you to encode it first.
+
+Why not encode it for you? Because a cookie has more than one reader, and
+they all have to agree on how it was encoded. Your application reads it
+back; JavaScript in your page may read it from C<document.cookie>; another
+service on your domain may read it too. There are several common encodings
+(percent-escaping, Base64, quoting) and they aren't interchangeable. If we
+picked one quietly, every one of those readers would have to know our
+choice, and a value written by any other code would read back wrong. So the
+choice is yours, made in your code where you can see it. A framework that
+wants to encode for you can add that on top.
+
+For text, encode it to UTF-8 bytes, then escape the bytes into
+cookie-octets; to read it, undo both, in the other order. Percent-escaping
+is readable, and JavaScript's C<decodeURIComponent> reads it:
+
+    use utf8;
+    use Encode ();
+    use URI::Escape qw(uri_escape_utf8 uri_unescape);
+
+    $response->set_cookie(username => uri_escape_utf8('Zoë 🌍'));
+    # Set-Cookie: username=Zo%C3%AB%20%F0%9F%8C%8D; Path=/
+
+    my $username = Encode::decode('UTF-8', uri_unescape($value));   # 'Zoë 🌍'
+
+where C<$value> is the cookie's value as the request sent it.
+
+For data rather than text, URL-safe Base64 is shorter, and every character
+of it is a cookie-octet. L<MIME::Base64> comes with Perl, and C<encode_json>
+already gives UTF-8 bytes:
+
+    use JSON::MaybeXS qw(encode_json decode_json);
+    use MIME::Base64 qw(encode_base64url decode_base64url);
+
+    $response->set_cookie(prefs => encode_base64url(encode_json({ theme => 'dark' })));
+
+    my $prefs = decode_json(decode_base64url($value));   # { theme => 'dark' }
+
+See F<examples/response/cookie.pl> for a whole application that does this.
 
 =head1 COOKBOOK
 
