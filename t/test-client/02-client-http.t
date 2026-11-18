@@ -564,6 +564,18 @@ subtest 'a request that never completes fails at the harness timeout' => sub {
     ok(Time::HiRes::time() - $started < 2, 'at the timeout, not after the app\'s 3s');
 };
 
+subtest 'an app that reads the request body again waits, and the timeout says why' => sub {
+    local $PAGI::Test::_Drive::TIMEOUT = 0.3;
+    my $reads_twice = async sub {
+        my ($scope, $receive, $send) = @_;
+        await $receive->();
+        await $receive->();   # the body was all in the first event: this waits
+    };
+    like(dies { PAGI::Test::Client->new(app => $reads_twice)->get('/', body => 'abc') },
+        qr/waited for more of the request body after receiving all of it/,
+        'the client names the second read');
+};
+
 subtest 'an app awaiting a Future subclass that real I/O resolves completes' => sub {
     require Future::IO;
     { package PAGITest::SubclassFuture; our @ISA = ('Future'); }

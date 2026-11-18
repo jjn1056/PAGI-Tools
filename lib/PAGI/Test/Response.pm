@@ -45,7 +45,11 @@ sub _capture_event {
         return unless $self->{_response_started};
         return if $self->{_body_complete};
 
-        $self->{body} .= _response_body_bytes($event);
+        # The body as it arrived, too: each event's bytes, for a stream
+        # (PAGI::Test::Stream) that reads it chunk by chunk.
+        my $bytes = _response_body_bytes($event);
+        $self->{body} .= $bytes;
+        push @{ $self->{_chunks} }, $bytes if length $bytes;
         $self->{_body_complete} = 1 unless $event->{more} // 0;
     }
     elsif ($type eq 'http.response.trailers') {
@@ -132,6 +136,19 @@ sub _slurp_fh_bytes {
 
 # True when the captured events reached a terminal body
 sub body_complete { return $_[0]->{_body_complete} ? 1 : 0 }
+
+# The 500 a server sends in place of an application that failed, or
+# returned without starting a response.
+sub _server_error_events {
+    return (
+        { type => 'http.response.start', status => 500, headers => [['content-type', 'text/plain']] },
+        { type => 'http.response.body', body => 'Internal Server Error', more => 0 },
+    );
+}
+
+# The application's failure, recorded as it happens on a stream, which was
+# handed out before the application ended.
+sub _record_exception { $_[0]->{exception} = $_[1]; return }
 
 # Status code
 sub status { shift->{status} }

@@ -85,7 +85,12 @@ sub clear_cookies {
     return $self;
 }
 
-sub _request {
+# One HTTP request, ready to run: its scope, and the $receive and $send an
+# application is called with, which capture what it sends into a
+# PAGI::Test::Response. Each way of running a request (_request runs it to
+# the end) builds it here, so they can't drift apart. The closures share
+# $state, a hash that holds none of them, so nothing here is a cycle.
+sub _http_exchange {
     my ($self, $method, $path, %opts) = @_;
 
     $path //= '/';
@@ -124,15 +129,18 @@ sub _request {
     # the drive timeout below says so.
     my $body = $opts{body} // '';
     my $receive_called = 0;
-    my ($response_complete, $waiting_after_body) = (0, undef);
+    my $state = { response_complete => 0, waiting_after_body => undef };
     my $receive = async sub {
         if (!$receive_called) {
             $receive_called = 1;
             return { type => 'http.request', body => $body, more => 0 };
         }
-        return { type => 'http.disconnect' } if $response_complete;
-        $waiting_after_body //= Future->new;
-        return await $waiting_after_body;
+        # Once the response is complete or the connection has ended (the
+        # client left, or the application aborted), as on a real server.
+        return { type => 'http.disconnect' }
+            if $state->{response_complete} || defined $scope->{'pagi.connection'}->disconnect_reason;
+        $state->{waiting_after_body} //= Future->new;
+        return await $state->{waiting_after_body};
     };
 
     # Build send (captures response). Strict: illegal events (per
@@ -199,14 +207,29 @@ sub _request {
         }
 
         $response->_capture_event(\%captured);
+        # A stream (PAGI::Test::Stream) hears of each event as it lands.
+        $state->{on_capture}->() if $state->{on_capture};
 
         $scope->{'pagi.connection'}->_mark_complete if $sv->complete;
-        if ($sv->complete && !$response_complete) {
-            $response_complete = 1;
-            $waiting_after_body->done({ type => 'http.disconnect' })
-                if $waiting_after_body && !$waiting_after_body->is_ready;
+        if ($sv->complete && !$state->{response_complete}) {
+            $state->{response_complete} = 1;
+            my $waiting = $state->{waiting_after_body};
+            $waiting->done({ type => 'http.disconnect' }) if $waiting && !$waiting->is_ready;
         }
     };
+
+    return {
+        scope => $scope, receive => $receive, send => $send,
+        validator => $sv, response => $response, state => $state,
+    };
+}
+
+# A one-shot request: the application run to its end, and the whole response.
+sub _request {
+    my ($self, $method, $path, %opts) = @_;
+    my $exchange = $self->_http_exchange($method, $path, %opts);
+    my ($scope, $receive, $send) = @{$exchange}{qw(scope receive send)};
+    my ($sv, $response) = @{$exchange}{qw(validator response)};
 
     # Call app (with exception handling like real server). The app may be
     # waiting on real I/O, so its Future is driven, not just ->get'ed: ->get
@@ -224,6 +247,7 @@ sub _request {
     if ($timed_out) {
         # Whether it was waiting for more body: read before the cancel, which
         # cancels the receive it awaits too.
+        my $waiting_after_body = $exchange->{state}{waiting_after_body};
         my $waited_after_body = $waiting_after_body && !$waiting_after_body->is_ready;
         # Cancel the abandoned application so its pending wait cannot resume
         # later, in some other test, with nobody holding its Future.
@@ -263,18 +287,7 @@ sub _request {
         $conn->_mark_response_started;            # the 500 IS a response
         $conn->_mark_disconnected('server_error');# abnormal end — not on_complete
         return PAGI::Test::Response->new(
-            events => [
-                {
-                    type    => 'http.response.start',
-                    status  => 500,
-                    headers => [['content-type', 'text/plain']],
-                },
-                {
-                    type => 'http.response.body',
-                    body => 'Internal Server Error',
-                    more => 0,
-                },
-            ],
+            events    => [PAGI::Test::Response::_server_error_events()],
             exception => $exception,
         );
     }
@@ -291,20 +304,7 @@ sub _request {
             # The app never sent http.response.start at all -- mirror the
             # server's "Application Produced No Response" backstop: the
             # synthesized 500, not an empty 200.
-            return PAGI::Test::Response->new(
-                events => [
-                    {
-                        type    => 'http.response.start',
-                        status  => 500,
-                        headers => [['content-type', 'text/plain']],
-                    },
-                    {
-                        type => 'http.response.body',
-                        body => 'Internal Server Error',
-                        more => 0,
-                    },
-                ],
-            );
+            return PAGI::Test::Response->new(events => [PAGI::Test::Response::_server_error_events()]);
         }
 
         return $self->_finish_response($response);
@@ -592,6 +592,34 @@ sub sse {
 
     # An application that already failed fails the call, as an HTTP one does.
     return $sse->_raise_app_failure;
+}
+
+# A request whose response is read as it's sent, and which the client can
+# leave part-way: built as get builds one (GET unless the method option
+# says otherwise), then run only until the app waits. With a callback, the
+# client leaves when it returns.
+sub stream {
+    my ($self, $path, @rest) = @_;
+    my $callback = @rest % 2 ? pop @rest : undef;
+    my %opts = @rest;
+    my $method = delete $opts{method} // 'GET';
+
+    require PAGI::Test::Stream;
+    my $stream = PAGI::Test::Stream->_start(
+        client   => $self,
+        app      => $self->{app},
+        exchange => $self->_http_exchange(uc $method, $path, %opts),
+    );
+    return $stream unless $callback;
+
+    my $ok = eval { $callback->($stream); 1 };
+    my $error = $@;
+    if (!$ok) {
+        eval { $stream->close };   # the callback's error is the one to report
+        die $error;
+    }
+    $stream->close;
+    return;
 }
 
 sub start {
@@ -1017,6 +1045,11 @@ PAGI::Test::Client - Test client for PAGI applications
     # Session cookies persist across requests
     $client->post('/login', form => { user => 'admin', pass => 'secret' });
     my $res = $client->get('/dashboard');  # authenticated!
+
+    # A response read as it's sent, which the client can leave part-way
+    my $feed = $client->stream('/feed');
+    is $feed->receive_chunk, "hello\n";
+    $feed->close;
 
 =head1 DESCRIPTION
 
@@ -1576,6 +1609,41 @@ An application that fails after starting the stream fails the test, raised
 once in the same places as for L</websocket>: as C<sse> returns (in either
 style, once the application has failed) or from L<PAGI::Test::SSE/close>.
 
+=head1 STREAMING A RESPONSE (HTTP)
+
+=head2 stream
+
+    # Explicit style: read, then leave
+    my $feed = $client->stream('/feed');
+    my $chunk = $feed->receive_chunk;        # the next body chunk, as bytes
+    is $feed->response->status, 200;         # everything sent so far
+    $feed->close;                            # the client leaves
+
+    # Callback style: the client leaves when the code returns
+    $client->stream('/jobs', method => 'POST', json => { id => 42 }, sub {
+        my ($stream) = @_;
+        like $stream->receive_chunk, qr/started/;
+    });
+
+A request whose response you read while it's still being sent, and can
+leave part-way: for a response that streams, or one that never ends by
+itself, a feed say. C<get> waits for the end. C<stream> calls the
+application, runs it until it waits, and returns a L<PAGI::Test::Stream> at
+once, before the start if the application hasn't sent it yet.
+
+It takes what C<get> takes: a path, then C<headers>, C<query>, C<body>,
+C<json> or C<form>, and C<method> too, C<GET> unless you give one. The request is built as C<get> builds
+one, so the same send strictness, HEAD and 204/304 handling, and cookies
+apply; a C<Set-Cookie> in the start is stored as soon as the start arrives.
+
+Several streams may be open at once, and an ordinary request may run while
+they are. They share the event loop, so whichever request drives it, each
+stream's events land in its own queue.
+
+In callback style the client leaves when the code returns, or dies, unless
+the response is already over; C<stream> then returns nothing. How a stream
+ends is under L</SEMANTICS>.
+
 =head1 SEMANTICS
 
 How an SSE or WebSocket session ends, as PAGI::Server ends it. The reason
@@ -1611,9 +1679,30 @@ stay readable after C<is_closed> is true.
 An app that dies or returns before C<sse> or C<websocket> returns makes that
 call die.
 
-These are versioned behaviour: a change to any of them gets an
-entry in F<UPGRADING.md>, and F<t/test/terminal-parity.t> pins them against
-PAGI::Server's values.
+These SSE and WebSocket outcomes are versioned behaviour: a change to any of
+them gets an entry in F<UPGRADING.md>, and F<t/test/terminal-parity.t> pins
+them against PAGI::Server's values.
+
+A streamed HTTP response (L</stream>) ends in one of these ways, with the
+reason C<get> records (the PAGI spec's,
+L<PAGI::Spec::Www/Standard Disconnect Reasons>) and no detail of its own.
+Then C<is_closed> is true, and what was sent before the end stays readable:
+
+    HTTP stream outcome                          reason
+    -------------------------------------------  ----------------------------------
+    the app sends its last body event            (none)
+    the app returns after the start, unfinished  server_error; it warns, as get does
+    the app dies after the start                 server_error
+    the app dies before the start                server_error; the response is the
+                                                 500 get gives
+    the app returns without starting             server_error; the 500, and it warns
+    the app aborts                               app_abort, with the detail it gave
+    the test calls close                         client_closed
+
+Unlike C<sse> and C<websocket>, a failing app doesn't make C<stream> die: the
+failure is on C<< $stream->response->exception >>, as C<get> reports one,
+unless the client was built with C<raise_app_exceptions>: then C<stream>, or
+the next C<receive_chunk>, raises it.
 
 =head1 LIFESPAN
 
