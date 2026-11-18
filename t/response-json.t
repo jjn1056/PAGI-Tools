@@ -39,13 +39,50 @@ subtest 'a type you give is sent as given' => sub {
         'application/problem+json', 'yours, with no charset added');
 };
 
-subtest 'content JSON cannot carry dies at new, from the line that built it' => sub {
-    my $line = __LINE__ + 1;
-    my $error = dies { PAGI::Response::JSON->new(content => sub { 1 }) };
-    like $error, qr/\Acontent can't be sent as JSON: encountered CODE/, "a code reference: JSON's reason";
-    like $error, qr/at \Q${\ __FILE__ }\E line $line\.$/, 'the error names the line that built the response';
+subtest 'content JSON cannot carry dies at new, with the encoder\'s own error' => sub {
+    like(dies { PAGI::Response::JSON->new(content => sub { 1 }) }, qr/\Aencountered CODE/, 'a code reference');
     like(dies { PAGI::Response::JSON->new(content => { when => bless {}, 'Local::Plain' }) },
-        qr/\Acontent can't be sent as JSON: encountered object/, 'an object with no TO_JSON');
+        qr/\Aencountered object/, 'an object with no TO_JSON');
+};
+
+{
+    package Local::Fails;
+    sub new { bless { error => $_[1] }, $_[0] }
+    sub TO_JSON { die $_[0]{error} }
+}
+
+subtest 'a TO_JSON that dies: its own error, untouched' => sub {
+    is(dies { PAGI::Response::JSON->new(content => { user => Local::Fails->new("no user today\n") }) },
+        "no user today\n", 'a message');
+    my $exception = bless { reason => 'gone' }, 'Local::Exception';
+    is(dies { PAGI::Response::JSON->new(content => [Local::Fails->new($exception)]) }, exact_ref($exception),
+        'an exception object, the same object');
+};
+
+{
+    package Local::User;
+    sub new { bless { name => $_[1], password => 'secret' }, $_[0] }
+    sub TO_JSON { return { name => $_[0]{name} } }
+}
+
+subtest 'an object with TO_JSON is sent as what TO_JSON returns' => sub {
+    is(PAGI::Response::JSON->new(content => { user => Local::User->new('ada') })->body, '{"user":{"name":"ada"}}',
+        'its TO_JSON, which leaves the password out');
+};
+
+{
+    package Local::SortedJSON;
+    use parent -norequire, 'PAGI::Response::JSON';
+    my $sorted = JSON::MaybeXS->new(utf8 => 1, canonical => 1);
+    sub json_encoder { return $sorted }
+}
+
+subtest 'json_encoder: the encoder render uses, a subclass gives its own' => sub {
+    my $encoder = PAGI::Response::JSON->json_encoder;
+    is $encoder->encode({ name => "\x{e9}" }), qq({"name":"\xc3\xa9"}), 'the class encoder: UTF-8 bytes';
+    is $encoder->encode(Local::User->new('ada')), '{"name":"ada"}', 'and TO_JSON';
+    is(Local::SortedJSON->new(content => { b => 2, a => 1, c => 3 })->body, '{"a":1,"b":2,"c":3}',
+        "a subclass's encoder is the one used: its keys sorted");
 };
 
 subtest 'content on its own is the arguments, not the content (the trap the POD shows)' => sub {

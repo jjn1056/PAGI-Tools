@@ -7,21 +7,27 @@ use Carp ();
 use Encode ();
 use overload ();
 
-# The content as UTF-8 bytes: characters in, and no content is an empty
-# body. An object that stringifies is its string; any other reference
-# isn't text. A character UTF-8 can't carry (a lone surrogate) croaks
-# rather than being sent as a substitute: Encode's message, from the line
-# that built the response rather than from here.
+# The content as UTF-8 bytes: made into text, then encoded.
 sub render {
+    my ($self, $content) = @_;
+    return $self->encode_text($self->as_text($content));
+}
+
+# The content as characters: no content is empty, and an object that
+# stringifies is its string. Any other reference isn't text.
+sub as_text {
     my ($self, $content) = @_;
     return '' unless defined $content;
     Carp::croak('content must be text: pass a string, or an object that stringifies')
         if ref $content && !overload::Method($content, '""');
-    my $text  = "$content";
-    my $bytes = eval { Encode::encode('UTF-8', $text, Encode::FB_CROAK) };
-    return $bytes if defined $bytes;
-    (my $problem = $@) =~ s/ at .* line \d+\.\n\z//s;
-    Carp::croak("content can't be sent as UTF-8: $problem; remove or replace that character");
+    return "$content";
+}
+
+# Characters as UTF-8 bytes. A character UTF-8 can't carry (a lone
+# surrogate) dies with Encode's error rather than being sent as a substitute.
+sub encode_text {
+    my ($self, $text) = @_;
+    return Encode::encode('UTF-8', $text, Encode::FB_CROAK);
 }
 
 # The type, saying the body is UTF-8: a text/* type that names no charset
@@ -118,7 +124,26 @@ encoding, see L</"Another charset">.
 
     my $bytes = $response->render($content);
 
-The content as UTF-8 bytes, as described under L</content>.
+The content as UTF-8 bytes, as described under L</content>: C<encode_text>
+of C<as_text>. Override either of those rather than this.
+
+=head2 as_text
+
+    my $text = $response->as_text($content);
+
+The content as characters: C<undef> is empty, and an object that overloads
+stringification is its string. Any other reference dies. A format whose
+content isn't a string overrides this to make the text; see
+L</A text format of your own>.
+
+=head2 encode_text
+
+    my $bytes = $response->encode_text($text);
+
+The characters as UTF-8 bytes. A character UTF-8 can't carry, a lone
+surrogate such as C<"\x{D800}">, dies with L<Encode>'s error. A subclass
+that wants something else, a replacement character say, overrides this;
+the body must still be UTF-8 (see L</Another charset>).
 
 =head2 prepare_content_type
 
@@ -135,8 +160,8 @@ type as described under L</content_type>.
 
 Text is the base for any format whose content is text: subclass it and set
 C<default_content_type>, and the encoding and the charset are done for you.
-To take something other than a string, override C<render> to make the
-text, and give that to Text's C<render> to encode:
+To take something other than a string, override C<as_text> to make the
+text, and Text encodes it:
 
     package CSV {
         use v5.40;
@@ -144,8 +169,8 @@ text, and give that to Text's C<render> to encode:
 
         sub default_content_type { 'text/csv' }   # sent as text/csv; charset=utf-8
 
-        sub render ($self, $rows) {
-            return $self->SUPER::render(join '', map { join(',', @$_) . "\r\n" } @$rows);
+        sub as_text ($self, $rows) {
+            return join '', map { join(',', @$_) . "\r\n" } @$rows;
         }
     }
 

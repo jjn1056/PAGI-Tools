@@ -73,10 +73,34 @@ subtest 'content that is not text dies at new' => sub {
         'an object that does not stringify');
     is(dies { PAGI::Response::Text->new(content => Local::Broken->new) }, "no name today\n",
         "an object whose stringification dies: its own error, untouched");
-    my $line = __LINE__ + 1;
-    my $error = dies { PAGI::Response::Text->new(content => "\x{D800}") };
-    like $error, qr/\\x\{d800\}.*UTF-8/, 'a surrogate is not a character UTF-8 can carry';
-    like $error, qr/at \Q${\ __FILE__ }\E line $line\.$/, 'the error names the line that built the response';
+    like(dies { PAGI::Response::Text->new(content => "\x{D800}") }, qr/\A"\\x\{d800\}" does not map to UTF-8 at /,
+        "a surrogate is not a character UTF-8 can carry: Encode's own error");
+};
+
+{
+    package Local::CSV;
+    use parent -norequire, 'PAGI::Response::Text';
+    sub as_text { my ($self, $rows) = @_; join '', map { join(',', @$_) . "\r\n" } @$rows }
+}
+
+{
+    package Local::Replacing;
+    use Encode ();
+    use parent -norequire, 'PAGI::Response::Text';
+    sub encode_text { my ($self, $text) = @_; Encode::encode('UTF-8', $text) }
+}
+
+subtest 'as_text and encode_text: render in two steps, a subclass overrides either' => sub {
+    is(PAGI::Response::Text->as_text(undef), '', 'as_text: no content is empty');
+    is(PAGI::Response::Text->as_text(Local::Name->new), "Jos\x{e9}", 'as_text: an object that stringifies, as characters');
+    like(dies { PAGI::Response::Text->as_text([]) }, qr/pass a string/, 'as_text: any other reference dies');
+    is(PAGI::Response::Text->encode_text("Jos\x{e9}"), "Jos\xc3\xa9", 'encode_text: characters as UTF-8 bytes');
+    like(dies { PAGI::Response::Text->encode_text("\x{D800}") }, qr/does not map to UTF-8/,
+        "encode_text: a character UTF-8 can't carry dies");
+    is(Local::CSV->new(content => [['id', 'name'], [1, "Jos\x{e9}"]])->body, "id,name\r\n1,Jos\xc3\xa9\r\n",
+        "a subclass's as_text makes the text, which Text encodes");
+    is(Local::Replacing->new(content => "a\x{D800}b")->body, "a\xef\xbf\xbdb",
+        "a subclass's encode_text is the one used: a replacement character instead of dying");
 };
 
 done_testing;
