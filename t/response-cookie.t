@@ -86,6 +86,20 @@ subtest 'attributes: each checked on its own' => sub {
     like dies { cookie(x => '', samesite => 'loose') }, qr/\Asamesite must be lax, strict or none/, 'samesite unknown';
 };
 
+subtest 'an attribute name not in the list croaks: a misspelled flag would go unsent' => sub {
+    like dies { cookie(s => 1, http_only => 1) }, qr/\Aunknown cookie attribute 'http_only': use one of domain, /,
+        'http_only, not httponly';
+    like dies { cookie(s => 1, 'max-age' => 5) }, qr/\Aunknown cookie attribute 'max-age'/, 'max-age, not max_age';
+    like dies { PAGI::Response->new->delete_cookie(s => same_site => 'lax') }, qr/\Aunknown cookie attribute 'same_site'/,
+        'delete_cookie too';
+};
+
+subtest 'expires: any epoch number is a date' => sub {
+    is cookie(x => '', expires => 784111777.25), 'x=; Path=/; Expires=Sun, 06 Nov 1994 08:49:37 GMT',
+        'a fraction, as Time::HiRes::time gives: the whole second';
+    is cookie(x => '', expires => -1), 'x=; Path=/; Expires=Wed, 31 Dec 1969 23:59:59 GMT', 'before 1970';
+};
+
 subtest 'rules across attributes are yours: sent as set, nothing added' => sub {
     is cookie('__Secure-id' => 'x'), '__Secure-id=x; Path=/', '__Secure- without secure';
     is cookie('__Host-id' => 'x', secure => 1, domain => 'example.com'), '__Host-id=x; Path=/; Domain=example.com; Secure',

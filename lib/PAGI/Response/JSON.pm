@@ -5,20 +5,22 @@ use warnings;
 use parent 'PAGI::Response';
 use JSON::MaybeXS ();
 
-# UTF-8 bytes, as a body must be. allow_nonref: the body may be any JSON
-# value (null, a string, a number), not only an object or an array, and not
-# every backend JSON::MaybeXS picks allows that by default. convert_blessed:
-# an object is sent as its TO_JSON returns, the Perl convention.
-my $JSON = JSON::MaybeXS->new(utf8 => 1, allow_nonref => 1, convert_blessed => 1);
+# The encoder the body is made with, a new one each time, so changing one changes no
+# other response. UTF-8 bytes, as a body must be. allow_nonref: the body may
+# be any JSON value (null, a string, a number), not only an object or an
+# array, and not every backend JSON::MaybeXS picks allows that by default.
+# convert_blessed: an object is sent as its TO_JSON returns, the Perl
+# convention. A subclass gives its own.
+sub json_encoder {
+    return JSON::MaybeXS->new(utf8 => 1, allow_nonref => 1, convert_blessed => 1);
+}
 
-# The encoder render uses: one, built once. A subclass gives its own.
-sub json_encoder { return $JSON }
-
-# The content as JSON, encoded when you build the response, so content JSON
-# can't carry dies there, with the encoder's error. undef is null.
-sub render {
-    my ($self, $content) = @_;
-    return $self->json_encoder->encode($content);
+# The body: the content as JSON, encoded when you build the response, so
+# content JSON can't carry dies there, with the encoder's error. undef is
+# null.
+sub prepare_body {
+    my ($self, $args) = @_;
+    return $self->json_encoder->encode($args->{content});
 }
 
 # JSON is UTF-8 by definition (RFC 8259), so the type names no charset.
@@ -100,9 +102,9 @@ C<application/problem+json> say, with no charset added.
 
 =head1 METHODS
 
-=head2 render
+=head2 prepare_body
 
-    my $bytes = $response->render($content);
+    my $body = $response->prepare_body($args);
 
 The content as JSON, in UTF-8 bytes, as described under L</content>,
 encoded with L</json_encoder>.
@@ -111,16 +113,18 @@ encoded with L</json_encoder>.
 
     my $encoder = PAGI::Response::JSON->json_encoder;
 
-The L<JSON::MaybeXS> object C<render> encodes with: C<utf8>,
-C<allow_nonref> and C<convert_blessed>, built once. A subclass that wants
+The L<JSON::MaybeXS> object C<prepare_body> encodes with: C<utf8>,
+C<allow_nonref> and C<convert_blessed>. It's a new one each time, so
+changing the one you're given changes no response. A subclass that wants
 its own settings, sorted keys say, gives its own:
 
     package SortedJSON {
         use v5.40;
         use parent 'PAGI::Response::JSON';
 
-        my $sorted = JSON::MaybeXS->new(utf8 => 1, allow_nonref => 1, convert_blessed => 1, canonical => 1);
-        sub json_encoder ($self) { $sorted }
+        sub json_encoder ($self) {
+            return JSON::MaybeXS->new(utf8 => 1, allow_nonref => 1, convert_blessed => 1, canonical => 1);
+        }
     }
 
 =head2 default_content_type

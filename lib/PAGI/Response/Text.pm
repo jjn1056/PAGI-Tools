@@ -7,10 +7,10 @@ use Carp ();
 use Encode ();
 use overload ();
 
-# The content as UTF-8 bytes: made into text, then encoded.
-sub render {
-    my ($self, $content) = @_;
-    return $self->encode_text($self->as_text($content));
+# The body: the content made into text, then encoded as UTF-8.
+sub prepare_body {
+    my ($self, $args) = @_;
+    return $self->encode_text($self->as_text($args->{content}));
 }
 
 # The content as characters: no content is empty, and an object that
@@ -120,9 +120,9 @@ encoding, see L</"Another charset">.
 
 =head1 METHODS
 
-=head2 render
+=head2 prepare_body
 
-    my $bytes = $response->render($content);
+    my $body = $response->prepare_body($args);
 
 The content as UTF-8 bytes, as described under L</content>: C<encode_text>
 of C<as_text>. Override either of those rather than this.
@@ -181,7 +181,7 @@ text, and Text encodes it:
 Text is UTF-8 all the way through: even a subclass that encoded some other
 way would still have C<; charset=utf-8> added to a type given without one.
 For text in another encoding, subclass L<PAGI::Response> instead. It adds no
-charset, so you encode in C<render> and name the charset in the type; see
+charset, so you encode in C<prepare_body> and name the charset in the type; see
 L<PAGI::Response/"Text in another charset">.
 
 =head1 SEE ALSO

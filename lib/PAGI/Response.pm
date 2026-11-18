@@ -4,7 +4,7 @@ use v5.24;
 use warnings;
 use parent 'PAGI::App';
 use Carp ();
-use Future;
+use Future::AsyncAwait;
 use Class::Tiny;   # new, BUILDARGS and BUILD; the fields are this class's own
 
 # A response is immutable: built once, from what you give it, and only
@@ -38,10 +38,13 @@ sub prepare_status {
     return $args->{status} // 200;
 }
 
-# The content, rendered to bytes once.
+# The body, made once from the content: here, the content as given, and no
+# content is an empty body. A format overrides this. Whether a body is
+# bytes is checked where every send is, by the server (and
+# PAGI::Test::Client), not here.
 sub prepare_body {
     my ($self, $args) = @_;
-    return $self->render($args->{content});
+    return $args->{content} // '';
 }
 
 # The type you gave, undef included; else the class's default, on every
@@ -129,12 +132,19 @@ sub delete_cookie {
     return $self->set_cookie($name, '', %attributes, max_age => 0, expires => 0);
 }
 
+my %ATTRIBUTE = map { $_ => 1 } qw(path domain expires max_age samesite secure httponly partitioned);
+
 # A Set-Cookie header's value. Each field is checked on its own (RFC 6265),
 # and a bad one croaks with the fix rather than having it made for you, so
-# what you set is what's sent. The value is raw: encode it yourself. The
-# path is / unless you give one, and undef sends none.
+# what you set is what's sent. An attribute name not in the list croaks: a
+# misspelled flag (http_only) would otherwise go unsent, and a header
+# without it is still valid, so nothing later notices. The value is raw:
+# encode it yourself. The path is / unless you give one, and undef sends
+# none.
 sub _set_cookie {
     my ($name, $value, %attributes) = @_;
+    Carp::croak("unknown cookie attribute '$_': use one of " . join(', ', sort keys %ATTRIBUTE))
+        for grep { !$ATTRIBUTE{$_} } sort keys %attributes;
     my %cookie = (path => '/', %attributes);
     Carp::croak('a cookie needs a name') unless defined $name && length $name;
     Carp::croak("cookie name contains '$1': a name is an RFC 6265 token")
@@ -146,7 +156,7 @@ sub _set_cookie {
     my $bytes = length($name) + length($value);
     Carp::croak("cookie $name is $bytes bytes of name and value: browsers ignore one over 4096") if $bytes > 4096;
     # No ; and no control character: either would end or break the header.
-    # An epoch expires is digits, so only a date string can fail this.
+    # An epoch expires is a number, so only a date string can fail this.
     for my $attribute (qw(path domain expires)) {
         Carp::croak("cookie $attribute can't contain ';' or a control character")
             if defined $cookie{$attribute} && $cookie{$attribute} =~ /[;\x00-\x1F\x7F]/;
@@ -171,10 +181,12 @@ sub _set_cookie {
 my @DAY   = qw(Sun Mon Tue Wed Thu Fri Sat);
 my @MONTH = qw(Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec);
 
-# An epoch number as an HTTP date (RFC 9110 5.6.7); a string is yours, as given.
+# An epoch number, a fraction (Time::HiRes::time) or before 1970 included,
+# as an HTTP date (RFC 9110 5.6.7) to the whole second; a string is yours,
+# as given.
 sub _date {
     my ($expires) = @_;
-    return $expires unless $expires =~ /\A\d+\z/;
+    return $expires unless $expires =~ /\A-?\d+(?:\.\d+)?\z/;
     my ($sec, $min, $hour, $mday, $mon, $year, $wday) = gmtime $expires;
     return sprintf '%s, %02d %s %04d %02d:%02d:%02d GMT',
         $DAY[$wday], $mday, $MONTH[$mon], $year + 1900, $hour, $min, $sec;
@@ -190,54 +202,16 @@ sub _without_content {
     return $status eq '204' || $status eq '304';
 }
 
-# The content as bytes: here, as given, and no content is an empty body.
-# Whether a body is bytes is checked where every send is, by the server
-# (and PAGI::Test::Client), not here.
-sub render {
-    my ($self, $content) = @_;
-    return defined $content ? $content : '';
-}
-
 # The class's type: none here, as Starlette's Response has no media_type. A
 # format sets its own.
 sub default_content_type { return undef }
 
-# Serving the response: the start, then the body as one event, issued once
-# the start's send has succeeded. The Future returned is this call's own,
-# settled from the sends' Futures, so a caller that cancels it (a timeout)
-# cancels neither of the server's sends. It aborts the connection instead:
-# the start has gone out, so the response can't be finished, and the client
-# gets a cut connection rather than a last body event saying it's complete.
-# No body follows; a send already issued is left to settle. It isn't an
-# async sub: cancelling one cancels the Future it's awaiting, here the
-# server's send, which the PAGI spec says an application shouldn't do, and
-# its CANCEL block, which would do the abort, is experimental.
-sub call {
+# Serving the response: the start, then the body as one event, the last.
+async sub call {
     my ($self, $scope, $receive, $send) = @_;
-    my $done  = Future->new;
-    my $start = Future->call(sub { $self->send_start($send) });
-    $done->on_cancel(sub {
-        my $connection = $scope->{'pagi.connection'};
-        $connection->abort('response cancelled by caller') if $connection;
-    });
-    $start->on_ready(sub {
-        my ($started) = @_;
-        return if $done->is_cancelled;
-        return _settle($done, $started, 'start') unless $started->is_done;
-        Future->call(sub { $send->({ type => 'http.response.body', body => $self->body, more => 0 }) })
-            ->on_ready(sub { _settle($done, $_[0], 'body') });
-    });
-    return $done;
-}
-
-# Settles call's Future from a send's: its failure, details included, else
-# done. A send Future cancelled by someone else fails it, rather than leave
-# call waiting or say the response went out.
-sub _settle {
-    my ($done, $sent, $what) = @_;
-    return $done->fail($sent->failure) if $sent->is_failed;
-    return $done->fail("the ${what}'s send was cancelled\n") if $sent->is_cancelled;
-    return $done->done;
+    await $self->send_start($send);
+    await $self->send_body($send);
+    return;
 }
 
 # The start: the status, a copy of the headers (a middleware may edit it),
@@ -250,6 +224,12 @@ sub send_start {
         headers => [map { [@$_] } @{ $self->headers }],
         ($self->has_trailers ? (trailers => 1) : ()),
     });
+}
+
+# The body: one event, the last.
+sub send_body {
+    my ($self, $send) = @_;
+    return $send->({ type => 'http.response.body', body => $self->body, more => 0 });
 }
 
 1;
@@ -279,52 +259,25 @@ PAGI::Response - An HTTP response, and the base for every other kind
 
 C<to_app> comes from L<PAGI::App>, and C<new> from L<Class::Tiny>.
 
-=head1 RATIONALE
-
-This is Starlette's C<Response>, ported, with one change that shapes the
-rest: once you've built a response, it can't be changed, apart from adding
-cookies.
-
-Starlette works a response out when you build it, then lets you keep
-changing it, so what it worked out can fall behind: change the body after
-and the Content-Length is wrong. We decide everything once, when you build
-it, from what you gave it: the status, the headers, the body's bytes, its
-Content-Length and its Content-Type. None of that changes after, so nothing has
-to be checked again when it's sent, and nothing can go stale. When you want
-something different, build a new one.
-
-Cookies are the exception, and you add them as you would with Starlette,
-with C<set_cookie> and C<delete_cookie> after the response is built. A
-Set-Cookie header is worked out from nothing else, and nothing is worked out
-from it, so adding one can't make anything stale:
-
-    PAGI::Response::Text->new(content => "Welcome back\n")
-        ->set_cookie(session => $id, httponly => 1, secure => 1);
-
-Unlike Starlette's, they add only what you ask for: Starlette sends
-SameSite=Lax unless you say otherwise, and we send no SameSite at all.
-
-Code that adds a header to a response it didn't build does it the way
-middleware does: on the start event, as it's sent.
-
-Where else we differ from Starlette, it's for Perl or for PAGI. The base
-sends no Content-Type unless you give one; L<PAGI::Response::Text> and
-L<PAGI::Response::JSON> have their own. Nor does it add a charset to a type you
-give: it's given bytes, so it can't know their encoding. L<PAGI::Response::Text>
-encodes, so it does. And trailers belong to L<PAGI::Response::Stream>, whose
-body has them at its end.
-
-Build a response for each request, in the handler that answers it. One
-that's the same for everyone can be sent more than once, but that's not what
-it's for, and one that carries anything about a user (a cookie, a name) must
-never be.
-
 =head1 DESCRIPTION
 
-Use C<PAGI::Response> as it is for bytes, or for a response with no body.
-For text, HTML or JSON, use the class for it. For a format of your own,
-override C<render> and C<default_content_type>; for arguments of your own,
-extend C<prepare> or one of its steps; see L</COOKBOOK>.
+A PAGI application that is a whole HTTP response. You build it with a
+status, headers and content, and when it's called it sends them: the start,
+then the body. Hand one to a server as the application, or await its
+C<call> from your own application to answer a request with it.
+
+It's also the base class for responses of a particular kind.
+L<PAGI::Response::Text> and L<PAGI::Response::JSON> are subclasses that
+make the body from characters or data and give it a type; a format of your
+own is a subclass too (see L</COOKBOOK>), and one that takes arguments of
+its own extends C<prepare> or one of its steps. F<examples/response/subclass.pl>
+has a subclass for each place one plugs in. Use C<PAGI::Response> itself for
+bytes, or for a response with no body.
+
+A response is worked out once, when you build it: the status, the headers,
+the body and its length. After that it can't be changed, except to add
+cookies; to send something different, build a new one. Build one for each
+request, in the handler that answers it.
 
 =head1 CONSTRUCTOR ARGUMENTS
 
@@ -334,8 +287,8 @@ extend C<prepare> or one of its steps; see L</COOKBOOK>.
 
 =item content
 
-What to send, given by name. It's rendered to bytes once, by C<render>,
-and kept as C<body>. Here it must already be bytes: a string with a
+What to send, given by name. It's made into the body once, by
+C<prepare_body>, and kept as C<body>. Here it must already be bytes: a string with a
 character above 0xFF, or a reference, fails when it's sent, as the PAGI
 spec has a server refuse it (L<PAGI::Test::Client> refuses it too, so your
 tests see it). With none, or C<undef>, the body is empty.
@@ -377,10 +330,10 @@ What the response was built with: C<content_type> is the one you gave,
 else the class's default; C<has_trailers> is always false, since a
 buffered body is known before the start goes out and what a trailer would
 carry goes in a header. They only read: given a value, each croaks, since a
-response can't be changed (see L</RATIONALE>).
+response can't be changed (see L</DESCRIPTION>).
 
-C<body> is the rendered content, as bytes, here and in the classes that
-render content. On a L<PAGI::Response::Stream> it's the code you gave,
+C<body> is the content made into bytes, here and in the classes that make
+it from content. On a L<PAGI::Response::Stream> it's the code you gave,
 which writes the body when the response is served. Code that looks at
 responses it didn't build checks C<< $response->isa('PAGI::Response::Stream') >>
 before treating C<body> as bytes.
@@ -427,8 +380,9 @@ C<undef> sends no Path.
 
 =item expires
 
-An epoch number, sent as an HTTP date (C<time + 3600> for an hour from
-now), or a date string, sent as given.
+An epoch number, sent as an HTTP date to the whole second (C<time + 3600>
+for an hour from now, from C<Time::HiRes> too), or a date string, sent as
+given.
 
 =item max_age
 
@@ -444,8 +398,10 @@ True to send the flag.
 
 =back
 
-A path, domain or expires string with a C<;> or a control character
-croaks, as does a bad C<max_age> or C<samesite>. Each croaks with what to
+Any other attribute name croaks, so a misspelling such as C<http_only> or
+C<max-age> can't send a cookie without the flag you meant. A path, domain
+or expires string with a C<;> or a control character croaks, as does a bad
+C<max_age> or C<samesite>. Each croaks with what to
 fix, from the line that set the cookie; nothing is fixed for you. What
 browsers require of attributes together is yours to get right, and a
 browser drops a cookie that gets it wrong: a C<__Secure-> or C<__Host->
@@ -472,18 +428,12 @@ them the same:
 
 The response as a PAGI application; C<to_app> returns a code reference that
 calls it. It sends the start (C<send_start>), then, once the start's send
-has succeeded, the body as one event, the last. On a 204 or 304 the body is
+has succeeded, the body as one event, the last (C<send_body>). On a 204 or 304 the body is
 sent as it is, and the server discards it.
 
-It returns a Future of its own, settled by the sends: it fails with a send's
-error when one fails (no body is sent if the start failed), and is done once
-the body has gone. Cancelling it cancels neither of the server's sends.
-
-Cancelling it (a timeout, say) aborts the response: the start has already
-gone out, so C<call> calls C<< $scope->{'pagi.connection'}->abort('response
-cancelled by caller') >> and sends no body, and the client gets a cut
-connection rather than a response that looks complete. With no
-C<pagi.connection> in the scope it just sends no body.
+It awaits each send, as any application does: it fails with a send's error
+when one fails (no body is sent if the start failed), and is done once the
+body has gone.
 
 A client that disconnects doesn't make C<call> fail: under the PAGI spec, a
 send to a connection that has closed succeeds and does nothing. So C<call>
@@ -498,6 +448,19 @@ has it. Whether the client is still there is the connection's to say
 The start: the status, a copy of C<headers> (so a middleware that changes
 it changes only that request), and, if C<has_trailers>, that trailers
 follow. It returns the send's Future.
+
+=head2 send_body
+
+    await $response->send_body($send);
+
+The body as one event, the last. It returns the send's Future. A subclass
+that wants to do something around the body's send, log it or time it say,
+wraps this:
+
+    sub send_body ($self, $send) {
+        my $started = time;
+        return $self->SUPER::send_body($send)->on_done(sub { say 'body sent in ', time - $started, 's' });
+    }
 
 =head2 prepare
 
@@ -531,7 +494,10 @@ The status you gave, else 200. Extend it for another default.
 
     my $body = $response->prepare_body($args);
 
-The content, rendered to bytes once, by C<render>.
+The body, made from C<content> once, when you build the response. Here,
+C<undef> or no content is an empty body, and bytes are kept as they are.
+Override it for a format of your own, returning bytes: encode text first,
+or use L<PAGI::Response::Text>.
 
 =head2 prepare_content_type
 
@@ -551,15 +517,6 @@ prepared: your C<headers>, copied, with each name lowercased (ASCII
 letters only), then the Content-Length unless you gave one (none without a
 body, or on 204 and 304, which have no body), then the Content-Type unless
 you gave one.
-
-=head2 render
-
-    my $bytes = $response->render($content);
-
-The content as bytes, called once, when you build the response. Here,
-C<undef> is an empty body, and bytes are kept as they are. Override it for a
-format of your own, returning bytes: encode text first, or use
-L<PAGI::Response::Text>.
 
 =head2 default_content_type
 
@@ -638,8 +595,8 @@ See F<examples/response/cookie.pl> for a whole application that does this.
 
 =head2 A format of your own
 
-Override C<render> to say how your content becomes bytes, and give the
-class a type. The content is rendered when you build the response, so a bad
+Override C<prepare_body> to say how your content becomes bytes, and give
+the class a type. The body is made when you build the response, so a bad
 value fails there, not halfway through a request.
 
 If your content is text in UTF-8, subclass L<PAGI::Response::Text>
@@ -650,8 +607,8 @@ bytes are yours to make, as they are for text in another charset.
 =head2 Text in another charset
 
 L<PAGI::Response::Text> is UTF-8 all the way through. For another encoding,
-subclass C<PAGI::Response>, which adds no charset: encode in C<render>, and
-name the charset in the type, so the two agree:
+subclass C<PAGI::Response>, which adds no charset: encode in
+C<prepare_body>, and name the charset in the type, so the two agree:
 
     use v5.40;
     use utf8;
@@ -664,8 +621,8 @@ name the charset in the type, so the two agree:
         sub default_content_type { 'text/plain; charset=iso-8859-1' }
 
         # A character Latin-1 can't hold croaks, rather than going out as '?'.
-        sub render ($self, $text) {
-            return Encode::encode('iso-8859-1', $text // '', Encode::FB_CROAK);
+        sub prepare_body ($self, $args) {
+            return Encode::encode('iso-8859-1', $args->{content} // '', Encode::FB_CROAK | Encode::LEAVE_SRC);
         }
     }
 

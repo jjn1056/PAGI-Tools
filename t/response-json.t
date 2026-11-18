@@ -73,16 +73,18 @@ subtest 'an object with TO_JSON is sent as what TO_JSON returns' => sub {
 {
     package Local::SortedJSON;
     use parent -norequire, 'PAGI::Response::JSON';
-    my $sorted = JSON::MaybeXS->new(utf8 => 1, canonical => 1);
-    sub json_encoder { return $sorted }
+    sub json_encoder { return JSON::MaybeXS->new(utf8 => 1, canonical => 1) }
 }
 
-subtest 'json_encoder: the encoder render uses, a subclass gives its own' => sub {
+subtest 'json_encoder: the encoder the body is made with, a subclass gives its own' => sub {
     my $encoder = PAGI::Response::JSON->json_encoder;
     is $encoder->encode({ name => "\x{e9}" }), qq({"name":"\xc3\xa9"}), 'the class encoder: UTF-8 bytes';
     is $encoder->encode(Local::User->new('ada')), '{"name":"ada"}', 'and TO_JSON';
     is(Local::SortedJSON->new(content => { b => 2, a => 1, c => 3 })->body, '{"a":1,"b":2,"c":3}',
         "a subclass's encoder is the one used: its keys sorted");
+    PAGI::Response::JSON->json_encoder->pretty(1);
+    is(PAGI::Response::JSON->new(content => { a => 1 })->body, '{"a":1}',
+        'a new encoder each time: changing one changes no other response');
 };
 
 subtest 'content on its own is the arguments, not the content (the trap the POD shows)' => sub {

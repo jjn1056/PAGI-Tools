@@ -90,7 +90,7 @@ subtest 'content that is not text dies at new' => sub {
     sub encode_text { my ($self, $text) = @_; Encode::encode('UTF-8', $text) }
 }
 
-subtest 'as_text and encode_text: render in two steps, a subclass overrides either' => sub {
+subtest 'as_text and encode_text: the body in two steps, a subclass overrides either' => sub {
     is(PAGI::Response::Text->as_text(undef), '', 'as_text: no content is empty');
     is(PAGI::Response::Text->as_text(Local::Name->new), "Jos\x{e9}", 'as_text: an object that stringifies, as characters');
     like(dies { PAGI::Response::Text->as_text([]) }, qr/pass a string/, 'as_text: any other reference dies');

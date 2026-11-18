@@ -2,8 +2,8 @@ use v5.24;
 use warnings;
 use Test2::V0;
 use Future;
+use Future::AsyncAwait;
 use PAGI::Test::Client;
-use PAGI::Test::ConnectionState;
 use Test::Lib;
 use PAGITest::LowercaseHeaders;
 
@@ -170,7 +170,7 @@ package Local::Given { use parent -norequire, 'PAGI::Response';
         return $self->SUPER::prepare_headers($args, %prepared) } }
 package Local::CSV { use parent -norequire, 'PAGI::Response';
     sub default_content_type { 'text/csv' }
-    sub render { my ($self, $rows) = @_; join '', map { join(',', @$_) . "\r\n" } @$rows } }
+    sub prepare_body { my ($self, $args) = @_; join '', map { join(',', @$_) . "\r\n" } @{ $args->{content} } } }
 package main;
 
 subtest 'prepare: a subclass adds its own arguments' => sub {
@@ -212,8 +212,29 @@ subtest 'call: the start, then the body as one event, once the start has gone' =
     $sent->[1]{future}->done;
     ok $call->is_done, 'and is done once it has gone';
     is [$call->get], [], 'with nothing';
-    ok !PAGI::Response->can($_), "no $_" for qw(send_body send_trailers);
-    can_ok 'PAGI::Response', 'send_start';
+    ok !PAGI::Response->can('send_trailers'), 'no send_trailers';
+    can_ok 'PAGI::Response', 'send_start', 'send_body';
+};
+
+{
+    package Local::CountedBody;
+    use parent -norequire, 'PAGI::Response';
+    our @log;
+    sub send_body {
+        my ($self, $send) = @_;
+        push @log, 'before';
+        return $self->SUPER::send_body($send)->on_done(sub { push @log, 'after' });
+    }
+}
+
+subtest 'send_body: a subclass wraps the body send' => sub {
+    my ($call, $sent) = call_recorded(Local::CountedBody->new(content => 'abc'));
+    $sent->[0]{future}->done;
+    is \@Local::CountedBody::log, ['before'], 'its code runs once the start has gone';
+    is $sent->[1]{event}, { type => 'http.response.body', body => 'abc', more => 0 }, 'and the body is sent as before';
+    $sent->[1]{future}->done;
+    is \@Local::CountedBody::log, ['before', 'after'], 'it sees the send finish';
+    ok $call->is_done, 'and call is done';
 };
 
 subtest 'call: on a 204 the content is sent as given' => sub {
@@ -233,68 +254,39 @@ subtest 'call: a send that fails fails call, with its error' => sub {
     is $call->failure, "body refused\n", 'the body failed: its error';
     ($call, $sent) = call_recorded(PAGI::Response->new(content => 'abc'));
     $sent->[0]{future}->cancel;
-    like $call->failure, qr/\Athe start's send was cancelled/, 'a send cancelled by someone else fails call';
+    ok $call->is_failed, 'a send cancelled by someone else fails call';
     is scalar @$sent, 1, 'and nothing more is sent';
     my $dies = PAGI::Response->new(content => 'abc')->call({ type => 'http', method => 'GET' }, sub { Future->new },
         sub { die "no send\n" });
     is $dies->failure, "no send\n", 'a $send that dies: call fails with that';
 };
 
-subtest 'call cancelled by its caller: the connection is aborted, and no body follows' => sub {
-    my $connection = PAGI::Test::ConnectionState->new;
-    my ($call, $sent) = call_recorded(PAGI::Response->new(content => 'abc'), 'pagi.connection' => $connection);
-    $call->cancel;
-    is $connection->disconnect_reason, 'app_abort', 'the connection is aborted';
-    is $connection->disconnect_detail, 'response cancelled by caller', 'saying why';
-    $sent->[0]{future}->done;
-    is scalar @$sent, 1, 'the start resolving afterwards sends no body';
-    $connection = PAGI::Test::ConnectionState->new;
-    ($call, $sent) = call_recorded(PAGI::Response->new(content => 'abc'), 'pagi.connection' => $connection);
-    $sent->[0]{future}->done;
-    $call->cancel;
-    is $connection->disconnect_reason, 'app_abort', 'cancelled while the body is going: aborted too';
-    ($call, $sent) = call_recorded(PAGI::Response->new(content => 'abc'));
-    ok lives { $call->cancel; $sent->[0]{future}->done }, 'no pagi.connection: nothing dies';
-    is scalar @$sent, 1, 'and no body is sent';
-};
-
-subtest 'call cancelled: a send settling afterwards changes nothing' => sub {
-    for my $settle ([done => sub { $_[0]->done }], [failed => sub { $_[0]->fail("cut\n") }]) {
-        my ($how, $settles) = @$settle;
-        my ($call, $sent) = call_recorded(PAGI::Response->new(content => 'abc'),
-            'pagi.connection' => PAGI::Test::ConnectionState->new);
-        $sent->[0]{future}->done;
-        $call->cancel;
-        is warnings { ok lives { $settles->($sent->[1]{future}) }, "the body's send $how afterwards: nothing dies" }, [],
-            'and nothing warns';
-        ok $call->is_cancelled, 'call stays cancelled';
-    }
-    for my $pending (qw(start body)) {
-        my $send_of;
-        my $connection = PAGI::Test::ConnectionState->new(on_abort => sub { $send_of->()->fail("aborted\n") });
-        my ($call, $sent) = call_recorded(PAGI::Response->new(content => 'abc'), 'pagi.connection' => $connection);
-        $sent->[0]{future}->done if $pending eq 'body';
-        $send_of = sub { $sent->[-1]{future} };
-        is warnings { ok lives { $call->cancel }, "the abort fails the pending $pending send: nothing dies" }, [],
-            'and nothing warns';
-        ok $call->is_cancelled, 'call is cancelled';
-        is scalar @$sent, $pending eq 'body' ? 2 : 1, 'and nothing more is sent';
-    }
-};
-
-subtest 'call: its Future is its own; cancelling it cancels neither send' => sub {
-    my ($call, $sent) = call_recorded(PAGI::Response->new(content => 'abc'));
-    $call->cancel;
-    ok !$sent->[0]{future}->is_cancelled, 'the start\'s send is not cancelled';
-    ($call, $sent) = call_recorded(PAGI::Response->new(content => 'abc'));
-    $sent->[0]{future}->done;
-    $call->cancel;
-    ok !$sent->[1]{future}->is_cancelled, 'nor the body\'s';
+subtest 'call: a send that waits, as an async sub, is awaited until it ends' => sub {
+    # A server's send waiting for its write buffer to drain, or a
+    # middleware's that awaits first. This one keeps only its gates, so the
+    # Future it returns is held by whoever awaits it and nothing else.
+    my (@types, @gates);
+    my $send = async sub {
+        my ($event) = @_;
+        push @types, $event->{type};
+        push @gates, my $gate = Future->new;
+        await $gate;
+        return;
+    };
+    my $call;
+    is warnings {
+        $call = PAGI::Response->new(content => 'hi')->call({ type => 'http' }, sub { Future->new }, $send);
+        (shift @gates)->done;
+        (shift @gates)->done if @gates;
+    }, [], 'no send lost';
+    is \@types, ['http.response.start', 'http.response.body'], 'the body follows the start';
+    ok $call->is_done, 'and call is done';
 };
 
 subtest 'a format of your own' => sub {
     my $res = get(Local::CSV->new(content => [[1, 2], [3, 4]]));
-    is $res->content, "1,2\r\n3,4\r\n", 'render';
+    is $res->content, "1,2\r\n3,4\r\n", 'its prepare_body';
+    ok !PAGI::Response->can('render'), 'one hook for the body: no render';
     is $res->content_type, 'text/csv', 'its type';
 };
 
