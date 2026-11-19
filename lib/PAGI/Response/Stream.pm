@@ -36,6 +36,9 @@ sub prepare_headers {
     return $self->SUPER::prepare_headers($args, %prepared, body => undef);
 }
 
+# The class of the writer the body is given. A subclass names its own.
+sub writer_class { return 'PAGI::Response::Writer' }
+
 # The bytes write_item writes for an item: here, the item as it is. A
 # format overrides this.
 sub format_item {
@@ -45,10 +48,11 @@ sub format_item {
 
 # Serving the stream: the body runs with a writer until it returns, then
 # the end goes, and the trailers it returned if declared. A client leaving
-# cancels the body; the end still goes, and the server drops it, as it
-# drops every send after a disconnect. The client leaving is heard
-# through a Future of this request's own: the connection's
-# disconnect_future is shared, and wait_any cancels whichever loses.
+# cancels the body, and nothing more is sent. The news of a client leaving
+# comes through a Future of this request's own (the connection's
+# disconnect_future is shared, and wait_any cancels whichever loses), and
+# may come late, from the loop; whether the client has gone is read from
+# the connection itself, which knows at once.
 async sub call {
     my ($self, $scope, $receive, $send) = @_;
     my $connection = $scope->{'pagi.connection'};
@@ -56,15 +60,15 @@ async sub call {
 
     my $left = Future->new;
     $connection->on_disconnect(sub { $left->done unless $left->is_ready });
-    my $writer = PAGI::Response::Writer->_new(response => $self, send => $send);
+    my $writer = $self->writer_class->_new(response => $self, send => $send, connection => $connection);
 
     my $ok = eval {
         my $trailers = await Future->wait_any(Future->call($self->body, $writer), $left);
-        await $writer->_end($trailers);
+        await $writer->_end($trailers) unless defined $connection->disconnect_reason;
         1;
     };
     my $error = $@;
-    await $writer->_ended(!$ok ? 'failed' : $left->is_done ? 'disconnected' : 'finished');
+    await $writer->_ended(!$ok ? 'failed' : defined $connection->disconnect_reason ? 'disconnected' : 'finished');
     die $error unless $ok;
     return;
 }
@@ -117,7 +121,10 @@ server free to answer with its 500.
 
 A client that leaves cancels the body, at the C<await> it's waiting on: the
 Future it was waiting for is cancelled too, and code after that C<await>
-never runs. A loop with no C<await> in it isn't stopped until it awaits.
+never runs. A loop with no C<await> in it isn't stopped until it awaits. A
+write is an C<await> too: once the client has gone, a write sends nothing
+and waits there for the cancel, so a loop whose only waits are writes stops
+as well.
 
 F<examples/response/stream.pl> serves each of these: lines as they're made,
 a file relayed with its digest and length as trailers, NDJSON, and a feed
@@ -188,6 +195,14 @@ C<on_close> callbacks run before C<call> returns or dies. If you cancel
 C<call>'s Future, nothing after that point runs, C<on_close> included; see
 L</TIMING OUT A STREAM>.
 
+=head2 writer_class
+
+    sub writer_class { 'My::Writer' }   # a subclass of PAGI::Response::Writer
+
+The class of the writer the body is given: L<PAGI::Response::Writer> here.
+A subclass of Stream names a subclass of the writer to change how writing
+works; see L</SUBCLASSING>.
+
 =head2 format_item
 
     sub format_item ($self, $item) { ...; return $bytes }
@@ -222,8 +237,7 @@ The writer's C<outcome> says, by the time C<on_close> callbacks run:
     the body died, or a send it         failed        dies with the error
       awaited failed
 
-The end goes after a client leaves too, and the server drops it, as it drops
-every send after a disconnect.
+After a client leaves, nothing more is sent: no end, and no trailers.
 
 =head1 UTF-8
 
@@ -333,11 +347,34 @@ writes items:
         for my $id (1 .. 3) { await $writer->write_item({ id => $id }) }
     });
 
+To change how the body writes, name a writer of your own with
+C<writer_class>. Say you want the body to learn the client has gone from
+C<write> itself, rather than be cancelled at its next C<await>:
+
+    package Polite::Writer {
+        use v5.40;
+        use parent 'PAGI::Response::Writer';
+
+        # False once the client has gone, rather than waiting to be cancelled.
+        async sub write ($self, $bytes) {
+            return 0 if defined $self->{connection}->disconnect_reason;
+            await $self->SUPER::write($bytes);
+            return 1;
+        }
+    }
+
+    package Polite::Stream {
+        use v5.40;
+        use parent 'PAGI::Response::Stream';
+        sub writer_class { 'Polite::Writer' }
+    }
+
 For arguments of your own, extend C<prepare> or the step for the argument,
 as for any L<PAGI::Response>.
 
 Overlapping writes, made without waiting for each, need a server that sends
-events in the order they were made (PAGI::Spec::Www 0.7).
+events in the order they were made (PAGI::Spec::Www 0.7), and their Futures
+kept and awaited together; see L<PAGI::Response::Writer/DESCRIPTION>.
 
 =head1 SEE ALSO
 

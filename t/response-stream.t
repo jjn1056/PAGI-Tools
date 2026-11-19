@@ -24,14 +24,15 @@ sub recording_send {
 }
 
 # Calls a response with a recording $send and a connection still open;
-# returns call's Future and what was sent.
+# returns call's Future, what was sent, and the connection.
 sub call_recorded {
     my ($response) = @_;
     require PAGI::Test::ConnectionState;
     my ($send, $sent) = recording_send();
-    my $scope = { type => 'http', method => 'GET', 'pagi.connection' => PAGI::Test::ConnectionState->new };
+    my $connection = PAGI::Test::ConnectionState->new;
+    my $scope = { type => 'http', method => 'GET', 'pagi.connection' => $connection };
     my $call = $response->call($scope, sub { Future->new }, $send);
-    return ($call, $sent);
+    return ($call, $sent, $connection);
 }
 
 # What each recorded event was, in a word or two.
@@ -139,6 +140,28 @@ subtest 'write_item: what format_item makes of the item' => sub {
     is get(PAGI::Response::Stream->new(body => $body))->content, 'ab', 'a plain Stream writes the item as it is';
 };
 
+subtest 'writer_class: a subclass gives the body a writer of its own' => sub {
+    {
+        package Local::LoudWriter;
+        use parent -norequire, 'PAGI::Response::Writer';
+        sub write { my ($self, $bytes) = @_; return $self->SUPER::write(uc $bytes) }
+    }
+    {
+        package Local::LoudStream;
+        use parent -norequire, 'PAGI::Response::Stream';
+        sub writer_class { 'Local::LoudWriter' }
+    }
+    my $given;
+    my $res = get(Local::LoudStream->new(body => async sub {
+        my ($writer) = @_;
+        $given = ref $writer;
+        await $writer->write('abc');
+    }));
+    is $given, 'Local::LoudWriter', 'the body gets the class it names';
+    is $res->content, 'ABC', 'and its write is the one used';
+    is(PAGI::Response::Stream->writer_class, 'PAGI::Response::Writer', 'by default, PAGI::Response::Writer');
+};
+
 subtest 'pipe_from: every chunk of a source until undef, waiting on each' => sub {
     {
         package Local::Source;
@@ -206,7 +229,7 @@ subtest 'a 204 with trailers: the body runs, and the end and the trailers go' =>
     is $warnings, [], 'complete: the end and the trailers went';
 };
 
-subtest 'the client leaves while the body waits: the body is cancelled, no end' => sub {
+subtest 'the client leaves while the body waits: the body is cancelled' => sub {
     my $waiting = Future->new;
     my $outcome;
     my $stream = PAGI::Test::Client->new(app => PAGI::Response::Stream->new(body => async sub {
@@ -219,9 +242,110 @@ subtest 'the client leaves while the body waits: the body is cancelled, no end' 
     is $stream->receive_chunk, 'a', 'a chunk';
     $stream->close;
     ok $waiting->is_cancelled, 'what the body was waiting on is cancelled';
-    ok !$stream->response->body_complete, 'no end';
     is $stream->response->content, 'a', 'nothing after';
     is $outcome, 'disconnected', 'outcome: disconnected';
+};
+
+subtest 'the client left, but the news comes later: the writes stop at once' => sub {
+    # As PAGI-Server does it: once the client has gone, sends finish at once
+    # and do nothing, and on_disconnect is delivered later, by the loop.
+    my $connection = PAGI::Test::ConnectionState->new;
+    my ($sends, $writes, $outcome) = (0, 0);
+    my $send = sub {
+        if (++$sends == 3) {
+            local $connection->{_defer_notifications} = 1;
+            $connection->_mark_disconnected('client_closed');
+        }
+        return Future->done;
+    };
+    my $call = PAGI::Response::Stream->new(body => async sub {
+        my ($writer) = @_;
+        $writer->on_close(sub { $outcome = $_[0]->outcome });
+        while ($writes < 1000) { $writes++; await $writer->write('x') }    # awaits only writes
+    })->call({ type => 'http', method => 'GET', 'pagi.connection' => $connection }, sub { Future->new }, $send);
+    ok $writes < 10, "the body stopped writing once the client had gone ($writes writes)";
+    ok !$call->is_ready, 'and waits for the news';
+    $connection->_deliver_notifications;
+    is $outcome, 'disconnected', 'which cancels the body: disconnected';
+    ok $call->is_done, 'and call is done';
+};
+
+subtest 'a body that returns once the client has gone, before the news: disconnected, no end' => sub {
+    {   # the POD's SUBCLASSING example
+        package Polite::Writer;
+        use parent -norequire, 'PAGI::Response::Writer';
+        use Future::AsyncAwait;
+        async sub write {
+            my ($self, $bytes) = @_;
+            return 0 if defined $self->{connection}->disconnect_reason;
+            await $self->SUPER::write($bytes);
+            return 1;
+        }
+        package Polite::Stream;
+        use parent -norequire, 'PAGI::Response::Stream';
+        sub writer_class { 'Polite::Writer' }
+    }
+    my $connection = PAGI::Test::ConnectionState->new;
+    my ($sends, $outcome) = (0);
+    my @sent;
+    my $send = sub {
+        push @sent, $_[0];
+        if (++$sends == 3) {
+            local $connection->{_defer_notifications} = 1;
+            $connection->_mark_disconnected('client_closed');
+        }
+        return Future->done;
+    };
+    my $call = Polite::Stream->new(body => async sub {
+        my ($writer) = @_;
+        $writer->on_close(sub { $outcome = $_[0]->outcome });
+        my $n = 0;
+        while (await $writer->write($n++)) { }
+    })->call({ type => 'http', method => 'GET', 'pagi.connection' => $connection }, sub { Future->new }, $send);
+    ok $call->is_done, 'the body returned, and call is done';
+    is $outcome, 'disconnected', 'disconnected, though the news has not come';
+    is scalar(grep { !$_->{more} && $_->{type} eq 'http.response.body' } @sent), 0, 'and no end was sent';
+    $connection->_deliver_notifications;
+};
+
+subtest 'the client leaves while the start is still being sent: disconnected, no end' => sub {
+    my $outcome;
+    my ($call, $sent, $connection) = call_recorded(PAGI::Response::Stream->new(body => async sub {
+        my ($writer) = @_;
+        $writer->on_close(sub { $outcome = $_[0]->outcome });
+        await $writer->write('a');
+    }));
+    is sent_kinds($sent), ['start'], 'the start, still pending';
+    $connection->_mark_disconnected('client_closed');
+    ok $call->is_done, 'call is done, not failed';
+    is $outcome, 'disconnected', 'disconnected';
+    is sent_kinds($sent), ['start'], 'and nothing more is sent: no end for a client that left';
+};
+
+subtest 'a body that writes nothing: one start, one end, no length, finished' => sub {
+    my $outcome;
+    my ($call, $sent) = call_recorded(PAGI::Response::Stream->new(body => async sub {
+        $_[0]->on_close(sub { $outcome = $_[0]->outcome });
+    }));
+    $sent->[0]{future}->done;
+    $sent->[1]{future}->done;
+    is sent_kinds($sent), ['start', 'end'], 'a start, then the end';
+    ok !(grep { $_->[0] eq 'content-length' } @{ $sent->[0]{event}{headers} }), 'no Content-Length';
+    is $outcome, 'finished', 'finished';
+    ok $call->is_done, 'call is done';
+};
+
+subtest 'HEAD: the body runs, and the client gets the headers and no body' => sub {
+    my ($ran, $outcome);
+    my $res = PAGI::Test::Client->new(app => PAGI::Response::Stream->new(content_type => 'text/plain', body => async sub {
+        my ($writer) = @_;
+        $writer->on_close(sub { $outcome = $_[0]->outcome });
+        $ran = 1;
+        await $writer->write('abc');
+    }))->head('/');
+    ok $ran, 'the body ran';
+    is [$res->status, $res->content, $res->header('content-type')], [200, '', 'text/plain'], 'the headers, no body';
+    is $outcome, 'finished', 'finished';
 };
 
 subtest 'a client that left before call: the body never runs, nothing is sent' => sub {
