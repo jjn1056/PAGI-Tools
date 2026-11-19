@@ -140,6 +140,12 @@ subtest 'write_item: what format_item makes of the item' => sub {
     is get(PAGI::Response::Stream->new(body => $body))->content, 'ab', 'a plain Stream writes the item as it is';
 };
 
+subtest "connection: the request's pagi.connection" => sub {
+    my $given;
+    my ($call, $sent, $connection) = call_recorded(PAGI::Response::Stream->new(body => async sub { $given = $_[0]->connection }));
+    is $given, exact_ref($connection), 'the one in the scope';
+};
+
 subtest 'writer_class: a subclass gives the body a writer of its own' => sub {
     {
         package Local::LoudWriter;
@@ -277,7 +283,7 @@ subtest 'a body that returns once the client has gone, before the news: disconne
         use Future::AsyncAwait;
         async sub write {
             my ($self, $bytes) = @_;
-            return 0 if defined $self->{connection}->disconnect_reason;
+            return 0 if defined $self->connection->disconnect_reason;
             await $self->SUPER::write($bytes);
             return 1;
         }

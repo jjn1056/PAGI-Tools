@@ -56,6 +56,9 @@ sub on_close {
     return $self;
 }
 
+# The request's pagi.connection.
+sub connection { return $_[0]{connection} }
+
 # How the stream ended: finished, disconnected or failed; undef while it runs.
 sub outcome { return $_[0]{outcome} }
 
@@ -177,6 +180,15 @@ the order given, and each may return a Future, which is waited for before
 the next runs. One that dies is warned about, and the rest still run.
 C<call> returns, or dies, after them. Register them before the body's first
 C<await>, so they're in place whatever happens next.
+
+=head2 connection
+
+    my $connection = $writer->connection;
+
+The request's C<pagi.connection>
+(L<PAGI::Spec::Www/Connection State>): whether the client is still there,
+and why it left. For a writer of your own, given by
+L<PAGI::Response::Stream/writer_class>, that needs to know.
 
 =head2 outcome
 

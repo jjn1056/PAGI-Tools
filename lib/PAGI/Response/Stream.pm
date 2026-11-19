@@ -357,7 +357,7 @@ C<write> itself, rather than be cancelled at its next C<await>:
 
         # False once the client has gone, rather than waiting to be cancelled.
         async sub write ($self, $bytes) {
-            return 0 if defined $self->{connection}->disconnect_reason;
+            return 0 if defined $self->connection->disconnect_reason;
             await $self->SUPER::write($bytes);
             return 1;
         }
