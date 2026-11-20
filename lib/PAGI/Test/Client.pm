@@ -166,6 +166,7 @@ sub _http_exchange {
         # settled on a later turn of the event loop (PAGI::Spec, "Send
         # Completion Contract").
         if (defined $scope->{'pagi.connection'}->disconnect_reason) {
+            $scope->{'pagi.connection'}->_discarded_send;
             await PAGI::Test::_Drive::next_turn();
             return;
         }
@@ -1648,6 +1649,13 @@ stream's events land in its own queue.
 In callback style the client leaves when the code returns, or dies, unless
 the response is already over; C<stream> then returns nothing. How a stream
 ends is under L</SEMANTICS>.
+
+Once the client has left, a send does nothing and settles on a later turn of
+the event loop, as on a server. An application that races its work against
+C<< $scope->{'pagi.connection'}->end_future >>, and sends its terminal event
+after the race, sends once more at most; one that keeps sending, on any
+scope, has not raced its work, and the test client warns once, at its third
+discarded send (L<PAGI::Spec::Www/"Example: Racing Against Disconnect">).
 
 =head1 SEMANTICS
 

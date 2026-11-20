@@ -174,6 +174,18 @@ sub _set_peer_close {
     $self->{_close_reason} = $reason;
 }
 
+# A send the scope could no longer carry. Raced against end_future, an
+# application sends once after the end (its terminal event), so the third
+# warns, once: its work was not raced and kept going after the client left.
+sub _discarded_send {
+    my ($self) = @_;
+    return if ++$self->{_discarded_sends} != 3;
+    warn "PAGI application kept sending after the scope ended; race its work against "
+        . "\$scope->{'pagi.connection'}->end_future (PAGI::Spec::Www, "
+        . "\"Example: Racing Against Disconnect\")\n";
+    return;
+}
+
 sub end_future {
     my ($self) = @_;
     my $master = $self->{_end_master} ||= Future->new;

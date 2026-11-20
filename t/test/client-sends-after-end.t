@@ -1,7 +1,9 @@
 use strict;
 use warnings;
 use Test2::V0;
+use Future;
 use Future::AsyncAwait;
+use Future::IO;
 use PAGI::Test::Client;
 use Test::Lib;
 use PAGITest::LowercaseHeaders;
@@ -44,6 +46,49 @@ for my $type (qw(http websocket sse)) {
         ok $seen{returned}, 'and the application went on';
     };
 }
+
+# An application that keeps sending once its client has gone forgot to race
+# its work against the scope's end; the test client says so, once. The idiom
+# (race end_future, terminal event after the race) sends once after the end.
+subtest 'a stream that keeps sending after the client left is warned about, once' => sub {
+    my $naive = async sub {
+        my ($scope, $receive, $send) = @_;
+        await $send->({ type => 'http.response.start', status => 200, headers => [] });
+        for my $n (1 .. 50) {
+            await $send->({ type => 'http.response.body', body => "x\n", more => 1 });
+            await Future::IO->sleep(0.001);   # made over time, as a stream is
+        }
+        await $send->({ type => 'http.response.body', body => '', more => 0 });
+    };
+    my $warnings = warnings {
+        my $stream = PAGI::Test::Client->new(app => $naive)->stream('/');
+        $stream->receive_chunk;
+        $stream->close;
+    };
+    is scalar @$warnings, 1, 'one warning';
+    like $warnings->[0], qr/kept sending after the scope ended.*end_future/s, 'naming the fix';
+};
+
+subtest 'the end_future idiom is not warned about' => sub {
+    my $raced = async sub {
+        my ($scope, $receive, $send) = @_;
+        await $send->({ type => 'http.response.start', status => 200, headers => [] });
+        my $produce = async sub {
+            for my $n (1 .. 50) {
+                await $send->({ type => 'http.response.body', body => "x\n", more => 1 });
+                await Future::IO->sleep(0.001);
+            }
+        };
+        await Future->wait_any($produce->(), $scope->{'pagi.connection'}->end_future);
+        await $send->({ type => 'http.response.body', body => '', more => 0 });
+    };
+    my $warnings = warnings {
+        my $stream = PAGI::Test::Client->new(app => $raced)->stream('/');
+        $stream->receive_chunk;
+        $stream->close;
+    };
+    is $warnings, [], 'no warning';
+};
 
 subtest 'every scope reports PAGI core 0.6' => sub {
     my %version;

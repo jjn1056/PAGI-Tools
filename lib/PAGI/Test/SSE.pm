@@ -133,6 +133,7 @@ sub _start {
     # effect.
     my $send = async sub {
         my $discarded = await $take_send->(@_);
+        $self->{scope}{'pagi.connection'}->_discarded_send if $discarded;
         await PAGI::Test::_Drive::next_turn() if $discarded;
         return;
     };
