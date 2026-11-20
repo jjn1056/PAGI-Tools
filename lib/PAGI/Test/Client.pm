@@ -636,8 +636,8 @@ sub start {
 
     my $scope = {
         type          => 'lifespan',
-        # source of truth: released PAGI::Server scope advertisement
-        pagi          => { version => '0.4', spec_version => '0.3' },
+        # as PAGI::Server advertises it: core 0.6, lifespan 0.3
+        pagi          => { version => '0.6', spec_version => '0.3' },
         state  => $self->{state},
     };
 

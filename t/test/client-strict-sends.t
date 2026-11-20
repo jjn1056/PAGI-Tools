@@ -303,10 +303,10 @@ subtest 'B5: websocket and sse sends are checked the same way' => sub {
 };
 
 # ---------------------------------------------------------------------------
-# B4: every scope type advertises pagi 0.4 / spec_version 0.3.
+# B4: every scope type advertises core 0.6, with its protocol's spec_version.
 # ---------------------------------------------------------------------------
 
-subtest 'B4: WWW scopes advertise core 0.6 / WWW 0.7; lifespan is unchanged' => sub {
+subtest 'B4: WWW scopes advertise core 0.6 / WWW 0.7; lifespan core 0.6 / lifespan 0.3' => sub {
     my $seen;
 
     my $http_app = async sub {
@@ -346,7 +346,7 @@ subtest 'B4: WWW scopes advertise core 0.6 / WWW 0.7; lifespan is unchanged' => 
         await $receive->(); # suspends awaiting shutdown
     };
     PAGI::Test::Client->new(app => $lifespan_app, lifespan => 1)->start;
-    is_deeply $seen, { version => '0.4', spec_version => '0.3' }, 'lifespan scope';
+    is_deeply $seen, { version => '0.6', spec_version => '0.3' }, 'lifespan scope';
 };
 
 done_testing;
