@@ -74,12 +74,13 @@ sub _start {
     # PAGI::Utils::_SendValidation's sse rules) fail the returned Future -- a
     # canonical test double must not accept what a real server would
     # reject -- and are never appended to the client's readable stream.
-    my $send = async sub {
+    # Returns 'discarded' for a send the scope can no longer carry.
+    my $take_send = async sub {
         my ($event) = @_;
 
         my $conn = $self->{scope}{'pagi.connection'};
         local $conn->{_defer_notifications} = 1;
-        return if $conn && defined $conn->disconnect_reason;
+        return 'discarded' if $conn && defined $conn->disconnect_reason;
 
         if (my $err = $sv->check($event)) {
             die $err->message . "\n";
@@ -98,10 +99,9 @@ sub _start {
             # If the peer (the test side) already closed, a real server
             # just drops writes to a dead connection: tolerated no-op,
             # nothing reaches the client's readable stream.
-            unless ($self->{closed}) {
-                push @{$self->{recv_queue}}, $event;
-                PAGI::Test::_Drive::signal_arrival($self);
-            }
+            return 'discarded' if $self->{closed};
+            push @{$self->{recv_queue}}, $event;
+            PAGI::Test::_Drive::signal_arrival($self);
         }
         elsif ($type eq 'sse.close') {
             # Clean terminal sends also wake pending and later receives.
@@ -124,6 +124,16 @@ sub _start {
             }
         }
 
+        return;
+    };
+
+    # A discarded send does no work and settles on a later turn of the event
+    # loop (PAGI::Spec, "Send Completion Contract"), awaited here, once
+    # take_send's local has been undone: an async sub cannot wait with one in
+    # effect.
+    my $send = async sub {
+        my $discarded = await $take_send->(@_);
+        await PAGI::Test::_Drive::next_turn() if $discarded;
         return;
     };
 

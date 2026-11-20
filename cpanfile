@@ -10,6 +10,9 @@ requires 'Class::Tiny', '1.008';
 # Applications are written against Futures, with async/await
 requires 'Future', '0.54';
 requires 'Future::AsyncAwait', '0.66';
+# PAGI::Test::Client: runs the event loop an application waits on, and
+# settles a send made after a scope has ended on a later turn of it
+requires 'Future::IO', '0.23';
 
 # PAGI::Test::Client: classes keep their imports out of their methods
 requires 'namespace::autoclean', '0.31';

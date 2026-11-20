@@ -253,16 +253,20 @@ subtest 'the client leaves while the body waits: the body is cancelled' => sub {
 };
 
 subtest 'the client left, but the news comes later: the writes stop at once' => sub {
-    # As PAGI-Server does it: once the client has gone, sends finish at once
-    # and do nothing, and on_disconnect is delivered later, by the loop.
+    # As a server keeping PAGI::Spec 0.6 does it: once the client has gone, a
+    # send does nothing and settles on a later turn of the event loop, after
+    # the news of the leave, which is delivered on the loop too.
     my $connection = PAGI::Test::ConnectionState->new;
     my ($sends, $writes, $outcome) = (0, 0);
+    my @later;    # sends made once the client had gone, settled on the next turn
     my $send = sub {
         if (++$sends == 3) {
             local $connection->{_defer_notifications} = 1;
             $connection->_mark_disconnected('client_closed');
         }
-        return Future->done;
+        return Future->done unless defined $connection->disconnect_reason;
+        push @later, Future->new;
+        return $later[-1];
     };
     my $call = PAGI::Response::Stream->new(body => async sub {
         my ($writer) = @_;
@@ -271,7 +275,9 @@ subtest 'the client left, but the news comes later: the writes stop at once' => 
     })->call({ type => 'http', method => 'GET', 'pagi.connection' => $connection }, sub { Future->new }, $send);
     ok $writes < 10, "the body stopped writing once the client had gone ($writes writes)";
     ok !$call->is_ready, 'and waits for the news';
+    # The next turn of the event loop: the news, then the sends it holds.
     $connection->_deliver_notifications;
+    $_->done for grep { !$_->is_ready } @later;
     is $outcome, 'disconnected', 'which cancels the body: disconnected';
     ok $call->is_done, 'and call is done';
 };

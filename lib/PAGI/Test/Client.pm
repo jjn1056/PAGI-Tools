@@ -162,8 +162,13 @@ sub _http_exchange {
         my ($event) = @_;
 
         # An application's abort has already made the connection state
-        # terminal. Match a transport close by discarding later sends.
-        return if defined $scope->{'pagi.connection'}->disconnect_reason;
+        # terminal. Match a transport close by discarding later sends, each
+        # settled on a later turn of the event loop (PAGI::Spec, "Send
+        # Completion Contract").
+        if (defined $scope->{'pagi.connection'}->disconnect_reason) {
+            await PAGI::Test::_Drive::next_turn();
+            return;
+        }
         local $scope->{'pagi.connection'}{_defer_notifications} = 1;
 
         if (my $err = $sv->check($event)) {
@@ -339,8 +344,8 @@ sub _build_scope {
 
     my $scope = {
         type         => 'http',
-        # Fixture contract: PAGI 0.5 with Www 0.6 universal connection state.
-        pagi         => { version => '0.5', spec_version => '0.7' },
+        # Fixture contract: PAGI 0.6 with Www 0.6 universal connection state.
+        pagi         => { version => '0.6', spec_version => '0.7' },
         http_version => '1.1',
         method       => $method,
         scheme       => 'http',
@@ -427,8 +432,8 @@ sub websocket {
     my $connection = PAGI::Test::ConnectionState->new(websocket => 1);
     my $scope = {
         type         => 'websocket',
-        # Fixture contract: PAGI 0.5 with Www 0.6 universal connection state.
-        pagi         => { version => '0.5', spec_version => '0.7' },
+        # Fixture contract: PAGI 0.6 with Www 0.6 universal connection state.
+        pagi         => { version => '0.6', spec_version => '0.7' },
         http_version => '1.1',
         scheme       => 'ws',
         path         => $path,
@@ -542,8 +547,8 @@ sub sse {
     my $connection = PAGI::Test::ConnectionState->new;
     my $scope = {
         type         => 'sse',
-        # Fixture contract: PAGI 0.5 with Www 0.6 universal connection state.
-        pagi         => { version => '0.5', spec_version => '0.7' },
+        # Fixture contract: PAGI 0.6 with Www 0.6 universal connection state.
+        pagi         => { version => '0.6', spec_version => '0.7' },
         http_version => '1.1',
         method       => $method,
         scheme       => 'http',

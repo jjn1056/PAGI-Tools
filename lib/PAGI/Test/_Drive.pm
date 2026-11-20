@@ -31,6 +31,14 @@ sub drive {
     return $future->is_ready ? 1 : 0;
 }
 
+# A Future that resolves on a later turn of Future::IO's event loop, never at
+# once. The test client settles a send it discards, once the scope has ended,
+# with it, as a server does (PAGI::Spec, "Send Completion Contract").
+sub next_turn {
+    require Future::IO;
+    return Future::IO->sleep(0);
+}
+
 # A sentence for a timeout message, or '' when Future::IO runs on a real
 # event loop. With Future::IO bound to none, an application that waits on a
 # loop of its own can never progress, and the binding is the application's to

@@ -41,6 +41,7 @@ subtest 'abort callback cannot leak HTTP bytes' => sub {
         $c->abort('stop');
     })->get('/');
     is $response->content, '', 'no response bytes after terminal publication';
+    $callback_send->get;   # it settles on a later turn of the event loop
     ok $callback_send->is_done, 'discarded send succeeds';
     is $c->disconnect_reason, 'app_abort', 'abort preserved';
     is \@warnings, [], 'already-ended return is not reported as incomplete';
@@ -246,8 +247,10 @@ subtest 'manual peer Close: the app hears it when transport completes; racing da
     ok $slot{conn}->is_connected, 'transport completion is still pending';
     my $pending = $slot{receive}->();
     ok !$pending->is_ready, 'no disconnect while transport completion is pending (as PAGI::Server)';
-    ok $slot{send}->({type => 'websocket.send', text => 'after Close'})->is_done,
-        'racing data send may be discarded successfully';
+    my $racing = $slot{send}->({type => 'websocket.send', text => 'after Close'});
+    ok !$racing->is_ready, 'racing data send is discarded, not settled within the call';
+    $racing->get;   # a later turn of the event loop
+    ok $racing->is_done, 'it is discarded successfully';
     $ws->complete_close;
     ok $pending->is_ready, 'the disconnect arrives when the transport completes';
     is $pending->get->{type}, 'websocket.disconnect', 'it is the peer Close';

@@ -118,9 +118,11 @@ server free to answer with its 500.
 A client that leaves cancels the body, at the C<await> it's waiting on: the
 Future it was waiting for is cancelled too, and code after that C<await>
 never runs. A loop with no C<await> in it isn't stopped until it awaits. A
-write is an C<await> too: once the client has gone, a write sends nothing
-and waits there for the cancel, so a loop whose only waits are writes stops
-as well.
+write is an C<await> too: once the client has gone, the server sends
+nothing and settles the write on a later turn of the event loop, after the
+news, so a loop whose only waits are writes stops as well. That takes a
+server implementing PAGI core 0.6 or later (L<PAGI::Spec>, "Send Completion
+Contract"); on an older one, such a loop runs to its end.
 
 F<examples/response/stream.pl> serves each of these: lines as they're made,
 a file relayed with its digest and length as trailers, NDJSON, and a feed

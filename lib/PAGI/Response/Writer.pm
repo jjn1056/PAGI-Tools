@@ -13,14 +13,10 @@ sub _new {
 }
 
 # One body chunk. The first sends the start before it; an empty one sends
-# nothing, not even the start. Once the client has gone, a write waits for
-# the cancel rather than send: a server settles sends to a gone client at
-# once and may tell of the disconnect later, through its loop, and a body
-# whose every await is a write would otherwise never let the loop run.
+# nothing, not even the start.
 async sub write {
     my ($self, $bytes) = @_;
     return unless defined $bytes && length $bytes;
-    await Future->new if defined $self->{connection}->disconnect_reason;
     await $self->_start;
     await $self->{send}->({ type => 'http.response.body', body => $bytes, more => 1 });
     return;
@@ -134,7 +130,8 @@ A write whose Future nobody keeps is lost: Perl drops it unsent, with a
 
 One chunk of the body. The first sends the start before it. An empty or
 undefined chunk sends nothing, not even the start. Once the client has gone,
-it sends nothing and waits for the stream to cancel the body.
+the server sends nothing, and the stream cancels the body at the write
+(L<PAGI::Response::Stream/DESCRIPTION>).
 
 It sends what it's given as bytes, so encode text first, or use
 C<write_text>. A character above 255 is refused at the send, but one below,

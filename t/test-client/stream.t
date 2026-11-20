@@ -163,10 +163,13 @@ subtest 'close before any write: the client leaves' => sub {
         await $receive->();                     # the request
         push @seen, (await $receive->())->{type};
         my $sent = $send->(start_event());
+        push @seen, $sent->is_ready ? 'send settled at once' : 'send settles later';
+        await $sent;
         push @seen, $sent->is_done ? 'send succeeded' : 'send did not succeed';
     })->stream('/');
     $stream->close;
-    is \@seen, ['http.disconnect', 'send succeeded'], 'a waiting receive gets the disconnect; a later send succeeds';
+    is \@seen, ['http.disconnect', 'send settles later', 'send succeeded'],
+        'a waiting receive gets the disconnect; a later send succeeds, on a later turn';
     is $stream->response, undef, 'and is not recorded';
     is $connection->disconnect_reason, 'client_closed', 'client_closed';
     is $connection->disconnect_detail, undef, 'with no detail';

@@ -82,12 +82,13 @@ sub _start {
     # PAGI::Utils::_SendValidation's websocket rules) fail the returned Future --
     # a canonical test double must not accept what a real server would
     # reject -- and are never appended to the client's readable stream.
-    my $send = async sub {
+    # Returns 'discarded' for a send the scope can no longer carry.
+    my $take_send = async sub {
         my ($event) = @_;
 
         my $conn = $self->{scope}{'pagi.connection'};
         local $conn->{_defer_notifications} = 1;
-        return if $conn && defined $conn->disconnect_reason && !$self->{_app_close};
+        return 'discarded' if $conn && defined $conn->disconnect_reason && !$self->{_app_close};
 
         if (my $err = $sv->check($event)) {
             die $err->message . "\n";
@@ -105,10 +106,9 @@ sub _start {
             # own websocket.close, which sv already rejected above -- a real
             # server just drops writes to a dead socket: tolerated no-op,
             # nothing reaches the client's readable stream.
-            unless ($self->{closed} || $self->{_peer_close}) {
-                push @{$self->{recv_queue}}, $event;
-                PAGI::Test::_Drive::signal_arrival($self);
-            }
+            return 'discarded' if $self->{closed} || $self->{_peer_close};
+            push @{$self->{recv_queue}}, $event;
+            PAGI::Test::_Drive::signal_arrival($self);
         }
         elsif ($type eq 'websocket.close') {
             $self->{_app_close} = 1;
@@ -138,6 +138,16 @@ sub _start {
             }
         }
 
+        return;
+    };
+
+    # A discarded send does no work and settles on a later turn of the event
+    # loop (PAGI::Spec, "Send Completion Contract"), awaited here, once
+    # take_send's local has been undone: an async sub cannot wait with one in
+    # effect.
+    my $send = async sub {
+        my $discarded = await $take_send->(@_);
+        await PAGI::Test::_Drive::next_turn() if $discarded;
         return;
     };
 
