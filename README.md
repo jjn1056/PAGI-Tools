@@ -292,20 +292,14 @@ wrapper. Construct the serving application separately with the returned path.
 
 # REQUIREMENTS
 
-PAGI-Tools targets [PAGI::Spec::Www](https://metacpan.org/pod/PAGI%3A%3ASpec%3A%3AWww) **0.7**. It depends on the specification,
-not on any one server: it needs a server that implements Www 0.7, which puts a
-`pagi.connection` object in every `http`, `websocket` and `sse` scope,
-keeps a scope's sends in the order they were called (Tools' helpers send
-without waiting for an earlier send to resolve), and advertises
-`$scope->{pagi}{spec_version}` as `0.7`. [PAGI::Server](https://metacpan.org/pod/PAGI%3A%3AServer), the reference
-implementation, does so from 0.003000.
-
-Tools checks the connection's capabilities where it uses them, not the version
-number. [PAGI::WebSocket](https://metacpan.org/pod/PAGI%3A%3AWebSocket) and [PAGI::SSE](https://metacpan.org/pod/PAGI%3A%3ASSE) die at construction when the scope
-lacks a complete connection object, naming the server's advertised
-`spec_version`. A streamed HTTP response ([PAGI::Response::Stream](https://metacpan.org/pod/PAGI%3A%3AResponse%3A%3AStream)) names any
-connection method it needs and lacks before sending. Code that only observes
-a request, such as access logging, works without a connection object.
+PAGI-Tools needs the newest PAGI and PAGI-Server: it targets
+[PAGI::Spec::Www](https://metacpan.org/pod/PAGI%3A%3ASpec%3A%3AWww) **0.8**, whose
+`pagi.connection` object, in every `http`, `websocket` and `sse` scope, runs
+work with `run_until_end`, and whose server keeps a scope's sends in the
+order they were called (Tools' helpers send without waiting for an earlier
+send to resolve). [PAGI::Server](https://metacpan.org/pod/PAGI%3A%3AServer), the
+reference implementation, reports `$scope->{pagi}{spec_version}` as `0.8`. Tools
+checks no versions: until 1.0, use the newest of each.
 
 # SEE ALSO
 

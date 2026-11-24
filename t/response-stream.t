@@ -275,9 +275,12 @@ subtest 'the client left, but the news comes later: the writes stop at once' => 
     })->call({ type => 'http', method => 'GET', 'pagi.connection' => $connection }, sub { Future->new }, $send);
     ok $writes < 10, "the body stopped writing once the client had gone ($writes writes)";
     ok !$call->is_ready, 'and waits for the news';
-    # The next turn of the event loop: the news, then the sends it holds.
+    # The next turn of the event loop: the news, then the sends it holds. The
+    # leave came inside the body's first run, so run_until_end resolves on a
+    # turn of its own (PAGI::Spec::Www 0.8): run one.
     $connection->_deliver_notifications;
     $_->done for grep { !$_->is_ready } @later;
+    PAGI::Test::_Drive::next_turn()->get;
     is $outcome, 'disconnected', 'which cancels the body: disconnected';
     ok $call->is_done, 'and call is done';
 };
@@ -318,6 +321,22 @@ subtest 'a body that returns once the client has gone, before the news: disconne
     is $outcome, 'disconnected', 'disconnected, though the news has not come';
     is scalar(grep { !$_->{more} && $_->{type} eq 'http.response.body' } @sent), 0, 'and no end was sent';
     $connection->_deliver_notifications;
+};
+
+subtest 'a body cancelled from outside: the call fails, outcome failed' => sub {
+    my ($outcome, $held);
+    my ($call, $sent, $connection) = call_recorded(PAGI::Response::Stream->new(body => sub {
+        my ($writer) = @_;
+        $writer->on_close(sub { $outcome = $_[0]->outcome });
+        return $held = Future->new;      # the body's own Future, which the test holds
+    }));
+    ok !$call->is_ready, 'the body is running';
+    $held->cancel;                       # something other than the client cancels it
+    ok $call->is_failed, 'the call fails at once, not at the end of the scope';
+    like scalar $call->failure, qr/\Athe work given to run_until_end was cancelled while the scope was still open/,
+        'naming the cancellation';
+    is $outcome, 'failed', 'outcome: failed';
+    ok $connection->is_connected, 'and the scope is still open';
 };
 
 subtest 'the client leaves while the start is still being sent: disconnected, no end' => sub {

@@ -47,10 +47,10 @@ sub format_item {
 }
 
 # Serving the stream: the body runs with a writer until it returns, then
-# the end goes, and the trailers it returned if declared. A client leaving
-# cancels the body (the body races end_future, as PAGI::Spec::Www shows; the
-# end is sent after the race), and nothing more is sent. That news comes
-# later, from the loop; whether the client has gone is read from
+# the end goes, and the trailers it returned if declared. The body runs in
+# run_until_end, so a client leaving cancels it and nothing more is sent.
+# The news of a leave comes later, from the loop, and a body may return
+# normally before it arrives; whether the client has gone is read from
 # disconnect_reason, which knows at once.
 async sub call {
     my ($self, $scope, $receive, $send) = @_;
@@ -59,8 +59,14 @@ async sub call {
 
     my $writer = $self->writer_class->_new(response => $self, send => $send, connection => $connection);
     my $ok = eval {
-        my $trailers = await Future->wait_any(Future->call($self->body, $writer), $connection->end_future);
-        await $writer->_end($trailers) unless defined $connection->disconnect_reason;
+        # The body's own Future goes to run_until_end, so a cancel of it is
+        # reported; is_done tells a body that finished from one cut short.
+        my $body_work;
+        my ($trailers) = await $connection->run_until_end(sub {
+            $body_work = Future->call($self->body, $writer);
+        });
+        await $writer->_end($trailers)
+            if $body_work && $body_work->is_done && !defined $connection->disconnect_reason;
         1;
     };
     my $error = $@;
