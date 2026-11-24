@@ -60,16 +60,17 @@ async sub call {
     my $writer = $self->writer_class->_new(response => $self, send => $send, connection => $connection);
     my $ok = eval {
         # The body's own Future goes to run_until_end, so a cancel of it is
-        # reported; is_done tells a body that finished from one cut short.
+        # reported; its trailers are what the body returned.
         my $body_work;
-        my ($trailers) = await $connection->run_until_end(sub {
+        my $completed = await $connection->run_until_end(sub {
             $body_work = Future->call($self->body, $writer);
         });
-        await $writer->_end($trailers)
-            if $body_work && $body_work->is_done && !defined $connection->disconnect_reason;
+        await $writer->_end($body_work->get) if $completed;
         1;
     };
     my $error = $@;
+    # The outcome reports the response, not the body: the client can leave
+    # while the ending is still being sent.
     await $writer->_ended(!$ok ? 'failed' : defined $connection->disconnect_reason ? 'disconnected' : 'finished');
     die $error unless $ok;
     return;
@@ -241,7 +242,9 @@ The writer's C<outcome> says, by the time C<on_close> callbacks run:
     the body died, or a send it         failed        dies with the error
       awaited failed
 
-After a client leaves, nothing more is sent: no end, and no trailers.
+After a client leaves, nothing more is sent: no end, and no trailers. A
+body that returned is still C<disconnected> when the client leaves while the
+end is being sent: the outcome reports the response, not the body.
 
 =head1 UTF-8
 

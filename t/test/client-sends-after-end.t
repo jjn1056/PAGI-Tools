@@ -74,14 +74,13 @@ subtest 'the run_until_end idiom is not warned about' => sub {
     my $raced = async sub {
         my ($scope, $receive, $send) = @_;
         await $send->({ type => 'http.response.start', status => 200, headers => [] });
-        my ($finished) = await $scope->{'pagi.connection'}->run_until_end(async sub {
+        my $completed = await $scope->{'pagi.connection'}->run_until_end(async sub {
             for my $n (1 .. 50) {
                 await $send->({ type => 'http.response.body', body => "x\n", more => 1 });
                 await Future::IO->sleep(0.001);
             }
-            return 1;
         });
-        return unless $finished;
+        return unless $completed;
         await $send->({ type => 'http.response.body', body => '', more => 0 });
     };
     my $warnings = warnings {

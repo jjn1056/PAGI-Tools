@@ -199,22 +199,23 @@ sub end_future {
 
 =head2 run_until_end
 
-    my ($finished) = await $conn->run_until_end(async sub {
+    my $completed = await $conn->run_until_end(async sub {
         ...;            # the work
-        return 1;
     });
-    return unless $finished;    # the client left first
+    return unless $completed;    # the scope ended first
 
 Runs the work C<$code> returns while the scope is open, as
 L<PAGI::Spec::Www/"Connection Object Interface"> defines it. It resolves with
-the work's results when the work finishes, and with an empty list when the
-scope ends first, the work cancelled before it resolves. It fails with the
-work's failure, with the exception when C<$code> dies, when C<$code> returns
-something that is not a Future, and when something other than the scope's end
-cancels the work. On a scope that has already ended, C<$code> is not called
-and the call resolves on a later turn. If C<$code> ends the scope itself, a
-Future it returns already settled keeps its outcome. Cancelling the returned
-Future cancels the work and leaves the scope alone.
+C<1> when the work finishes while the scope is open, and with C<0> when the
+scope has ended: the end came first, the work cancelled before the call
+resolves, or the work finished after the end. The work's own values are not
+passed back. It fails with the work's failure, with the exception when
+C<$code> dies, when C<$code> returns something that is not a Future, and when
+something other than the scope's end cancels the work. On a scope that has
+already ended, C<$code> is not called and the call resolves with C<0> on a
+later turn. If C<$code> ends the scope itself, a Future it returns already
+failed keeps its failure; any other gives C<0>. Cancelling the returned Future
+cancels the work and leaves the scope alone.
 
 =cut
 
@@ -230,7 +231,7 @@ sub run_until_end {
     return Future->fail($UNTIL_END_NOT_A_FUTURE) unless blessed($work) && $work->isa('Future');
 
     # Work already settled keeps its outcome, even when $code ended the scope.
-    return _until_end_outcome($work) if $work->is_ready;
+    return $self->_until_end_outcome($work) if $work->is_ready;
 
     # $code ended the scope and left the work pending: the end cancels it.
     unless ($self->{_connected}) {
@@ -245,7 +246,7 @@ sub run_until_end {
     weaken(my $weak_self = $self);
     $work->on_ready(sub {
         return unless $weak_self && delete $weak_self->{_until_end}{$id};
-        _until_end_outcome($work)->on_ready($result);
+        $weak_self->_until_end_outcome($work)->on_ready($result);
     });
     $result->on_cancel(sub {
         return unless $weak_self && delete $weak_self->{_until_end}{$id};
@@ -254,15 +255,17 @@ sub run_until_end {
     return $result;
 }
 
+# 1 when the work finished while the scope was active, 0 when it had ended,
+# or the failure; the work's own values are not passed back.
 sub _until_end_outcome {
-    my ($work) = @_;
+    my ($self, $work) = @_;
     return Future->fail($UNTIL_END_CANCELLED) if $work->is_cancelled;
     return Future->fail($work->failure)        if $work->is_failed;
-    return Future->done($work->get);
+    return Future->done($self->{_connected} ? 1 : 0);
 }
 
-# An empty list on a later turn, as a server resolves it.
-sub _until_end_later { return PAGI::Test::_Drive::next_turn()->then(sub { Future->done }) }
+# 0 on a later turn, as a server resolves it.
+sub _until_end_later { return PAGI::Test::_Drive::next_turn()->then(sub { Future->done(0) }) }
 
 sub on_end {
     my ($self, $cb) = @_;
@@ -282,7 +285,7 @@ sub _deliver_notifications {
     return unless delete $self->{_notifications_pending};
 
     # Pending run_until_end work is cancelled before anyone resumes; the calls
-    # resolve last, with an empty list.
+    # resolve last, with 0.
     my @until_end = values %{ $self->{_until_end} };
     $self->{_until_end} = {};
     # Application code (an on_cancel on the work) may die; the rest must still
@@ -303,7 +306,7 @@ sub _deliver_notifications {
     _fire($_, $self->{_reason}, $self->{_detail}) for @end;
     $self->{_end_master}->done($self->{_reason})
         if $self->{_end_master} && !$self->{_end_master}->is_ready;
-    _fire(sub { $_[0]->{result}->done }, $_) for @until_end;
+    _fire(sub { $_[0]->{result}->done(0) }, $_) for @until_end;
     return;
 }
 

@@ -353,6 +353,23 @@ subtest 'the client leaves while the start is still being sent: disconnected, no
     is sent_kinds($sent), ['start'], 'and nothing more is sent: no end for a client that left';
 };
 
+# The body completes on an open scope; the response does not: the outcome
+# reports the response, not the body.
+subtest 'the body returns, then the client leaves while the start is still being sent: disconnected' => sub {
+    my $outcome;
+    my ($call, $sent, $connection) = call_recorded(PAGI::Response::Stream->new(body => async sub {
+        my ($writer) = @_;
+        $writer->on_close(sub { $outcome = $_[0]->outcome });
+        return;
+    }));
+    is sent_kinds($sent), ['start'], 'the body returned; the ending\'s start, still pending';
+    $connection->_mark_disconnected('client_closed');
+    # A server settles sends made around a close; settle each as it comes.
+    while (my ($pending) = grep { !$_->{future}->is_ready } @$sent) { $pending->{future}->done }
+    ok $call->is_done, 'call is done, not failed';
+    is $outcome, 'disconnected', 'disconnected, though the body completed';
+};
+
 subtest 'a body that writes nothing: one start, one end, no length, finished' => sub {
     my $outcome;
     my ($call, $sent) = call_recorded(PAGI::Response::Stream->new(body => async sub {
