@@ -8,7 +8,7 @@ use PAGI::Test::Client;
 use Test::Lib;
 use PAGITest::LowercaseHeaders;
 
-# PAGI::Test::Client advertises Www 0.8, so it keeps (from 0.7) "Sends Are Sequential":
+# PAGI::Test::Client advertises Www 0.7, so it keeps "Sends Are Sequential":
 # sends an application issues before earlier ones resolve are processed in
 # the order they were called, and a send issued after the application's own
 # close fails.
@@ -27,7 +27,7 @@ subtest 'WebSocket: overlapping sends arrive in call order' => sub {
     };
     my $ws = PAGI::Test::Client->new(app => $app)->websocket('/');
     is([map { $ws->receive_text } 1 .. 3], ['one', 'two', 'three'], 'in the order they were called');
-    is($version, '0.8', 'on a 0.8 scope');
+    is($version, '0.7', 'on a 0.7 scope');
     ok($late->is_failed, "a send issued after the application's own close fails");
 };
 
@@ -44,7 +44,7 @@ subtest 'SSE: overlapping sends arrive in call order' => sub {
     };
     my $sse = PAGI::Test::Client->new(app => $app)->sse('/');
     is([map { $sse->receive_event->{data} } 1 .. 3], ['one', 'two', 'three'], 'in the order they were called');
-    is($version, '0.8', 'on a 0.8 scope');
+    is($version, '0.7', 'on a 0.7 scope');
     ok($late->is_failed, "a send issued after the application's own close fails");
 };
 
@@ -59,7 +59,7 @@ subtest 'HTTP: an overlapping body arrives in call order' => sub {
         await Future->needs_all(@sent);
     };
     is(PAGI::Test::Client->new(app => $app)->get('/')->text, 'one-two-three', 'in the order they were called');
-    is($version, '0.8', 'on a 0.8 scope');
+    is($version, '0.7', 'on a 0.7 scope');
 };
 
 done_testing;

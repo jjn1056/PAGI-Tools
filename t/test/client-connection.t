@@ -20,8 +20,8 @@ my $app = async sub {
     is $seen->is_connected, 0, 'terminal HTTP send ends the scope before returning';
 };
 PAGI::Test::Client->new(app => $app)->get('/');
-is_deeply $http_scope->{pagi}, { version => '0.6', spec_version => '0.8' },
-    'HTTP scope advertises core 0.6 and WWW 0.8';
+is_deeply $http_scope->{pagi}, { version => '0.6', spec_version => '0.7' },
+    'HTTP scope advertises core 0.6 and WWW 0.7';
 is $completed, 1, 'on_complete fired once the request completed';
 is $seen->is_connected, 0, 'request ended after completion';
 
@@ -42,7 +42,7 @@ is $seen->is_connected, 0, 'request ended after completion';
     is_deeply \@ev, ['complete'], 'on_complete fires after the app returns; on_disconnect does not';
 }
 
-subtest 'websocket and SSE scopes advertise core 0.6 and WWW 0.8' => sub {
+subtest 'websocket and SSE scopes advertise core 0.6 and WWW 0.7' => sub {
     my ($ws_scope, $sse_scope);
 
     my $ws_app = async sub {
@@ -62,9 +62,9 @@ subtest 'websocket and SSE scopes advertise core 0.6 and WWW 0.8' => sub {
     };
     PAGI::Test::Client->new(app => $sse_app)->sse('/events');
 
-    is_deeply $ws_scope->{pagi}, { version => '0.6', spec_version => '0.8' },
+    is_deeply $ws_scope->{pagi}, { version => '0.6', spec_version => '0.7' },
         'WebSocket scope version';
-    is_deeply $sse_scope->{pagi}, { version => '0.6', spec_version => '0.8' },
+    is_deeply $sse_scope->{pagi}, { version => '0.6', spec_version => '0.7' },
         'SSE scope version';
 };
 

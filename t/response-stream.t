@@ -277,7 +277,7 @@ subtest 'the client left, but the news comes later: the writes stop at once' => 
     ok !$call->is_ready, 'and waits for the news';
     # The next turn of the event loop: the news, then the sends it holds. The
     # leave came inside the body's first run, so run_until_end resolves on a
-    # turn of its own (PAGI::Spec::Www 0.8): run one.
+    # turn of its own (PAGI::Spec::Www 0.7): run one.
     $connection->_deliver_notifications;
     $_->done for grep { !$_->is_ready } @later;
     PAGI::Test::_Drive::next_turn()->get;

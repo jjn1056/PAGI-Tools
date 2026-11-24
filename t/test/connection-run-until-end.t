@@ -1,6 +1,6 @@
 #!/usr/bin/env perl
 # PAGI::Test::ConnectionState->run_until_end: the contract of
-# PAGI::Spec::Www 0.8 "Connection Object Interface", through the test client,
+# PAGI::Spec::Www 0.7 "Connection Object Interface", through the test client,
 # so an application that uses the method can be tested without a server.
 use strict;
 use warnings;

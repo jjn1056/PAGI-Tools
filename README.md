@@ -293,12 +293,12 @@ wrapper. Construct the serving application separately with the returned path.
 # REQUIREMENTS
 
 PAGI-Tools needs the newest PAGI and PAGI-Server: it targets
-[PAGI::Spec::Www](https://metacpan.org/pod/PAGI%3A%3ASpec%3A%3AWww) **0.8**, whose
+[PAGI::Spec::Www](https://metacpan.org/pod/PAGI%3A%3ASpec%3A%3AWww) **0.7**, whose
 `pagi.connection` object, in every `http`, `websocket` and `sse` scope, runs
 work with `run_until_end`, and whose server keeps a scope's sends in the
 order they were called (Tools' helpers send without waiting for an earlier
 send to resolve). [PAGI::Server](https://metacpan.org/pod/PAGI%3A%3AServer), the
-reference implementation, reports `$scope->{pagi}{spec_version}` as `0.8`. Tools
+reference implementation, reports `$scope->{pagi}{spec_version}` as `0.7`. Tools
 checks no versions: until 1.0, use the newest of each.
 
 # SEE ALSO
