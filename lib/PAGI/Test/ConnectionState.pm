@@ -2,6 +2,8 @@ package PAGI::Test::ConnectionState;
 use strict;
 use warnings;
 use Future;
+use Scalar::Util qw(blessed refaddr weaken);
+use PAGI::Test::_Drive;
 
 =head1 NAME
 
@@ -59,6 +61,7 @@ sub new {
         _end_cbs            => [],
         _comp_cbs           => [],
         _disconnect_master  => undef,       # private lazy signal; never exposed directly
+        _until_end          => {},          # run_until_end calls still pending, by refaddr
     }, $class;
 }
 
@@ -174,15 +177,15 @@ sub _set_peer_close {
     $self->{_close_reason} = $reason;
 }
 
-# A send the scope could no longer carry. Raced against end_future, an
-# application sends once after the end (its terminal event), so the third
-# warns, once: its work was not raced and kept going after the client left.
+# A send the scope could no longer carry. Run in run_until_end, work makes at
+# most one send after the end before it is cancelled, so the third warns,
+# once: the work was not run that way and kept going after the client left.
 sub _discarded_send {
     my ($self) = @_;
     return if ++$self->{_discarded_sends} != 3;
-    warn "PAGI application kept sending after the scope ended; race its work against "
-        . "\$scope->{'pagi.connection'}->end_future (PAGI::Spec::Www, "
-        . "\"Example: Racing Against Disconnect\")\n";
+    warn "PAGI application kept sending after the scope ended; run its work in "
+        . "\$scope->{'pagi.connection'}->run_until_end (PAGI::Spec::Www, "
+        . "\"Example: Work That Stops When the Client Leaves\")\n";
     return;
 }
 
@@ -193,6 +196,73 @@ sub end_future {
         if !$self->{_connected} && !$self->{_notifications_pending} && !$master->is_ready;
     return $master->without_cancel;
 }
+
+=head2 run_until_end
+
+    my ($finished) = await $conn->run_until_end(async sub {
+        ...;            # the work
+        return 1;
+    });
+    return unless $finished;    # the client left first
+
+Runs the work C<$code> returns while the scope is open, as
+L<PAGI::Spec::Www/"Connection Object Interface"> defines it. It resolves with
+the work's results when the work finishes, and with an empty list when the
+scope ends first, the work cancelled before it resolves. It fails with the
+work's failure, with the exception when C<$code> dies, when C<$code> returns
+something that is not a Future, and when something other than the scope's end
+cancels the work. On a scope that has already ended, C<$code> is not called
+and the call resolves on a later turn. If C<$code> ends the scope itself, a
+Future it returns already settled keeps its outcome. Cancelling the returned
+Future cancels the work and leaves the scope alone.
+
+=cut
+
+my $UNTIL_END_NOT_A_FUTURE = "run_until_end's callback must return a Future, the work to stop when the scope ends (an async sub returns one)\n";
+my $UNTIL_END_CANCELLED    = "the work given to run_until_end was cancelled while the scope was still open\n";
+
+sub run_until_end {
+    my ($self, $code) = @_;
+    return _until_end_later() unless $self->{_connected};
+
+    my $work;
+    eval { $work = $code->(); 1 } or return Future->fail($@);
+    return Future->fail($UNTIL_END_NOT_A_FUTURE) unless blessed($work) && $work->isa('Future');
+
+    # Work already settled keeps its outcome, even when $code ended the scope.
+    return _until_end_outcome($work) if $work->is_ready;
+
+    # $code ended the scope and left the work pending: the end cancels it.
+    unless ($self->{_connected}) {
+        $work->cancel;
+        return _until_end_later();
+    }
+
+    my $result = Future->new;
+    my $id     = refaddr $result;
+    $self->{_until_end}{$id} = { work => $work, result => $result };
+
+    weaken(my $weak_self = $self);
+    $work->on_ready(sub {
+        return unless $weak_self && delete $weak_self->{_until_end}{$id};
+        _until_end_outcome($work)->on_ready($result);
+    });
+    $result->on_cancel(sub {
+        return unless $weak_self && delete $weak_self->{_until_end}{$id};
+        $work->cancel;
+    });
+    return $result;
+}
+
+sub _until_end_outcome {
+    my ($work) = @_;
+    return Future->fail($UNTIL_END_CANCELLED) if $work->is_cancelled;
+    return Future->fail($work->failure)        if $work->is_failed;
+    return Future->done($work->get);
+}
+
+# An empty list on a later turn, as a server resolves it.
+sub _until_end_later { return PAGI::Test::_Drive::next_turn()->then(sub { Future->done }) }
 
 sub on_end {
     my ($self, $cb) = @_;
@@ -210,6 +280,13 @@ sub _deliver_notifications {
     my ($self) = @_;
     return if $self->{_defer_notifications};
     return unless delete $self->{_notifications_pending};
+
+    # Pending run_until_end work is cancelled before anyone resumes; the calls
+    # resolve last, with an empty list.
+    my @until_end = values %{ $self->{_until_end} };
+    $self->{_until_end} = {};
+    $_->{work}->cancel for @until_end;
+
     my @disc = @{delete $self->{_disc_cbs} || []};
     my @comp = @{delete $self->{_comp_cbs} || []};
     my @end = @{delete $self->{_end_cbs} || []};
@@ -224,6 +301,7 @@ sub _deliver_notifications {
     _fire($_, $self->{_reason}, $self->{_detail}) for @end;
     $self->{_end_master}->done($self->{_reason})
         if $self->{_end_master} && !$self->{_end_master}->is_ready;
+    $_->{result}->done for @until_end;
     return;
 }
 

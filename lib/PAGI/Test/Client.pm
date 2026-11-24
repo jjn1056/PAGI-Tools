@@ -346,7 +346,7 @@ sub _build_scope {
     my $scope = {
         type         => 'http',
         # Fixture contract: PAGI 0.6 with Www 0.6 universal connection state.
-        pagi         => { version => '0.6', spec_version => '0.7' },
+        pagi         => { version => '0.6', spec_version => '0.8' },
         http_version => '1.1',
         method       => $method,
         scheme       => 'http',
@@ -434,7 +434,7 @@ sub websocket {
     my $scope = {
         type         => 'websocket',
         # Fixture contract: PAGI 0.6 with Www 0.6 universal connection state.
-        pagi         => { version => '0.6', spec_version => '0.7' },
+        pagi         => { version => '0.6', spec_version => '0.8' },
         http_version => '1.1',
         scheme       => 'ws',
         path         => $path,
@@ -549,7 +549,7 @@ sub sse {
     my $scope = {
         type         => 'sse',
         # Fixture contract: PAGI 0.6 with Www 0.6 universal connection state.
-        pagi         => { version => '0.6', spec_version => '0.7' },
+        pagi         => { version => '0.6', spec_version => '0.8' },
         http_version => '1.1',
         method       => $method,
         scheme       => 'http',
@@ -1072,7 +1072,7 @@ cookies, and basic protocol flows. For behavior that depends on real socket I/O,
 HTTP framing, backpressure, or server lifecycle semantics, prefer testing
 against L<PAGI::Server>.
 
-HTTP, WebSocket, and SSE fixtures advertise Www C<spec_version 0.7> and carry
+HTTP, WebSocket, and SSE fixtures advertise Www C<spec_version 0.8> and carry
 the complete per-scope C<pagi.connection> interface. A manual WebSocket/SSE
 test-side C<close> records the peer outcome; application terminal sends record
 clean completion. The streaming test objects' C<pump> method advances queued
@@ -1651,11 +1651,12 @@ the response is already over; C<stream> then returns nothing. How a stream
 ends is under L</SEMANTICS>.
 
 Once the client has left, a send does nothing and settles on a later turn of
-the event loop, as on a server. An application that races its work against
-C<< $scope->{'pagi.connection'}->end_future >>, and sends its terminal event
-after the race, sends once more at most; one that keeps sending, on any
-scope, has not raced its work, and the test client warns once, at its third
-discarded send (L<PAGI::Spec::Www/"Example: Racing Against Disconnect">).
+the event loop, as on a server. An application that runs its work in
+C<< $scope->{'pagi.connection'}->run_until_end >>, and sends its terminal
+event only when the work finished, sends once more at most; one that keeps
+sending, on any scope, has not, and the test client warns once, at its third
+discarded send (L<PAGI::Spec::Www/"Example: Work That Stops When the Client
+Leaves">).
 
 =head1 SEMANTICS
 

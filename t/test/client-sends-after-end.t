@@ -47,9 +47,10 @@ for my $type (qw(http websocket sse)) {
     };
 }
 
-# An application that keeps sending once its client has gone forgot to race
-# its work against the scope's end; the test client says so, once. The idiom
-# (race end_future, terminal event after the race) sends once after the end.
+# An application that keeps sending once its client has gone forgot to run
+# its work in run_until_end; the test client says so, once. The idiom (the
+# work in run_until_end, the terminal event only when it finished) sends at
+# most once after the end.
 subtest 'a stream that keeps sending after the client left is warned about, once' => sub {
     my $naive = async sub {
         my ($scope, $receive, $send) = @_;
@@ -66,20 +67,21 @@ subtest 'a stream that keeps sending after the client left is warned about, once
         $stream->close;
     };
     is scalar @$warnings, 1, 'one warning';
-    like $warnings->[0], qr/kept sending after the scope ended.*end_future/s, 'naming the fix';
+    like $warnings->[0], qr/kept sending after the scope ended.*run_until_end/s, 'naming the fix';
 };
 
-subtest 'the end_future idiom is not warned about' => sub {
+subtest 'the run_until_end idiom is not warned about' => sub {
     my $raced = async sub {
         my ($scope, $receive, $send) = @_;
         await $send->({ type => 'http.response.start', status => 200, headers => [] });
-        my $produce = async sub {
+        my ($finished) = await $scope->{'pagi.connection'}->run_until_end(async sub {
             for my $n (1 .. 50) {
                 await $send->({ type => 'http.response.body', body => "x\n", more => 1 });
                 await Future::IO->sleep(0.001);
             }
-        };
-        await Future->wait_any($produce->(), $scope->{'pagi.connection'}->end_future);
+            return 1;
+        });
+        return unless $finished;
         await $send->({ type => 'http.response.body', body => '', more => 0 });
     };
     my $warnings = warnings {
