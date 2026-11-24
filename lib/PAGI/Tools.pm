@@ -416,7 +416,7 @@ L<PAGI::Server::Runner>
 
 =head1 AUTHOR
 
-John Napiorkowski <jjnapiork@cpan.org>
+John Napiorkowski <jjn1056@gmail.com>
 
 =head1 LICENSE
 
