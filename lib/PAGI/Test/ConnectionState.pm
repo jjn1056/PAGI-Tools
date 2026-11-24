@@ -285,7 +285,9 @@ sub _deliver_notifications {
     # resolve last, with an empty list.
     my @until_end = values %{ $self->{_until_end} };
     $self->{_until_end} = {};
-    $_->{work}->cancel for @until_end;
+    # Application code (an on_cancel on the work) may die; the rest must still
+    # be delivered, as for the other callbacks.
+    _fire(sub { $_[0]->{work}->cancel }, $_) for @until_end;
 
     my @disc = @{delete $self->{_disc_cbs} || []};
     my @comp = @{delete $self->{_comp_cbs} || []};
@@ -301,7 +303,7 @@ sub _deliver_notifications {
     _fire($_, $self->{_reason}, $self->{_detail}) for @end;
     $self->{_end_master}->done($self->{_reason})
         if $self->{_end_master} && !$self->{_end_master}->is_ready;
-    $_->{result}->done for @until_end;
+    _fire(sub { $_[0]->{result}->done }, $_) for @until_end;
     return;
 }
 

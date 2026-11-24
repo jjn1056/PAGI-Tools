@@ -199,4 +199,34 @@ subtest 'a call from an on_end callback' => sub {
     is $seen, { ran => 0, ready_in_call => 0, result => [] }, 'skipped; later; empty';
 };
 
+subtest 'application code dying in the end delivery strands nothing' => sub {
+    my $seen;
+    my $warnings = warnings {
+        my $stream = client_for(async sub {
+            my ($conn, $send) = @_;
+            await start($send);
+            await $send->({ type => 'http.response.body', body => "started\n", more => 1 });
+            my %ended;
+            $conn->on_end(sub { $ended{on_end} = 1 });
+            $conn->end_future->on_done(sub { $ended{end_future} = 1 })->retain;
+            my $exploding_work = Future::IO->sleep(30);
+            $exploding_work->on_cancel(sub { die "on_cancel exploded\n" });
+            my $first  = $conn->run_until_end(sub { $exploding_work });
+            my $second = $conn->run_until_end(sub { Future::IO->sleep(30) });
+            $second->on_done(sub { die "on_done exploded\n" });
+            my @third = await $conn->run_until_end(sub { Future::IO->sleep(30) });
+            await Future::IO->sleep(0.05);
+            $seen = { %ended, third => \@third,
+                first  => [ $first->is_done ? $first->get : 'not done' ],
+                second => [ $second->is_done ? $second->get : 'not done' ] };
+        })->stream('/');
+        $stream->receive_chunk(timeout => 3);
+        $stream->close;
+        wait_for(sub { $seen });
+    };
+    is $seen, { first => [], second => [], third => [], on_end => 1, end_future => 1 },
+        'every call resolved empty; on_end ran; end_future resolved';
+    is scalar(grep { /exploded/ } @$warnings), 2, 'each death warned' or diag join '', @$warnings;
+};
+
 done_testing;
