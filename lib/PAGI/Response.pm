@@ -628,6 +628,27 @@ C<prepare_body>, and name the charset in the type, so the two agree:
 
     my $hello = Latin1->new(content => "Grüße\n");   # 6 bytes, one for each character
 
+=head2 A redirect
+
+A redirect is a response with a 3xx status and a Location header. Build the
+Location with L<URI>, from the URL as UTF-8 bytes: URI percent-encodes a
+space or a non-ASCII character, and leaves a valid URL as it is.
+
+    use URI;
+    use Encode ();
+
+    my $response = PAGI::Response->new(
+        status  => 303,    # See Other: GET the new place, e.g. after a POST
+        headers => [[location => URI->new(Encode::encode('UTF-8', $url))->as_string]],
+    );
+
+Encode first: given characters, URI escapes one below 256 as Latin-1 or as
+UTF-8 depending on how Perl happens to hold the string, so C<Grüße> could
+come out as C<Gr%FC%DFe>. As bytes it's always C<Gr%C3%BC%C3%9Fe>.
+
+301 and 308 are permanent; 302, 303 and 307 are not. 307 and 308 keep the
+request's method and body; 303 turns it into a GET.
+
 =head1 SEE ALSO
 
 L<PAGI::App>, L<PAGI::Spec::Www>
