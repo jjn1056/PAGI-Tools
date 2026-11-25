@@ -35,7 +35,7 @@ sub client_for {
     });
 }
 
-subtest 'the work finishes on an open scope: exactly 1, whatever it returned' => sub {
+subtest 'the work finishes on an open scope: no value, still connected' => sub {
     my $seen;
     my $res = client_for(async sub {
         my ($conn, $send) = @_;
@@ -43,11 +43,12 @@ subtest 'the work finishes on an open scope: exactly 1, whatever it returned' =>
         $seen = {
             values => [ await $conn->run_until_end(async sub { (7, 'seven') }) ],
             false  => [ await $conn->run_until_end(sub { Future->done(0) }) ],
+            connected => $conn->is_connected,
         };
         await finish($send);
     })->get('/');
     is $res->content, "done\n", 'response completed';
-    is $seen, { values => [1], false => [1] }, 'the work\'s own values are discarded';
+    is $seen, { values => [], false => [], connected => 1 }, 'no value, whatever the work returned; the client is there';
 };
 
 subtest 'the client leaves: the work is cancelled before the call resolves' => sub {
@@ -64,8 +65,8 @@ subtest 'the client leaves: the work is cancelled before the call resolves' => s
     is $stream->receive_chunk(timeout => 3), "started\n", 'the body began';
     $stream->close;
     ok wait_for(sub { $seen }), 'the call returned';
-    is $seen, { result => [0], cancelled => 1, connected => 0, reason => 'client_closed' },
-        '0; the work already cancelled on the first line after await; the end reported';
+    is $seen, { result => [], cancelled => 1, connected => 0, reason => 'client_closed' },
+        'no value; the work already cancelled on the first line after await; the end reported';
 };
 
 # Through stream(): get() holds an end the app's own send made until the app
@@ -86,15 +87,15 @@ subtest 'a clean end cancels pending work too' => sub {
     is $stream->receive_chunk(timeout => 3), "last\n", 'the terminal body went';
     is $stream->receive_chunk(timeout => 3), undef, 'and the response is over';
     ok wait_for(sub { $seen }), 'the call returned';
-    is $seen, { result => [0], cancelled => 1, connected => 0, reason => undef },
-        '0; cancelled on the first line after await; a clean end';
+    is $seen, { result => [], cancelled => 1, connected => 0, reason => undef },
+        'no value; cancelled on the first line after await; a clean end';
 };
 
 # The test client delivers the end before the disconnect event reaches
 # $receive (the spec leaves that order open), so the read loop is cancelled
 # rather than returning on its own. PAGI-Server's contract test covers the
 # other order.
-subtest 'a read loop waiting on $receive when the client leaves: 0' => sub {
+subtest 'a read loop waiting on $receive when the client leaves: not connected' => sub {
     my $seen;
     my $stream = PAGI::Test::Client->new(app => async sub {
         my ($scope, $receive, $send) = @_;
@@ -107,13 +108,13 @@ subtest 'a read loop waiting on $receive when the client leaves: 0' => sub {
                 return 'saw the disconnect' if $event->{type} eq 'http.disconnect';
             }
         });
-        $seen = { result => \@r, reason => $conn->disconnect_reason };
+        $seen = { result => \@r, connected => $conn->is_connected, reason => $conn->disconnect_reason };
     })->stream('/');
     is $stream->receive_chunk(timeout => 3), "started\n", 'the body began';
     $stream->close;
     ok wait_for(sub { $seen }), 'the call returned';
-    is $seen, { result => [0], reason => 'client_closed' },
-        'not completed: 0';
+    is $seen, { result => [], connected => 0, reason => 'client_closed' },
+        'no value; the scope has ended';
 };
 
 subtest 'failures keep their error' => sub {
@@ -184,7 +185,7 @@ subtest 'a call on an ended scope skips $code and resolves on a later turn' => s
         $seen = { ran => $ran, ready_in_call => $ready_in_call, result => \@r };
     })->get('/');
     ok wait_for(sub { $seen }), 'it resolved';
-    is $seen, { ran => 0, ready_in_call => 0, result => [0] }, 'skipped; later; 0';
+    is $seen, { ran => 0, ready_in_call => 0, result => [] }, 'skipped; later; no value';
 };
 
 subtest '$code ends its own scope' => sub {
@@ -206,9 +207,9 @@ subtest '$code ends its own scope' => sub {
         })->get('/');
     }
     ok wait_for(sub { keys %seen == 3 }), 'all three resolved';
-    is $seen{done},    { result => [0] }, 'a settled Future: the scope has ended, so 0';
+    is $seen{done},    { result => [] }, 'a settled Future: no value';
     is $seen{fail},    "database failed\n", 'a settled failure keeps its error';
-    is $seen{pending}, { result => [0], cancelled => 1 }, 'a pending Future is cancelled by the end';
+    is $seen{pending}, { result => [], cancelled => 1 }, 'a pending Future is cancelled by the end';
 };
 
 subtest 'a call from an on_end callback' => sub {
@@ -225,7 +226,7 @@ subtest 'a call from an on_end callback' => sub {
         await finish($send);
     })->get('/');
     ok wait_for(sub { $seen }), 'it resolved';
-    is $seen, { ran => 0, ready_in_call => 0, result => [0] }, 'skipped; later; 0';
+    is $seen, { ran => 0, ready_in_call => 0, result => [] }, 'skipped; later; no value';
 };
 
 subtest 'application code dying in the end delivery strands nothing' => sub {
@@ -253,8 +254,8 @@ subtest 'application code dying in the end delivery strands nothing' => sub {
         $stream->close;
         wait_for(sub { $seen });
     };
-    is $seen, { first => [0], second => [0], third => [0], on_end => 1, end_future => 1 },
-        'every call resolved 0; on_end ran; end_future resolved';
+    is $seen, { first => [], second => [], third => [], on_end => 1, end_future => 1 },
+        'every call resolved with no value; on_end ran; end_future resolved';
     is scalar(grep { /exploded/ } @$warnings), 2, 'each death warned' or diag join '', @$warnings;
 };
 

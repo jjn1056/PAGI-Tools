@@ -1653,8 +1653,8 @@ ends is under L</SEMANTICS>.
 Once the client has left, a send does nothing and settles on a later turn of
 the event loop, as on a server. An application that runs its work in
 C<< $scope->{'pagi.connection'}->run_until_end >>, and sends its terminal
-event only when that call resolves with C<1>, sends once more at most; one
-that keeps sending, on any scope, has not, and the test client warns once,
+event after it only if C<is_connected>, sends once more at most; one that
+keeps sending, on any scope, has not, and the test client warns once,
 at its third discarded send (L<PAGI::Spec::Www/"Example: Work That Stops When
 the Client Leaves">).
 

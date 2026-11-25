@@ -60,12 +60,13 @@ async sub call {
     my $writer = $self->writer_class->_new(response => $self, send => $send, connection => $connection);
     my $ok = eval {
         # The body's own Future goes to run_until_end, so a cancel of it is
-        # reported; its trailers are what the body returned.
+        # reported; its trailers are what the body returned. A call that
+        # resolves with the client still there means the body finished.
         my $body_work;
-        my $completed = await $connection->run_until_end(sub {
+        await $connection->run_until_end(sub {
             $body_work = Future->call($self->body, $writer);
         });
-        await $writer->_end($body_work->get) if $completed;
+        await $writer->_end($body_work->get) if $connection->is_connected;
         1;
     };
     my $error = $@;
