@@ -223,11 +223,13 @@ sub _known_type {
     return defined $extension ? $MIME_TYPE{ lc $extension } : undef;
 }
 
-# A strong validator for this file as it is: what stat says identifies it
-# and changes when it's replaced or written.
+# A strong validator for this file as it is: its size and modification
+# time, as Starlette's and nginx's are. Nothing from the disk (device,
+# inode) or the permissions, so every server behind a load balancer that has
+# the same file, with the same time, gives the same ETag.
 sub _etag {
     my @stat = @_;
-    return '"' . Digest::MD5::md5_hex(join '-', @stat[0, 1, 2, 7, 9]) . '"';
+    return '"' . Digest::MD5::md5_hex(join '-', @stat[7, 9]) . '"';
 }
 
 # Content-Disposition (RFC 6266): an ASCII filename quoted, with " and \
@@ -334,8 +336,10 @@ one C<filename> and C<inline> would make.
 
 =item etag
 
-True (the default) to send a strong ETag for the file as it is; false to
-send none.
+True (the default) to send a strong ETag for the file as it is, made from
+its size and modification time, so servers that each have a copy of the
+file with the same time give the same ETag (deploy so the times match);
+false to send none.
 
 =item ranges
 

@@ -56,6 +56,18 @@ subtest 'ETag and Last-Modified' => sub {
     is get(PAGI::Response::File->new(path => $report, etag => 0))->header('etag'), undef, 'etag => 0: none';
 };
 
+subtest 'the ETag is the same for the same file on another server' => sub {
+    # Two copies, as two servers behind a load balancer have: same bytes,
+    # same time, different inode (and device, on a real second machine).
+    my $one = file_with('copy-one.css', 'body { color: red }');
+    my $two = file_with('copy-two.css', 'body { color: red }');
+    utime 1_700_000_000, 1_700_000_000, $one, $two or die "can't set times: $!";
+    chmod 0644, $one; chmod 0600, $two;
+    is get(PAGI::Response::File->new(path => $two))->header('etag'),
+        get(PAGI::Response::File->new(path => $one))->header('etag'),
+        'the same ETag: it comes from the size and the time, not the disk or the permissions';
+};
+
 subtest 'Accept-Ranges' => sub {
     is get(PAGI::Response::File->new(path => $report))->header('accept-ranges'), 'bytes', 'by default';
     is get(PAGI::Response::File->new(path => $report, ranges => 0))->header('accept-ranges'), undef,
