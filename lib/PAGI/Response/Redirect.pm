@@ -16,6 +16,7 @@ sub prepare {
         if ref $url && !overload::Method($url, '""');
     Carp::croak('url is required: where to send the client')
         unless defined $url && length "$url";
+    Carp::croak('a redirect has no body: give url, not content') if exists $args->{content};
     for my $header (@{ $args->{headers} // [] }) {
         (my $name = $header->[0]) =~ tr/A-Z/a-z/;
         Carp::croak('Redirect sets location itself, from url') if $name eq 'location';
@@ -86,9 +87,32 @@ UTF-8, before it can go in a header, or the client gets a Location it can't
 follow. Even with L<URI> it's a trap: given characters, URI escapes C<ü> as
 C<%FC> (Latin-1) or C<%C3%BC> (UTF-8) depending on how Perl happens to hold
 the string. This class encodes the URL as UTF-8 first, then percent-encodes
-what a URL can't carry, every time. A URL that's already valid, its C<%XX>
-escapes included, is sent as it is, and a CR or LF is encoded, so it can
-never start a header of its own.
+what a URL can't carry at all, every time. A URL that's already valid, its
+C<%XX> escapes included, is sent as it is, and a CR or LF is encoded, so it
+can never start a header of its own.
+
+=head2 Values you put in the URL are yours to encode
+
+Redirect can't tell a C<&> or C<#> you meant from one that came in a value,
+so it leaves every character a URL may contain as it is. A value you put in
+a query or a path, from the request say, you encode first, and Redirect then
+leaves your C<%XX> escapes alone. Without that, a search for C<a&admin=1>
+becomes C<?q=a&admin=1>, a second parameter, and C<x#y> is cut at the C<#>:
+
+    use Encode ();
+
+    # A value for a query or a path segment: UTF-8, then everything but
+    # the unreserved characters percent-encoded (RFC 3986).
+    sub escape_value ($value) {
+        my $bytes = Encode::encode('UTF-8', $value);
+        $bytes =~ s/([^A-Za-z0-9\-._~])/sprintf '%%%02X', ord $1/ge;
+        return $bytes;
+    }
+
+    PAGI::Response::Redirect->new(url => '/results?q=' . escape_value($q), status => 303);
+
+The same goes for a path you take from C<< $scope->{path} >>, which the
+server has decoded: use C<< $scope->{raw_path} >>, still encoded, instead.
 
 The response has no body; a client follows the Location. If you'd rather
 build the Location yourself, the plain response above is all a redirect is.
@@ -99,10 +123,13 @@ build the Location yourself, the plain response above is all a redirect is.
 
 =item url
 
-Required. Where to send the client: a path (C</next>) or an absolute URL.
-Give characters, not bytes you've encoded already, which would be encoded a
-second time. An object that overloads stringification, such as L<URI>, is
-its string.
+Required. Where to send the client: a path (C</next>) or an absolute URL,
+as characters. Characters outside ASCII are encoded as UTF-8; bytes you
+encoded already would be encoded a second time. Escapes you made for a
+value (L</Values you put in the URL are yours to encode>) stay as they are.
+An object that overloads stringification is its string. A L<URI> object's
+string is already escaped and is sent as it is, so build it from UTF-8
+bytes, not characters, or the URI trap above applies.
 
 =item status
 

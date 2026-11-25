@@ -61,6 +61,23 @@ subtest 'what new refuses' => sub {
         qr/\ARedirect sets location itself, from url/, 'a Location header';
 };
 
+subtest 'every redirect status, and only those' => sub {
+    for my $status (301, 302, 303, 307, 308) {
+        is get(PAGI::Response::Redirect->new(url => '/x', status => $status))->status, $status, "status $status";
+    }
+    like dies { PAGI::Response::Redirect->new(url => '/x', status => 300) }, qr/\Astatus 300 isn't a redirect/,
+        '300 Multiple Choices is not one of them';
+};
+
+subtest 'a redirect has no body' => sub {
+    like dies { PAGI::Response::Redirect->new(url => '/x', content => 'moved') },
+        qr/\Aa redirect has no body: give url, not content/, 'content refused, not ignored';
+};
+
+subtest 'a URL with an IPv6 literal and a tilde is left as it is' => sub {
+    is location('http://[::1]:8080/~ada/'), 'http://[::1]:8080/~ada/', 'brackets and tilde kept';
+};
+
 subtest 'other headers, and cookies' => sub {
     my $response = PAGI::Response::Redirect->new(url => '/home', headers => [['cache-control', 'no-store']]);
     $response->set_cookie(session => 'abc');

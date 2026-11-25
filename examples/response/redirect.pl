@@ -15,6 +15,15 @@ use Encode ();
 use PAGI::Response::Redirect;
 use PAGI::Response::Text;
 
+# A value for a query or a path segment: UTF-8, then everything but the
+# unreserved characters percent-encoded (RFC 3986). Redirect leaves these
+# escapes alone, and only it can't tell your & from a value's.
+sub escape_value ($value) {
+    my $bytes = Encode::encode('UTF-8', $value);
+    $bytes =~ s/([^A-Za-z0-9\-._~])/sprintf '%%%02X', ord $1/ge;
+    return $bytes;
+}
+
 # The query string's q, unescaped and decoded from UTF-8: characters.
 sub query_q ($query) {
     my ($value) = ($query // '') =~ /(?:\A|&)q=([^&]*)/;
@@ -34,9 +43,10 @@ my $app = async sub ($scope, $receive, $send) {
         $response = PAGI::Response::Redirect->new(url => '/new', status => 308);
     }
     elsif ($path eq '/search' && $method eq 'POST') {
-        # After a POST, See Other: the browser GETs the results. The query is
-        # characters; Redirect encodes them.
-        $response = PAGI::Response::Redirect->new(url => '/results?q=' . query_q($scope->{query_string}), status => 303);
+        # After a POST, See Other: the browser GETs the results. The value
+        # goes in the URL encoded, so an & or # in it stays part of it.
+        my $q = escape_value(query_q($scope->{query_string}));
+        $response = PAGI::Response::Redirect->new(url => "/results?q=$q", status => 303);
     }
     elsif ($path eq '/login' && $method eq 'POST') {
         $response = PAGI::Response::Redirect->new(url => '/', status => 303)

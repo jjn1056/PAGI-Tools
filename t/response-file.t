@@ -243,6 +243,8 @@ subtest 'review fixes' => sub {
     $res = get(PAGI::Response::File->new(path => $empty), headers => { range => 'bytes=-5' });
     is [$res->status, $res->header('content-length'), $res->header('content-range'), $res->content],
         [200, 0, undef, ''], 'bytes=-5 of an empty file: 200, length 0';
+    $res = get(PAGI::Response::File->new(path => $empty), headers => { range => 'bytes=-0' });
+    is [$res->status, $res->header('content-range')], [416, 'bytes */0'], 'bytes=-0 of an empty file: still 416';
 
     # The 416 says its body is empty (Minor 3).
     $res = get(PAGI::Response::File->new(path => $hundred), headers => { range => 'bytes=500-' });
