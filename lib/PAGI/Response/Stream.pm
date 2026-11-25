@@ -271,9 +271,9 @@ Latin-1, which a UTF-8 client shows as garbage. Use C<write_text> for text.
 
 =item *
 
-C<format_item> returns bytes, so a format encodes there: the NDJSON example
-under L</SUBCLASSING> does, with C<< utf8 => 1 >>, and its items are
-characters.
+C<format_item> returns bytes, so a format encodes there:
+L<PAGI::Response::NDJSON> does, and so does the CSV example under
+L</SUBCLASSING>, whose items are characters.
 
 =item *
 
@@ -337,22 +337,23 @@ are still experimental in Perl.
 =head1 SUBCLASSING
 
 A format whose body is a run of items overrides C<format_item>, and the body
-writes items:
+writes items. L<PAGI::Response::NDJSON> is one, shipped; here is another, rows
+of CSV:
 
-    package NDJSON {
+    package CSV::Rows {
         use v5.40;
         use parent 'PAGI::Response::Stream';
-        use JSON::MaybeXS ();
+        use Encode ();
 
-        sub default_content_type { 'application/x-ndjson' }
+        sub default_content_type { 'text/csv; charset=utf-8' }
 
-        sub format_item ($self, $item) {
-            return JSON::MaybeXS->new(utf8 => 1, canonical => 1)->encode($item) . "\n";
+        sub format_item ($self, $row) {
+            return Encode::encode('UTF-8', join(',', @$row) . "\r\n");
         }
     }
 
-    my $response = NDJSON->new(body => async sub ($writer) {
-        for my $id (1 .. 3) { await $writer->write_item({ id => $id }) }
+    my $response = CSV::Rows->new(body => async sub ($writer) {
+        for my $id (1 .. 3) { await $writer->write_item([$id, "row $id"]) }
     });
 
 To change how the body writes, name a writer of your own with

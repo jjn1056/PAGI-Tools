@@ -4,7 +4,7 @@
 #   /count      a line a second, then the end
 #   /download   this file, relayed from a source, then its SHA-256 and
 #               length as trailers
-#   /events     NDJSON, one JSON object a line, from a format of our own
+#   /events     NDJSON, one JSON object a line, with PAGI::Response::NDJSON
 #   /feed       messages as they're published, until the client leaves
 #   /feed-10s   the same, given up after ten seconds
 #   /publish    sends the query string, as text, to everyone following the feed
@@ -28,6 +28,7 @@ use Future::IO;
 use Encode ();
 use PAGI::Response::Text;
 use PAGI::Response::Stream;
+use PAGI::Response::NDJSON;
 
 # A file read a chunk at a time, keeping a SHA-256 and a count of what it
 # has given: pipe_from relays it, and its trailers say what was sent.
@@ -55,18 +56,6 @@ package FileSource {
             ['content-digest', 'sha-256=:' . $self->{sha}->b64digest . '=:'],
             ['x-body-length',  $self->{length}],
         ];
-    }
-}
-
-# NDJSON: the body writes items, and this makes each a line of JSON.
-package NDJSON {
-    use parent 'PAGI::Response::Stream';
-    use JSON::MaybeXS ();
-
-    sub default_content_type { 'application/x-ndjson' }
-
-    sub format_item ($self, $item) {
-        return JSON::MaybeXS->new(utf8 => 1, canonical => 1)->encode($item) . "\n";
     }
 }
 
@@ -180,9 +169,10 @@ my $app = async sub ($scope, $receive, $send) {
         );
     }
     elsif ($path eq '/events') {
-        $response = NDJSON->new(body => async sub ($writer) {
+        # Each item is one line of JSON: write_item encodes it.
+        $response = PAGI::Response::NDJSON->new(body => async sub ($writer) {
             my $id = 0;
-            for my $city ('Zürich', 'Kraków', 'São Paulo') {    # characters; format_item encodes
+            for my $city ('Zürich', 'Kraków', 'São Paulo') {    # characters; NDJSON encodes
                 await $writer->write_item({ id => ++$id, city => $city });
                 await Future::IO->sleep(0.5);
             }
