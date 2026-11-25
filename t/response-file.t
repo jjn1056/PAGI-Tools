@@ -104,6 +104,68 @@ subtest 'what new refuses' => sub {
     like dies { PAGI::Response::File->new(path => $report, status => 204) }, qr/\Astatus 204 has no body/, 'status 204';
 };
 
+# A hundred bytes, A-Z over and over: byte N is chr(65 + N % 26).
+my $alphabet = join '', map { chr(65 + $_ % 26) } 0 .. 99;
+my $hundred  = file_with('hundred.txt', $alphabet);
+
+subtest 'a byte range: 206 and that part' => sub {
+    my %expect = (
+        'bytes=0-9'    => [0, 9],
+        'bytes=-5'     => [95, 99],
+        'bytes=90-'    => [90, 99],
+        'bytes=95-200' => [95, 99],    # an end past the file is the file's end
+    );
+    for my $range (sort keys %expect) {
+        my ($first, $last) = @{ $expect{$range} };
+        my $res = get(PAGI::Response::File->new(path => $hundred), headers => { range => $range });
+        is [$res->status, $res->content, $res->header('content-range'), $res->header('content-length')],
+            [206, substr($alphabet, $first, $last - $first + 1), "bytes $first-$last/100", $last - $first + 1],
+            $range;
+    }
+};
+
+subtest 'a range past the end: 416' => sub {
+    for my $range ('bytes=100-', 'bytes=-0') {
+        my $res = get(PAGI::Response::File->new(path => $hundred), headers => { range => $range });
+        is [$res->status, $res->header('content-range'), $res->content], [416, 'bytes */100', ''], $range;
+    }
+    my $res = get(PAGI::Response::File->new(path => file_with('nothing.txt', '')), headers => { range => 'bytes=0-' });
+    is [$res->status, $res->header('content-range')], [416, 'bytes */0'], 'any range of an empty file';
+};
+
+subtest 'a range File does not serve: the whole file' => sub {
+    for my $range ('bytes=0-0,5-9', 'items=0-5', 'bytes=abc', 'bytes=9-0', 'bytes=-') {
+        my $res = get(PAGI::Response::File->new(path => $hundred), headers => { range => $range });
+        is [$res->status, $res->content], [200, $alphabet], $range;
+    }
+    my $res = get(PAGI::Response::File->new(path => $hundred, ranges => 0), headers => { range => 'bytes=0-9' });
+    is [$res->status, $res->content], [200, $alphabet], 'ranges => 0';
+    $res = get(PAGI::Response::File->new(path => $hundred, status => 203), headers => { range => 'bytes=0-9' });
+    is [$res->status, $res->content], [203, $alphabet], 'a status other than 200';
+    $res = head(PAGI::Response::File->new(path => $hundred), headers => { range => 'bytes=0-9' });
+    is [$res->status, $res->header('content-length')], [200, 100], 'HEAD: ranges are for GET';
+};
+
+subtest 'If-Range: the range only for the same file' => sub {
+    my $response = PAGI::Response::File->new(path => $hundred);
+    my $now = get($response);
+    my ($etag, $date) = ($now->header('etag'), $now->header('last-modified'));
+    for my $case ([$etag, 206, 'the current ETag'], [$date, 206, 'the current Last-Modified'],
+                  ['"stale"', 200, 'another ETag'], ['Thu, 01 Jan 1970 00:00:00 GMT', 200, 'another date']) {
+        my ($if_range, $status, $name) = @$case;
+        my $res = get($response, headers => { range => 'bytes=0-9', 'if-range' => $if_range });
+        is $res->status, $status, $name;
+    }
+
+    # The file replaced: new length, new time, so a new ETag and Last-Modified.
+    file_with('hundred.txt', "$alphabet!");
+    utime time + 10, time + 10, $hundred or die "can't touch $hundred: $!";
+    my $then = get($response, headers => { range => 'bytes=0-9', 'if-range' => $etag });
+    is [$then->status, length $then->content], [200, 101], 'the old ETag gets the whole new file';
+    isnt $then->header('etag'), $etag, 'a new ETag';
+    isnt $then->header('last-modified'), $date, 'a new Last-Modified';
+};
+
 subtest 'a missing file dies before anything is sent' => sub {
     my @sent;
     my $call = PAGI::Response::File->new(path => File::Spec->catfile($dir, 'nope.pdf'))->call(

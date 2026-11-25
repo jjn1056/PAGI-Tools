@@ -82,14 +82,75 @@ async sub call {
     my @stat = stat $path or Carp::croak("can't serve $path: $!");
     Carp::croak("can't serve $path: not a regular file") unless -f _;
     Carp::croak("can't serve $path: not readable") unless -r _;
-    my @headers = map { [@$_] } @{ $self->headers };
-    push @headers, ['content-length', $stat[7]];
-    push @headers, ['accept-ranges', 'bytes'] if $self->{ranges};
-    push @headers, ['etag', _etag(@stat)] if $self->{etag};
-    push @headers, ['last-modified', PAGI::Response::_date($stat[9])];
-    await $send->({ type => 'http.response.start', status => $self->status, headers => \@headers });
+    my $size          = $stat[7];
+    my $etag          = $self->{etag} ? _etag(@stat) : undef;
+    my $last_modified = PAGI::Response::_date($stat[9]);
+    my @headers       = map { [@$_] } @{ $self->headers };
+    my @validators    = ((defined $etag ? ['etag', $etag] : ()), ['last-modified', $last_modified]);
+    my @accept        = $self->{ranges} ? ['accept-ranges', 'bytes'] : ();
+
+    my @range = $self->_requested_range($scope, $size, $etag, $last_modified);
+    if (@range == 1) {    # unsatisfiable
+        await $send->({ type => 'http.response.start', status => 416,
+            headers => [@headers, ['content-range', "bytes */$size"], ['content-length', 0], @accept, @validators] });
+        await $send->({ type => 'http.response.body', body => '', more => 0 });
+        return;
+    }
+    if (@range == 2) {
+        my ($first, $last) = @range;
+        my $length = $last - $first + 1;
+        await $send->({ type => 'http.response.start', status => 206,
+            headers => [@headers, ['content-length', $length], ['content-range', "bytes $first-$last/$size"], @accept, @validators] });
+        await $send->({ type => 'http.response.body', file => $path, offset => $first, length => $length });
+        return;
+    }
+    await $send->({ type => 'http.response.start', status => $self->status,
+        headers => [@headers, ['content-length', $size], @accept, @validators] });
     await $send->({ type => 'http.response.body', file => $path });
     return;
+}
+
+# The byte range the request asks for, if File serves it: (first, last)
+# for a 206, ('unsatisfiable') for a 416, else () and the whole file. Only
+# for a GET of a 200 with ranges on, one bytes= range (RFC 9110 14.2 lets
+# a server ignore the rest), and an If-Range naming this file as it is.
+sub _requested_range {
+    my ($self, $scope, $size, $etag, $last_modified) = @_;
+    return () unless $self->{ranges} && $self->status eq '200' && ($scope->{method} // '') eq 'GET';
+    my $range = _request_header($scope, 'range');
+    return () unless defined $range;
+    my $if_range = _request_header($scope, 'if-range');
+    return () if defined $if_range && !_same_file($if_range, $etag, $last_modified);
+    return _byte_range($range, $size);
+}
+
+# An If-Range names this file: its strong ETag, or its Last-Modified exactly.
+sub _same_file {
+    my ($if_range, $etag, $last_modified) = @_;
+    return defined $etag && $if_range eq $etag if $if_range =~ /\A(?:W\/)?"/;
+    return $if_range eq $last_modified;
+}
+
+sub _byte_range {
+    my ($range, $size) = @_;
+    my ($first, $last) = $range =~ /\Abytes=(\d*)-(\d*)\z/a or return ();
+    if (!length $first) {    # a suffix: the last N bytes
+        return () unless length $last;
+        return ('unsatisfiable') if $last == 0 || $size == 0;
+        return ($last >= $size ? 0 : $size - $last, $size - 1);
+    }
+    return () if length $last && $last < $first;    # invalid: ignored
+    return ('unsatisfiable') if $first >= $size;
+    $last = $size - 1 if !length $last || $last >= $size;
+    return ($first, $last);
+}
+
+# A request header's value, the fields of that name joined with ', ' as
+# RFC 9110 5.3 allows; undef if there's none.
+sub _request_header {
+    my ($scope, $name) = @_;
+    my @values = map { $_->[1] } grep { lc $_->[0] eq $name } @{ $scope->{headers} // [] };
+    return @values ? join(', ', @values) : undef;
 }
 
 # A value as a string: undef stays undef, an object that overloads
@@ -236,6 +297,42 @@ True (the default) to send C<Accept-Ranges: bytes>.
 Looks at the file, then sends the start, with the file's Content-Length,
 ETag and Last-Modified, and the file. A HEAD request gets the same headers;
 the server sends no body.
+
+=head1 RANGES
+
+A GET with a C<Range> header gets part of the file, as a download manager
+resuming, or a video player seeking, asks for it. File serves one range of
+bytes (RFC 9110 14): C<bytes=0-99>, C<bytes=100->, or the last N bytes,
+C<bytes=-500>.
+
+=over 4
+
+=item *
+
+A range within the file: C<206 Partial Content>, that part, and a
+C<Content-Range> such as C<bytes 0-99/1000>. An end past the file is the
+file's end.
+
+=item *
+
+A range starting past the end, or any range of an empty file:
+C<416 Range Not Satisfiable>, with C<Content-Range: bytes */SIZE>.
+
+=item *
+
+Anything else, several ranges, another unit, or a range that doesn't parse,
+gets the whole file, as RFC 9110 lets a server do.
+
+=item *
+
+With C<If-Range>, the range is served only if it names the file as it is
+now: its ETag, or its Last-Modified date exactly. Otherwise the client gets
+the whole file, so it never stitches together parts of two versions.
+
+=back
+
+Ranges are for a GET of a 200: a HEAD, another status, or
+C<< ranges => 0 >> gets the whole file.
 
 =head1 SEE ALSO
 
