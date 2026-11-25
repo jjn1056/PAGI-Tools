@@ -334,6 +334,35 @@ C<< Future->wait_any($stopped, Future::IO->sleep(5)) >> for example.
 C<defer> and C<finally> blocks in the body run on a cancel too, but both
 are still experimental in Perl.
 
+=head1 A SOURCE THAT CAN'T WAIT
+
+Awaiting each write is how a body keeps pace with the client: a write the
+server can't take yet waits (L<PAGI::Spec/"Send Completion Contract">).
+That suits a body that makes its data. A source that pushes data on its own
+schedule, readings from a sensor say, can't wait: the readings keep coming,
+and one the client is too slow for is better skipped than queued.
+
+For that the body asks the server how much it's holding, through the
+scope's C<pagi.transport>, which the body closes over: the writer doesn't
+carry it.
+
+    my $transport = $scope->{'pagi.transport'};    # absent on some servers
+    my $response = PAGI::Response::Stream->new(
+        content_type => 'text/plain; charset=utf-8',
+        body         => async sub ($writer) {
+            while (defined(my $reading = await $sensor->next)) {
+                # Skip a reading while the client is behind.
+                next if $transport && $transport->buffered_amount > 32_768;
+                await $writer->write_text("$reading\n");
+            }
+        },
+    );
+
+Use C<buffered_amount>, which every server that offers C<pagi.transport>
+must have, rather than its C<on_drain> and C<on_high_water> callbacks,
+which a server may fire differently or not at all (L<PAGI::Spec::Www>,
+C<pagi.transport>).
+
 =head1 SUBCLASSING
 
 A format whose body is a run of items overrides C<format_item>, and the body
