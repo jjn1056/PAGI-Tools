@@ -318,7 +318,7 @@ a request, such as access logging, works without a connection object.
 
 # AUTHOR
 
-John Napiorkowski <jjnapiork@cpan.org>
+John Napiorkowski <jjn1056@gmail.com>
 
 # LICENSE
 
