@@ -166,6 +166,52 @@ subtest 'If-Range: the range only for the same file' => sub {
     isnt $then->header('last-modified'), $date, 'a new Last-Modified';
 };
 
+subtest 'If-None-Match: 304 when the client has this file' => sub {
+    my $page = file_with('page.html', '<p>page</p>');
+    my $response = PAGI::Response::File->new(path => $page);
+    my $etag = get($response)->header('etag');
+
+    my $res = get($response, headers => { 'if-none-match' => $etag });
+    is [$res->status, $res->content], [304, ''], 'the same ETag: 304, no body';
+    is $res->header('etag'), $etag, 'with the ETag';
+    ok defined $res->header('last-modified'), 'and Last-Modified';
+    is $res->header('content-length'), undef, 'and no length of the file';
+
+    for my $case (["W/$etag", 'a weak ETag of the same tag'], ['*', 'any file'], [qq{"other", $etag}, 'one in a list']) {
+        my ($if_none_match, $name) = @$case;
+        is get($response, headers => { 'if-none-match' => $if_none_match })->status, 304, $name;
+    }
+    is get($response, headers => { 'if-none-match' => '"other"' })->status, 200, 'another ETag: the file';
+};
+
+subtest 'If-Modified-Since: 304 when the file is no newer' => sub {
+    my $page = file_with('dated.html', '<p>dated</p>');
+    my $response = PAGI::Response::File->new(path => $page);
+    my $date = get($response)->header('last-modified');
+    my $mtime = (stat $page)[9];
+
+    is get($response, headers => { 'if-modified-since' => $date })->status, 304, 'its Last-Modified: 304';
+    is get($response, headers => { 'if-modified-since' => PAGI::Response::_date($mtime - 1) })->status, 200,
+        'a second earlier: the file';
+    is get($response, headers => { 'if-modified-since' => 'not a date' })->status, 200, 'a date that does not parse: the file';
+    is get($response, headers => { 'if-none-match' => '"other"', 'if-modified-since' => $date })->status, 200,
+        'If-None-Match, when present, decides alone (RFC 9110 13.1.3)';
+};
+
+subtest 'when a 304 can be sent' => sub {
+    my $page = file_with('when.html', '<p>when</p>');
+    my $etag = get(PAGI::Response::File->new(path => $page))->header('etag');
+    my %matching = ('if-none-match' => $etag);
+
+    is head(PAGI::Response::File->new(path => $page), headers => \%matching)->status, 304, 'HEAD too';
+    is(PAGI::Test::Client->new(app => PAGI::Response::File->new(path => $page))->post('/', headers => \%matching)->status,
+        200, 'not a POST');
+    is get(PAGI::Response::File->new(path => $page, status => 203), headers => \%matching)->status, 203,
+        'not a status other than 200';
+    is get(PAGI::Response::File->new(path => $page), headers => { %matching, range => 'bytes=0-1' })->status, 304,
+        'before a Range';
+};
+
 subtest 'a missing file dies before anything is sent' => sub {
     my @sent;
     my $call = PAGI::Response::File->new(path => File::Spec->catfile($dir, 'nope.pdf'))->call(

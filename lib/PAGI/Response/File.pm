@@ -89,6 +89,12 @@ async sub call {
     my @validators    = ((defined $etag ? ['etag', $etag] : ()), ['last-modified', $last_modified]);
     my @accept        = $self->{ranges} ? ['accept-ranges', 'bytes'] : ();
 
+    if ($self->_not_modified($scope, $etag, $stat[9])) {
+        await $send->({ type => 'http.response.start', status => 304, headers => [@headers, @validators] });
+        await $send->({ type => 'http.response.body', body => '', more => 0 });
+        return;
+    }
+
     my @range = $self->_requested_range($scope, $size, $etag, $last_modified);
     if (@range == 1) {    # unsatisfiable
         await $send->({ type => 'http.response.start', status => 416,
@@ -122,6 +128,49 @@ sub _requested_range {
     my $if_range = _request_header($scope, 'if-range');
     return () if defined $if_range && !_same_file($if_range, $etag, $last_modified);
     return _byte_range($range, $size);
+}
+
+# Whether the client already has this file, so a 304 does: for a GET or
+# HEAD of a 200 (RFC 9110 13.1.3). If-None-Match, when present, decides
+# alone: a weak match of any tag it lists, or *, means not modified.
+# Otherwise If-Modified-Since: not modified unless the file is newer.
+sub _not_modified {
+    my ($self, $scope, $etag, $mtime) = @_;
+    my $method = $scope->{method} // '';
+    return 0 unless $self->status eq '200' && ($method eq 'GET' || $method eq 'HEAD');
+    my $if_none_match = _request_header($scope, 'if-none-match');
+    if (defined $if_none_match) {
+        return 1 if $if_none_match =~ /\A\s*\*\s*\z/;
+        return 0 unless defined $etag;
+        my $opaque = _opaque_tag($etag);
+        return scalar grep { _opaque_tag($_) eq $opaque } split /\s*,\s*/, $if_none_match;
+    }
+    my $since = _parse_http_date(_request_header($scope, 'if-modified-since'));
+    return defined $since && $mtime <= $since;
+}
+
+# An entity-tag without its weakness, for the weak comparison.
+sub _opaque_tag {
+    my ($tag) = @_;
+    $tag =~ s/\A\s*W\///;
+    $tag =~ s/\s+\z//;
+    return $tag;
+}
+
+my %MONTH_NUMBER = (Jan => 0, Feb => 1, Mar => 2, Apr => 3, May => 4, Jun => 5,
+                    Jul => 6, Aug => 7, Sep => 8, Oct => 9, Nov => 10, Dec => 11);
+
+# An IMF-fixdate (RFC 9110 5.6.7), "Sun, 06 Nov 1994 08:49:37 GMT", as an
+# epoch; undef for anything else.
+sub _parse_http_date {
+    my ($date) = @_;
+    return undef unless defined $date;
+    my ($mday, $month, $year, $hour, $min, $sec)
+        = $date =~ /\A\s*[A-Z][a-z]{2}, (\d\d) ([A-Z][a-z]{2}) (\d{4}) (\d\d):(\d\d):(\d\d) GMT\s*\z/a
+        or return undef;
+    return undef unless exists $MONTH_NUMBER{$month};
+    require Time::Local;
+    return eval { Time::Local::timegm($sec, $min, $hour, $mday, $MONTH_NUMBER{$month}, $year) };
 }
 
 # An If-Range names this file: its strong ETag, or its Last-Modified exactly.
@@ -297,6 +346,30 @@ True (the default) to send C<Accept-Ranges: bytes>.
 Looks at the file, then sends the start, with the file's Content-Length,
 ETag and Last-Modified, and the file. A HEAD request gets the same headers;
 the server sends no body.
+
+=head1 CONDITIONAL REQUESTS
+
+A browser that has the file already sends back what it was told about it,
+and File answers C<304 Not Modified>, with no body, when the file is
+unchanged (RFC 9110 13):
+
+=over 4
+
+=item *
+
+C<If-None-Match> with the file's ETag, as given or weak (C<W/"...">), or in a
+list, or C<*>: 304.
+
+=item *
+
+Otherwise C<If-Modified-Since> with a date no earlier than the file's
+Last-Modified: 304. A date that isn't an HTTP date is ignored.
+
+=back
+
+When C<If-None-Match> is there it decides alone, and C<If-Modified-Since> is
+not looked at. A 304 is sent only for a GET or HEAD of a 200, before any
+Range is looked at, and carries the ETag and Last-Modified.
 
 =head1 RANGES
 
