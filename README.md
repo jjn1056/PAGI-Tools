@@ -312,7 +312,7 @@ checks no versions: until 1.0, use the newest of each.
 
 # AUTHOR
 
-John Napiorkowski <jjnapiork@cpan.org>
+John Napiorkowski <jjn1056@gmail.com>
 
 # LICENSE
 
