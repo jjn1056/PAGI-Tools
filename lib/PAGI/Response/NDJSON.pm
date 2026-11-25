@@ -52,8 +52,9 @@ Stream's.
 
 A value JSON can't encode, a code reference say, dies in the body, and the
 stream ends C<failed>, as any body that dies does. Give an object a
-C<TO_JSON> to say how it's sent: the encoder sends one without it as
-C<null>, as it does for L<PAGI::Response::JSON>.
+C<TO_JSON> to say how it's sent: without one, what happens depends on the
+JSON backend JSON::MaybeXS picks (Cpanel::JSON::XS sends C<null>, JSON::PP
+dies), as it does for L<PAGI::Response::JSON>.
 
 NDJSON is also Stream's example of a format: a default type and a
 C<format_item>. See L<PAGI::Response::Stream/SUBCLASSING> to make one of your

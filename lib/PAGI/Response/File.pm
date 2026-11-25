@@ -47,8 +47,10 @@ sub prepare {
     $self->{etag}     = $args->{etag}   // 1;
     $self->{ranges}   = $args->{ranges} // 1;
     $self->SUPER::prepare($args);
+    # Yours is the one sent, if you gave one, as for Content-Type.
+    my $has_disposition = grep { $_->[0] eq 'content-disposition' } @{ $self->{headers} };
     push @{ $self->{headers} }, ['content-disposition', _content_disposition($args->{inline} ? 'inline' : 'attachment', $filename)]
-        if defined $filename || $args->{inline};
+        if !$has_disposition && (defined $filename || $args->{inline});
     return;
 }
 
@@ -66,13 +68,13 @@ sub prepare_status {
 # No body to buffer: the server reads the file when the response is sent.
 sub prepare_body { return undef }
 
-# The type you gave, else the one the filename's extension, then the
-# path's, names; else application/octet-stream. No charset is added: File
-# sends bytes it hasn't read.
+# The type you gave, else the one the filename's extension names, else the
+# path's; else application/octet-stream. No charset is added: File sends
+# bytes it hasn't read.
 sub prepare_content_type {
     my ($self, $args, %prepared) = @_;
     return $args->{content_type} if exists $args->{content_type};
-    return _content_type_for($self->{filename} // $self->{path});
+    return _known_type($self->{filename}) // _known_type($self->{path}) // 'application/octet-stream';
 }
 
 # Serving the file: looked at now, then the start and one file event.
@@ -212,10 +214,12 @@ sub _string {
     return "$value";
 }
 
-sub _content_type_for {
+# The type a name's extension is known for, else undef.
+sub _known_type {
     my ($name) = @_;
+    return undef unless defined $name;
     my ($extension) = $name =~ /\.([^.\/]+)\z/;
-    return $MIME_TYPE{ lc($extension // '') } // 'application/octet-stream';
+    return defined $extension ? $MIME_TYPE{ lc $extension } : undef;
 }
 
 # A strong validator for this file as it is: what stat says identifies it
@@ -324,7 +328,8 @@ not a status with no body (1xx, 204, 205, 304).
 
 As L<PAGI::Response>'s, except Content-Length, Content-Range, ETag and
 Last-Modified, which describe the file and which File sets itself: giving
-one dies.
+one dies. A Content-Disposition you give is the one sent, in place of the
+one C<filename> and C<inline> would make.
 
 =item etag
 
@@ -338,6 +343,25 @@ True (the default) to send C<Accept-Ranges: bytes>.
 =back
 
 =head1 METHODS
+
+=head2 prepare
+
+Checks the configuration, as described under L</CONSTRUCTOR ARGUMENTS>, then
+does L<PAGI::Response>'s steps and adds the Content-Disposition. A subclass
+with arguments of its own extends this.
+
+=head2 prepare_status
+
+The status you gave, else 200, refusing 206 and a status with no body.
+
+=head2 prepare_body
+
+C<undef>: there's no body to buffer, since the server reads the file.
+
+=head2 prepare_content_type
+
+The type you gave, else the one the filename's extension names, else the
+path's, else C<application/octet-stream>.
 
 =head2 call
 

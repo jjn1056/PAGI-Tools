@@ -212,6 +212,64 @@ subtest 'when a 304 can be sent' => sub {
         'before a Range';
 };
 
+subtest 'review fixes' => sub {
+    # The filename's extension, else the path's (Minor 7).
+    is get(PAGI::Response::File->new(path => $report, filename => 'report'))->header('content-type'),
+        'application/pdf', 'a filename with no extension: the type from the path';
+
+    # Your Content-Disposition is the one sent (Minor 8), as with Content-Type.
+    my $res = get(PAGI::Response::File->new(path => $report, filename => 'x.pdf',
+        headers => [['Content-Disposition', 'inline; filename="mine.pdf"']]));
+    is [map { $_->[1] } grep { $_->[0] eq 'content-disposition' } @{ $res->header_pairs }],
+        ['inline; filename="mine.pdf"'], 'one Content-Disposition, yours';
+
+    # A suffix range of an empty file (Important 1): 416, as the spec rules.
+    my $empty = file_with('empty-suffix.txt', '');
+    $res = get(PAGI::Response::File->new(path => $empty), headers => { range => 'bytes=-5' });
+    is [$res->status, $res->header('content-range')], [416, 'bytes */0'], 'bytes=-5 of an empty file';
+
+    # The 416 says its body is empty (Minor 3).
+    $res = get(PAGI::Response::File->new(path => $hundred), headers => { range => 'bytes=500-' });
+    is $res->header('content-length'), 0, 'a 416 has content-length 0';
+
+    # Statuses with no body (Minor 2).
+    for my $status (101, 205, 304) {
+        like dies { PAGI::Response::File->new(path => $report, status => $status) },
+            qr/\Astatus $status has no body/, "status $status";
+    }
+
+    # If-None-Match with space after the tag (Minor 4).
+    my $etag = get(PAGI::Response::File->new(path => $report))->header('etag');
+    is get(PAGI::Response::File->new(path => $report), headers => { 'if-none-match' => "$etag " })->status,
+        304, 'a tag followed by a space still matches';
+};
+
+# Serves a response with a recording $send; returns call's Future and what was sent.
+sub call_recorded {
+    my ($response) = @_;
+    my @sent;
+    my $call = $response->call({ type => 'http', method => 'GET', headers => [] }, sub { Future->new },
+        sub { push @sent, $_[0]; Future->done });
+    return ($call, \@sent);
+}
+
+subtest 'a file that is not there to serve dies before anything is sent' => sub {
+    # Important 2: a directory, and a file this process can't read.
+    my ($call, $sent) = call_recorded(PAGI::Response::File->new(path => $dir));
+    like scalar $call->failure, qr/\Acan't serve \S+: not a regular file/, 'a directory';
+    is $sent, [], 'nothing sent';
+
+    SKIP: {
+        skip 'root reads any file', 2 if $> == 0;
+        my $locked = file_with('locked.txt', 'secret');
+        chmod 0000, $locked or die "can't chmod $locked: $!";
+        ($call, $sent) = call_recorded(PAGI::Response::File->new(path => $locked));
+        like scalar $call->failure, qr/\Acan't serve \S+: not readable/, 'an unreadable file';
+        is $sent, [], 'nothing sent';
+        chmod 0600, $locked;
+    }
+};
+
 subtest 'a missing file dies before anything is sent' => sub {
     my @sent;
     my $call = PAGI::Response::File->new(path => File::Spec->catfile($dir, 'nope.pdf'))->call(
