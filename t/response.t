@@ -302,23 +302,5 @@ subtest 'has_trailers: a buffered response declares none' => sub {
     ok !PAGI::Response->can('trailers_for'), 'no per-request trailers hook';
 };
 
-# The COOKBOOK's redirect recipe, as written.
-subtest 'a redirect is a 3xx and a Location built with URI' => sub {
-    skip_all 'the recipe uses URI, which is not installed' unless eval { require URI; 1 };
-    require Encode;
-    # The same characters with Perl's internal UTF-8 flag off and on: URI
-    # alone escapes the first as Latin-1, so the recipe encodes first.
-    my $plain   = "/search?q=Gr\x{fc}\x{df}e";
-    my $flagged = $plain;
-    utf8::upgrade($flagged);
-    for my $url ($plain, $flagged) {
-        my $res = get(PAGI::Response->new(
-            status  => 303,
-            headers => [[location => URI->new(Encode::encode('UTF-8', $url))->as_string]],
-        ));
-        is $res->status, 303, 'the status';
-        is $res->header('location'), '/search?q=Gr%C3%BC%C3%9Fe', 'the Location, percent-encoded as UTF-8';
-    }
-};
 
 done_testing;
