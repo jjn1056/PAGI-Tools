@@ -203,13 +203,14 @@ subtest '$code ends its own scope' => sub {
             my $call = $conn->run_until_end(sub { $code{$case}->($conn, \$work) });
             await $call->else(sub { Future->done });
             $seen{$case} = $call->is_failed ? caught($call)
-                : { result => [ $call->get ], ($work ? (cancelled => $work->is_cancelled ? 1 : 0) : ()) };
+                : { result => [ $call->get ], connected => $conn->is_connected,
+                    ($work ? (cancelled => $work->is_cancelled ? 1 : 0) : ()) };
         })->get('/');
     }
     ok wait_for(sub { keys %seen == 3 }), 'all three resolved';
-    is $seen{done},    { result => [] }, 'a settled Future: no value';
+    is $seen{done},    { result => [], connected => 0 }, 'a settled Future: no value; the scope has ended';
     is $seen{fail},    "database failed\n", 'a settled failure keeps its error';
-    is $seen{pending}, { result => [], cancelled => 1 }, 'a pending Future is cancelled by the end';
+    is $seen{pending}, { result => [], connected => 0, cancelled => 1 }, 'a pending Future is cancelled by the end';
 };
 
 subtest 'a call from an on_end callback' => sub {
