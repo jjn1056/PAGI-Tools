@@ -130,7 +130,8 @@ subtest 'a range past the end: 416' => sub {
         is [$res->status, $res->header('content-range'), $res->content], [416, 'bytes */100', ''], $range;
     }
     my $res = get(PAGI::Response::File->new(path => file_with('nothing.txt', '')), headers => { range => 'bytes=0-' });
-    is [$res->status, $res->header('content-range')], [416, 'bytes */0'], 'any range of an empty file';
+    is [$res->status, $res->header('content-range')], [416, 'bytes */0'],
+        'bytes=0- of an empty file: first-pos is not less than the length';
 };
 
 subtest 'a range File does not serve: the whole file' => sub {
@@ -223,10 +224,13 @@ subtest 'review fixes' => sub {
     is [map { $_->[1] } grep { $_->[0] eq 'content-disposition' } @{ $res->header_pairs }],
         ['inline; filename="mine.pdf"'], 'one Content-Disposition, yours';
 
-    # A suffix range of an empty file (Important 1): 416, as the spec rules.
+    # A suffix range of an empty file: satisfiable (RFC 9110 14.1.2), and the
+    # whole file, nothing, is what it selects; a 206 can't say zero bytes, so
+    # it's the whole response (ruled by John 2026-11-25: "follow 9110").
     my $empty = file_with('empty-suffix.txt', '');
     $res = get(PAGI::Response::File->new(path => $empty), headers => { range => 'bytes=-5' });
-    is [$res->status, $res->header('content-range')], [416, 'bytes */0'], 'bytes=-5 of an empty file';
+    is [$res->status, $res->header('content-length'), $res->header('content-range'), $res->content],
+        [200, 0, undef, ''], 'bytes=-5 of an empty file: 200, length 0';
 
     # The 416 says its body is empty (Minor 3).
     $res = get(PAGI::Response::File->new(path => $hundred), headers => { range => 'bytes=500-' });

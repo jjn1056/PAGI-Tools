@@ -187,7 +187,8 @@ sub _byte_range {
     my ($first, $last) = $range =~ /\Abytes=(\d*)-(\d*)\z/a or return ();
     if (!length $first) {    # a suffix: the last N bytes
         return () unless length $last;
-        return ('unsatisfiable') if $last == 0 || $size == 0;
+        return ('unsatisfiable') if $last == 0;
+        return () if $size == 0;    # satisfiable, and it selects all of nothing: the whole file
         return ($last >= $size ? 0 : $size - $last, $size - 1);
     }
     return () if length $last && $last < $first;    # invalid: ignored
@@ -412,8 +413,14 @@ file's end.
 
 =item *
 
-A range starting past the end, or any range of an empty file:
-C<416 Range Not Satisfiable>, with C<Content-Range: bytes */SIZE>.
+A range starting at or past the end (C<bytes=0-> of an empty file too), or
+the last zero bytes (C<bytes=-0>): C<416 Range Not Satisfiable>, with
+C<Content-Range: bytes */SIZE>.
+
+=item *
+
+The last N bytes of an empty file: the whole file, a 200 of length 0. RFC
+9110 counts that range satisfiable, and a 206 can't say zero bytes.
 
 =item *
 
