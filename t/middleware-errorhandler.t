@@ -50,6 +50,22 @@ package Local::NotAResponse {
     sub response_for { 'not a response' }
 }
 
+# Something that can be called, but isn't a Response: it has no status.
+package Local::Callable {
+    use Future::AsyncAwait;
+    sub new { bless {}, shift }
+    async sub call {
+        my ($self, $scope, $receive, $send) = @_;
+        await $send->({ type => 'http.response.start', status => 404, headers => [] });
+        await $send->({ type => 'http.response.body', body => '', more => 0 });
+    }
+}
+
+package Local::AnswersWithAnApp {
+    use parent -norequire, 'PAGI::Middleware::ErrorHandler';
+    sub response_for { Local::Callable->new }
+}
+
 # A layer that adds a header to every response start it sends on.
 package Local::AddHeader {
     use parent -norequire, 'PAGI::Middleware';
@@ -189,6 +205,12 @@ subtest 'an answer that dies: one error naming both' => sub {
     $res = PAGI::Test::Client->new(app => Local::NotAResponse->wrap(throws(http_error(status_code => 404))))->get('/');
     like $res->exception, qr/\Athe error handler's answer failed: .+ \(while answering: 404 Not Found\)\n\z/s,
         'an answer that is not a response fails the same way';
+
+    $res = PAGI::Test::Client->new(app => Local::AnswersWithAnApp->wrap(throws(http_error(status_code => 404))))
+        ->get('/');
+    is $res->status, 500, 'an answer with no status: nothing of it is sent';
+    like $res->exception, qr/\Athe error handler's answer failed: .+ \(while answering: 404 Not Found\)\n\z/s,
+        'and it fails the same way, the error it was answering named';
 };
 
 subtest 'an app that dies before returning a Future' => sub {

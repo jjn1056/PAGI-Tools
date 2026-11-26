@@ -7,6 +7,13 @@ use Carp ();
 use Scalar::Util ();
 use Class::Tiny qw(app);
 
+# An app given to new is made a code reference, as wrap makes one.
+sub BUILD {
+    my ($self, $args) = @_;
+    $self->{app} = _application($args->{app}) if exists $args->{app};
+    return;
+}
+
 # Plack's wrap: on an instance it sets app; on the class it builds one with
 # the options given after the app. Either way the result is the middleware
 # as an application, a code reference.

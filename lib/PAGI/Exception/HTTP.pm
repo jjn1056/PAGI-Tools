@@ -4,10 +4,9 @@ use v5.24;
 use warnings;
 use Carp ();
 use Class::Tiny;   # new, BUILDARGS and BUILD; the fields are this class's own
-# Its string is also its truth: never empty, never "0", as it starts with
-# the status, so it's always true and can fail a Future.
 use overload
     '""'     => \&_as_string,
+    bool     => sub { 1 },    # true without making its string, so it can always fail a Future
     fallback => 1;
 
 my %ARGUMENT = map { $_ => 1 } qw(status_code client_message headers cause);

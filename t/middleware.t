@@ -63,6 +63,14 @@ subtest 'an application provider is wrapped like a code reference' => sub {
     is ref $middleware->app, 'CODE', 'app is always the code reference';
 };
 
+subtest 'app given to new is a code reference too' => sub {
+    my $middleware = Local::Tag->new(app => Local::Provider->new, tag => 'e');
+    is ref $middleware->app, 'CODE', 'a provider given to new';
+    is get($middleware->to_app), 'e', 'and it runs';
+    like dies { Local::Tag->new(app => [], tag => 'x') },
+        qr/\Awrap takes an application: a code reference or an object with to_app/, 'new refuses the same';
+};
+
 subtest 'wrap refuses what is not an application' => sub {
     for my $value ([], undef, {}, 'a string') {
         like dies { Local::Tag->wrap($value, tag => 'x') },

@@ -78,11 +78,23 @@ subtest 'true, so it can fail a Future' => sub {
     is(($future->failure)[0], exact_ref($error), 'whose failure is the same object');
 };
 
-subtest 'reason phrases' => sub {
+subtest 'reason phrases, as the string shows them' => sub {
     my %phrase = (400 => 'Bad Request', 404 => 'Not Found', 418 => "I'm a teapot", 429 => 'Too Many Requests',
         451 => 'Unavailable For Legal Reasons', 500 => 'Internal Server Error', 503 => 'Service Unavailable',
         599 => 'Error');
-    is PAGI::Exception::HTTP::_reason_phrase($_), $phrase{$_}, "$_" for sort keys %phrase;
+    is "" . PAGI::Exception::HTTP->new(status_code => $_), "$_ $phrase{$_}", "$_" for sort keys %phrase;
+};
+
+package Local::BadCause {
+    use overload '""' => sub { die "cause string died\n" }, fallback => 1;
+    sub new { bless {}, shift }
+}
+
+subtest 'true even when its cause cannot be a string' => sub {
+    my $error = PAGI::Exception::HTTP->new(status_code => 503, cause => Local::BadCause->new);
+    ok lives { ok !!$error, 'true' }, 'without asking the cause for its string';
+    my $future = Future->fail($error);
+    is(($future->failure)[0], exact_ref($error), 'so it can fail a Future');
 };
 
 done_testing;

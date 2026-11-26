@@ -24,15 +24,20 @@ async sub call {
     my $error = $@;
     die $error if $scope->{'pagi.connection'}->response_started;
 
-    my $response;
+    # The answer's status is read before it's sent, inside the eval, so an
+    # answer that isn't a Response fails as C6 says, before sending anything.
+    my ($response, $server_error);
     my $answered = eval {
         $response = $self->response_for($error, $scope);
-        await $response->call($scope, $receive, $send) if $response;
+        if ($response) {
+            $server_error = $response->status >= 500;
+            await $response->call($scope, $receive, $send);
+        }
         1;
     };
     die _answer_failed($@, $error) unless $answered;
     die $error unless $response;
-    die $error if $response->status >= 500;
+    die $error if $server_error;
     return;
 }
 
