@@ -26,11 +26,12 @@ sub prepare {
     return;
 }
 
-# The status: yours, else 307 (as Starlette's): a redirect that keeps the
-# request's method and body.
+# The status: yours, else 302, the redirect most frameworks default to.
+# Browsers follow it with a GET, so it's safe after a form is posted; 307
+# would post the form again (Starlette's default, and its well-known trap).
 sub prepare_status {
     my ($self, $args) = @_;
-    my $status = $args->{status} // 307;
+    my $status = $args->{status} // 302;
     Carp::croak("status $status isn't a redirect: use 301, 302, 303, 307 or 308")
         unless $REDIRECT{$status};
     return $status;
@@ -133,7 +134,7 @@ bytes, not characters, or the URI trap above applies.
 
 =item status
 
-307 unless you give one, and one of the redirects:
+302 unless you give one, and one of the redirects:
 
     301 Moved Permanently     permanent; the method may change to GET
     302 Found                 temporary; the method may change to GET
@@ -141,8 +142,9 @@ bytes, not characters, or the URI trap above applies.
     307 Temporary Redirect    temporary; same method and body
     308 Permanent Redirect    permanent; same method and body
 
-After a form is posted, 303 sends the browser to GET a result page. Any
-other status dies.
+After a form is posted, 302 or 303 sends the browser to GET a result page;
+307 and 308 would post the form again to the new address, so give them only
+when that's what you want. Any other status dies.
 
 =item headers
 
@@ -161,7 +163,7 @@ Location.
 
 =head2 prepare_status
 
-The status you gave, else 307, refusing one that isn't a redirect.
+The status you gave, else 302, refusing one that isn't a redirect.
 
 =head2 prepare_body
 

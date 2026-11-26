@@ -18,9 +18,11 @@ sub location { get(PAGI::Response::Redirect->new(url => $_[0]))->header('locatio
     sub new { my ($class, $url) = @_; bless { url => $url }, $class }
 }
 
-subtest 'a redirect: 307 and a Location, no body' => sub {
+subtest 'a redirect: 302 and a Location, no body' => sub {
     my $res = get(PAGI::Response::Redirect->new(url => '/next'));
-    is $res->status, 307, '307 unless you give a status';
+    is $res->status, 302, '302 unless you give a status';
+    is get(PAGI::Response::Redirect->new(url => '/next', status => 307))->status, 307,
+        'the status option changes it: 307 to keep the method';
     is $res->header('location'), '/next', 'the Location';
     is [$res->content, $res->header('content-length')], ['', 0], 'no body';
     is get(PAGI::Response::Redirect->new(url => '/next', status => 303))->status, 303, 'a status you give';
