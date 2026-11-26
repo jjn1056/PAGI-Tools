@@ -39,35 +39,68 @@ subtest 'a type you give is sent as given' => sub {
         'application/problem+json', 'yours, with no charset added');
 };
 
-subtest 'content JSON cannot carry dies at new, with the encoder\'s own error' => sub {
-    like(dies { PAGI::Response::JSON->new(content => sub { 1 }) }, qr/\Aencountered CODE/, 'a code reference');
+my $PLAIN = qr/\AJSON content must be plain data \(hashes, arrays, strings, numbers, booleans\): flatten objects first, or give your response a json_encoder that converts them \(/;
+
+subtest 'content JSON cannot carry dies at new, saying what to give' => sub {
+    like(dies { PAGI::Response::JSON->new(content => sub { 1 }) }, qr/$PLAIN.*encountered CODE/s, 'a code reference');
     like(dies { PAGI::Response::JSON->new(content => { when => bless {}, 'Local::Plain' }) },
-        qr/\Aencountered object/, 'an object with no TO_JSON');
+        qr/$PLAIN.*encountered object/s, 'an object of a class with no subs');
 };
 
 {
-    package Local::Fails;
+    package Local::Row;
+    sub new { bless { id => 1 }, shift }
+    sub id  { $_[0]{id} }
+}
+
+{
+    package Local::User;
+    my $called = 0;
+    sub new { bless { name => $_[1], password => 'secret' }, $_[0] }
+    sub TO_JSON { $called++; return { name => $_[0]{name} } }
+    sub called { $called }
+}
+
+{
+    package Local::Stringy;
+    use overload '""' => sub { 'a string' };
+    sub new { bless {}, shift }
+}
+
+subtest 'objects are not data: each dies, the first time, whatever it has' => sub {
+    like(dies { PAGI::Response::JSON->new(content => { row => Local::Row->new }) }, $PLAIN,
+        'an object of a class with methods: dies the first time, not null');
+    like(dies { PAGI::Response::JSON->new(content => { user => Local::User->new('ada') }) }, $PLAIN,
+        'an object with TO_JSON dies too: nothing is coerced');
+    is(Local::User->called, 0, 'and its TO_JSON is never called');
+    like(dies { PAGI::Response::JSON->new(content => [Local::Stringy->new]) }, $PLAIN,
+        'an object that stringifies: not stringified');
+};
+
+{
+    package Local::ObjectJSON;    # the POD's example, as written
+    use parent -norequire, 'PAGI::Response::JSON';
+    sub json_encoder { return JSON::PP->new->utf8->allow_nonref->convert_blessed }
+}
+
+{
+    package Local::Refusing;
     sub new { bless { error => $_[1] }, $_[0] }
     sub TO_JSON { die $_[0]{error} }
 }
 
-subtest 'a TO_JSON that dies: its own error, untouched' => sub {
-    is(dies { PAGI::Response::JSON->new(content => { user => Local::Fails->new("no user today\n") }) },
-        "no user today\n", 'a message');
+subtest 'an encoder of your own that converts objects' => sub {
+    require JSON::PP;
+    is(Local::ObjectJSON->new(content => [Local::User->new('ada')])->body, '[{"name":"ada"}]', 'through TO_JSON');
+    like(dies { Local::ObjectJSON->new(content => [Local::Row->new]) }, $PLAIN, 'one without TO_JSON still dies');
     my $exception = bless { reason => 'gone' }, 'Local::Exception';
-    is(dies { PAGI::Response::JSON->new(content => [Local::Fails->new($exception)]) }, exact_ref($exception),
-        'an exception object, the same object');
+    is(dies { Local::ObjectJSON->new(content => [Local::Refusing->new($exception)]) }, exact_ref($exception),
+        "an exception object its TO_JSON throws goes on as it is");
 };
 
-{
-    package Local::User;
-    sub new { bless { name => $_[1], password => 'secret' }, $_[0] }
-    sub TO_JSON { return { name => $_[0]{name} } }
-}
-
-subtest 'an object with TO_JSON is sent as what TO_JSON returns' => sub {
-    is(PAGI::Response::JSON->new(content => { user => Local::User->new('ada') })->body, '{"user":{"name":"ada"}}',
-        'its TO_JSON, which leaves the password out');
+subtest 'booleans are data' => sub {
+    is(PAGI::Response::JSON->new(content => [JSON::MaybeXS::true(), JSON::MaybeXS::false(), \1, \0])->body,
+        '[true,false,true,false]', "JSON's booleans, and \\1 and \\0");
 };
 
 {
@@ -79,7 +112,13 @@ subtest 'an object with TO_JSON is sent as what TO_JSON returns' => sub {
 subtest 'json_encoder: the encoder the body is made with, a subclass gives its own' => sub {
     my $encoder = PAGI::Response::JSON->json_encoder;
     is $encoder->encode({ name => "\x{e9}" }), qq({"name":"\xc3\xa9"}), 'the class encoder: UTF-8 bytes';
-    is $encoder->encode(Local::User->new('ada')), '{"name":"ada"}', 'and TO_JSON';
+    {
+        package Local::ConvertingJSON;
+        use parent -norequire, 'PAGI::Response::JSON';
+        sub json_encoder { return JSON::MaybeXS->new(utf8 => 1, convert_blessed => 1) }
+    }
+    is(Local::ConvertingJSON->new(content => { user => Local::User->new('ada') })->body, '{"user":{"name":"ada"}}',
+        'an encoder of your own can convert objects: here, through TO_JSON');
     is(Local::SortedJSON->new(content => { b => 2, a => 1, c => 3 })->body, '{"a":1,"b":2,"c":3}',
         "a subclass's encoder is the one used: its keys sorted");
     PAGI::Response::JSON->json_encoder->pretty(1);

@@ -10,9 +10,10 @@ sub default_content_type { return 'application/x-ndjson' }
 # JSON's settings, so the two formats encode alike.
 sub json_encoder { return PAGI::Response::JSON->json_encoder }
 
+# JSON's encoding, and its error when an item isn't plain data.
 sub format_item {
     my ($self, $item) = @_;
-    return $self->json_encoder->encode($item) . "\n";
+    return PAGI::Response::JSON::_encode($self->json_encoder, $item) . "\n";
 }
 
 1;
@@ -50,11 +51,11 @@ line, and C<undef> is C<null>. The type is C<application/x-ndjson> unless you
 give one. Everything else, the body, the writer, the end and C<on_close>, is
 Stream's.
 
-A value JSON can't encode, a code reference say, dies in the body, and the
-stream ends C<failed>, as any body that dies does. Give an object a
-C<TO_JSON> to say how it's sent: without one, what happens depends on the
-JSON backend JSON::MaybeXS picks (Cpanel::JSON::XS sends C<null>, JSON::PP
-dies), as it does for L<PAGI::Response::JSON>.
+Items are plain data, as L<PAGI::Response::JSON>'s content is: an object,
+whatever methods it has, or a code reference, dies in the body with JSON's
+message, and the stream ends C<failed>, as any body that dies does. Turn an
+object into data before you write it, or give the response an encoder that
+converts objects (L</json_encoder>).
 
 NDJSON is also Stream's example of a format: a default type and a
 C<format_item>. See L<PAGI::Response::Stream/SUBCLASSING> to make one of your
@@ -73,9 +74,10 @@ C<$value> as JSON from C<json_encoder>, then a newline.
     my $encoder = $response->json_encoder;
 
 The JSON encoder, the same one L<PAGI::Response::JSON> uses: UTF-8 output,
-any JSON value (not only objects and arrays), and a blessed object through
-its C<TO_JSON>. Object keys come out in no particular order. To change the
-settings, sorted keys say, override it:
+any JSON value (not only objects and arrays), and no object conversion.
+Object keys come out in no particular order. To change the settings, sorted
+keys or a JSON module of your choosing say, override it, as described under
+L<PAGI::Response::JSON/json_encoder>:
 
     package Sorted::NDJSON {
         use v5.40;

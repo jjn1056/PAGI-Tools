@@ -46,11 +46,20 @@ subtest 'characters, sent as UTF-8' => sub {
     is $res->content, qq({"city":"Z\xc3\xbcrich"}\n), 'the UTF-8 bytes';
 };
 
-subtest 'TO_JSON encodes an object; a value JSON cannot encode ends the stream failed' => sub {
-    my $res = get(PAGI::Response::NDJSON->new(body => writes(Local::Point->new(x => 1, y => 2))));
-    is $res->content, "[1,2]\n", 'through TO_JSON';
-
+subtest 'an item that is not plain data ends the stream failed' => sub {
     my $outcome;
+    # stream, not get: get answers any failure before the end with its 500.
+    my $res = PAGI::Test::Client->new(app => PAGI::Response::NDJSON->new(body => async sub {
+        my ($writer) = @_;
+        $writer->on_close(sub { $outcome = $_[0]->outcome });
+        await $writer->write_item({ ok => 1 });
+        await $writer->write_item(Local::Point->new(x => 1, y => 2));
+    }))->stream('/')->response;
+    is $outcome, 'failed', 'an object, even with TO_JSON: outcome failed, not converted';
+    is $res->content, qq({"ok":1}\n), 'the items before it were sent';
+    like $res->exception, qr/\AJSON content must be plain data/, "and JSON's message";
+
+    undef $outcome;
     $res = get(PAGI::Response::NDJSON->new(body => async sub {
         my ($writer) = @_;
         $writer->on_close(sub { $outcome = $_[0]->outcome });
