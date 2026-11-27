@@ -13,11 +13,11 @@ async sub call {
     die "Unsupported scope type: $scope->{type}\n" unless $scope->{type} eq 'websocket';
     my $conn = $scope->{'pagi.connection'};
 
-    # The first event is websocket.connect, unless the client went away
-    # during the handshake: then it's websocket.disconnect, and there's
-    # nothing to accept.
+    # Go on only with websocket.connect. The one other first event is
+    # websocket.disconnect, from a client that went away during the
+    # handshake: there's nothing to accept.
     my $event = await $receive->();
-    return if $event->{type} eq 'websocket.disconnect';
+    return unless $event->{type} eq 'websocket.connect';
     await $send->({ type => 'websocket.accept' });
     $self->on_connect->($scope) if $self->on_connect;
 
