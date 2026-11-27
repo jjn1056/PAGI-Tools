@@ -30,6 +30,25 @@ subtest 'echoes bytes as bytes' => sub {
     });
 };
 
+subtest '"bye": the app closes the connection' => sub {
+    my $ws = client()->websocket('/');
+    $ws->send_text('hello');
+    is $ws->receive_text, 'hello', 'echoes until then';
+    $ws->send_text('bye');
+    $ws->pump;
+    ok $ws->is_closed, 'then closes';
+    is $ws->close_code, 1000, 'a normal close';
+};
+
+subtest '"bye" as bytes is a message like any other' => sub {
+    client()->websocket('/', sub {
+        my ($ws) = @_;
+        $ws->send_bytes('bye');
+        is $ws->receive_bytes, 'bye', 'echoed';
+        ok !$ws->is_closed, 'still open';
+    });
+};
+
 subtest 'the client closes: the session ends cleanly' => sub {
     my $ws = client()->websocket('/');
     ok lives { $ws->close(1001, 'going away') }, 'no error from the app';

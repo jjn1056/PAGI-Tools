@@ -18,25 +18,24 @@ async sub call {
     return unless $event->{type} eq 'websocket.connect';
     await $send->({ type => 'websocket.accept' });
 
-    # The session, run until the connection ends: the client closes, the
-    # connection fails, or the server ends it. An echo would end the same
-    # way without run_until_end, since every end reaches the receive as a
-    # disconnect; it's here because it's how every WebSocket session runs,
-    # and the first thing you add when you copy this, a Close of your own,
-    # is what it guards (send it after, only if $conn->is_connected).
+    # The session, run until the connection ends (the client closes, the
+    # connection fails, or the server ends it) or the client says "bye".
     my $conn = $scope->{'pagi.connection'};
     await $conn->run_until_end(async sub {
         while (1) {
             my $frame = await $receive->();
-            return if $frame->{type} eq 'websocket.disconnect';
+            return if $frame->{type} eq 'websocket.disconnect';    # the connection ended
+            return if ($frame->{text} // '') eq 'bye';              # we're done
             my $key = exists $frame->{text} ? 'text' : 'bytes';
             await $send->({ type => 'websocket.send', $key => $frame->{$key} });
         }
     });
 
-    # No Close of ours to send: an echo never ends a session itself, and
-    # this point is reached only once the connection has ended. A client's
-    # Close is answered by the server.
+    # Our Close, sent once, after the session, and only if the connection is
+    # still up: the session ended on "bye". If the connection ended instead,
+    # there's nothing to close, and a client's Close is answered by the
+    # server.
+    await $send->({ type => 'websocket.close', code => 1000 }) if $conn->is_connected;
     return;
 }
 
@@ -57,7 +56,8 @@ PAGI::App::WebSocket::Echo - A WebSocket that sends every message back
 
     PAGI::App::WebSocket::Echo->new;
 
-Serve it, and anything a client sends comes straight back.
+Serve it, and anything a client sends comes straight back, until it sends
+the text C<bye>: then the echo closes the connection.
 
 =head1 INHERITANCE
 
@@ -70,23 +70,35 @@ Serve it, and anything a client sends comes straight back.
 Every WebSocket client needs something to talk to while you build it, and an
 echo is the simplest thing that answers. This is that, ready made: point your
 client at it to check that it connects, that text comes back as text and
-bytes as bytes, and that it closes cleanly.
+bytes as bytes, and that it closes cleanly, whether your client closes or
+the server does.
 
 =head1 DESCRIPTION
 
 It reads the client's C<websocket.connect>, accepts, then sends each message
-back as it came, text as text and bytes as bytes, until the connection ends:
-the client closes it, it fails, or the server ends it. It never closes the
-connection itself, and needs no Close of its own: it returns only once the
-connection has ended, and the server answers a client's Close. A client gone
-before the accept (its first event is C<websocket.disconnect>, not
-C<websocket.connect>) is left alone: nothing is sent. It refuses any scope
-but C<websocket>.
+back as it came, text as text and bytes as bytes, until one of two things
+ends the session:
+
+=over 4
+
+=item * the client sends the text C<bye>. The echo closes the connection,
+with code 1000. (C<bye> sent as bytes is echoed like any other message.)
+
+=item * the connection ends: the client closes it, it fails, or the server
+ends it. There's nothing left to close then, and a client's Close is
+answered by the server.
+
+=back
+
+A client gone before the accept (its first event is C<websocket.disconnect>,
+not C<websocket.connect>) is left alone: nothing is sent. It refuses any
+scope but C<websocket>.
 
 The session runs in C<pagi.connection>'s C<run_until_end>, as every
-WebSocket session does (see L<PAGI::Spec::Www>). An app that closes the
-connection itself sends its C<websocket.close> after that call, only if
-C<< $conn->is_connected >> is still true.
+WebSocket session does (see L<PAGI::Spec::Www>), and the echo's Close is
+sent once, after that call, only if C<< $conn->is_connected >> is still
+true: so it's sent when the session ended on C<bye>, and not when the
+connection had already ended.
 
 It takes no arguments. To do more, watch connections come and go, say, copy
 it: it's short, and written to be the shape a WebSocket app starts from.
