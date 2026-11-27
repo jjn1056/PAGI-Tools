@@ -13,8 +13,11 @@ async sub call {
     die "Unsupported scope type: $scope->{type}\n" unless $scope->{type} eq 'websocket';
     my $conn = $scope->{'pagi.connection'};
 
+    # The first event is websocket.connect, unless the client went away
+    # during the handshake: then it's websocket.disconnect, and there's
+    # nothing to accept.
     my $event = await $receive->();
-    die "Expected websocket.connect, got $event->{type}\n" unless $event->{type} eq 'websocket.connect';
+    return if $event->{type} eq 'websocket.disconnect';
     await $send->({ type => 'websocket.accept' });
     $self->on_connect->($scope) if $self->on_connect;
 
@@ -78,7 +81,9 @@ bytes as bytes, and that it closes cleanly.
 It reads the client's C<websocket.connect>, accepts, then sends each message
 back as it came, text as text and bytes as bytes, until the connection ends:
 the client closes it, it fails, or the server ends it. It never closes the
-connection itself. It refuses any scope but C<websocket>.
+connection itself. A client gone before the accept (its first event is
+C<websocket.disconnect>, not C<websocket.connect>) is left alone: nothing is
+sent, and neither callback is called. It refuses any scope but C<websocket>.
 
 The session runs in C<pagi.connection>'s C<run_until_end>, as every
 WebSocket session does (see L<PAGI::Spec::Www>). An app that closes the

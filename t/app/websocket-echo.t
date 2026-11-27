@@ -52,11 +52,15 @@ subtest 'on_disconnect when the connection fails: 1006, and why on the connectio
     is $got[0]{'pagi.connection'}->disconnect_reason, 'read_error', "and the connection says why";
 };
 
-subtest 'expects websocket.connect first' => sub {
-    my $app = PAGI::App::WebSocket::Echo->new->to_app;
-    my @events = ({ type => 'websocket.receive', text => 'x' }, { type => 'websocket.disconnect', code => 1000 });
-    like(dies { $app->({ type => 'websocket' }, sub { Future->done(shift @events) }, sub { Future->done })->get },
-        qr/\AExpected websocket\.connect, got websocket\.receive\n/, 'says what came instead');
+subtest 'a client gone before the accept: nothing sent, no callbacks' => sub {
+    my (@sent, $called);
+    my $app = PAGI::App::WebSocket::Echo->new(on_connect => sub { $called++ }, on_disconnect => sub { $called++ });
+    ok lives {
+        $app->to_app->({ type => 'websocket' }, sub { Future->done({ type => 'websocket.disconnect', code => 1006 }) },
+            sub { push @sent, shift; Future->done })->get;
+    }, 'it returns, without an error';
+    is \@sent, [], 'no accept';
+    is $called, undef, 'neither callback: it never connected';
 };
 
 subtest 'refuses anything but a WebSocket' => sub {
