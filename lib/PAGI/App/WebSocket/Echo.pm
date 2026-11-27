@@ -11,7 +11,6 @@ use Future::AsyncAwait;
 async sub call {
     my ($self, $scope, $receive, $send) = @_;
     die "Unsupported scope type: $scope->{type}\n" unless $scope->{type} eq 'websocket';
-    my $conn = $scope->{'pagi.connection'};
 
     # Go on only with websocket.connect. The one other first event is
     # websocket.disconnect, from a client that went away during the
@@ -27,6 +26,7 @@ async sub call {
     # disconnect; it's here because it's how every WebSocket session runs,
     # and the first thing you add when you copy this, a Close of your own,
     # is what it guards (send it after, only if $conn->is_connected).
+    my $conn = $scope->{'pagi.connection'};
     await $conn->run_until_end(async sub {
         while (1) {
             my $frame = await $receive->();
