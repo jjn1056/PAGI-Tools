@@ -8,7 +8,7 @@ use Digest::MD5 ();
 use Encode ();
 use File::Spec;
 use Future::AsyncAwait;
-use overload ();
+use PAGI::Utils ();
 
 my %MIME_TYPE = (
     html => 'text/html', htm => 'text/html', css => 'text/css', js => 'application/javascript',
@@ -29,13 +29,13 @@ my %OWNED = map { $_ => 1 } qw(content-length content-range etag last-modified);
 # request, in call, so a file replaced on disk is served as it is now.
 sub prepare {
     my ($self, $args) = @_;
-    my $path = _string($args->{path}, 'path');
+    my $path = PAGI::Utils::as_string($args->{path}, 'path');
     Carp::croak('path is required: the absolute path of the file to send')
         unless defined $path && length $path;
     Carp::croak('path contains a NUL byte') if $path =~ /\0/;
     Carp::croak("path must be absolute: the server opens it, not your working directory (use File::Spec->rel2abs)")
         unless File::Spec->file_name_is_absolute($path);
-    my $filename = _string($args->{filename}, 'filename');
+    my $filename = PAGI::Utils::as_string($args->{filename}, 'filename');
     Carp::croak('filename contains a control character')
         if defined $filename && $filename =~ /[\x00-\x1F\x7F]/;
     for my $header (@{ $args->{headers} // [] }) {
@@ -205,15 +205,6 @@ sub _request_header {
     return @values ? join(', ', @values) : undef;
 }
 
-# A value as a string: undef stays undef, an object that overloads
-# stringification is its string, any other reference croaks.
-sub _string {
-    my ($value, $name) = @_;
-    return undef unless defined $value;
-    Carp::croak("$name must be a string, or an object that stringifies")
-        if ref $value && !overload::Method($value, '""');
-    return "$value";
-}
 
 # The type a name's extension is known for, else undef.
 sub _known_type {

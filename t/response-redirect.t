@@ -53,7 +53,8 @@ subtest 'a line break cannot start a header of its own' => sub {
 subtest 'what new refuses' => sub {
     like dies { PAGI::Response::Redirect->new }, qr/\Aurl is required: /, 'no url';
     like dies { PAGI::Response::Redirect->new(url => '') }, qr/\Aurl is required: /, 'an empty url';
-    like dies { PAGI::Response::Redirect->new(url => []) }, qr/\Aurl must be a string, or an object that stringifies/,
+    like dies { PAGI::Response::Redirect->new(url => []) },
+        qr/\Aurl must be a string, or an object that stringifies at \Q${\ __FILE__}\E line/,
         'a plain reference';
     for my $status (200, 304, 404) {
         like dies { PAGI::Response::Redirect->new(url => '/x', status => $status) },

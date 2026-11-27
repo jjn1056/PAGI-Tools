@@ -68,8 +68,10 @@ subtest 'an object that stringifies: its string, encoded' => sub {
 };
 
 subtest 'content that is not text dies at new' => sub {
-    like(dies { PAGI::Response::Text->new(content => []) }, qr/pass a string/, 'an array reference');
-    like(dies { PAGI::Response::Text->new(content => bless {}, 'Local::Plain') }, qr/pass a string/,
+    like(dies { PAGI::Response::Text->new(content => []) },
+        qr/\Acontent must be a string, or an object that stringifies at \Q${\ __FILE__}\E line/,
+        'an array reference: says what to give, at your line');
+    like(dies { PAGI::Response::Text->new(content => bless {}, 'Local::Plain') }, qr/\Acontent must be a string/,
         'an object that does not stringify');
     is(dies { PAGI::Response::Text->new(content => Local::Broken->new) }, "no name today\n",
         "an object whose stringification dies: its own error, untouched");
@@ -93,7 +95,7 @@ subtest 'content that is not text dies at new' => sub {
 subtest 'as_text and encode_text: the body in two steps, a subclass overrides either' => sub {
     is(PAGI::Response::Text->as_text(undef), '', 'as_text: no content is empty');
     is(PAGI::Response::Text->as_text(Local::Name->new), "Jos\x{e9}", 'as_text: an object that stringifies, as characters');
-    like(dies { PAGI::Response::Text->as_text([]) }, qr/pass a string/, 'as_text: any other reference dies');
+    like(dies { PAGI::Response::Text->as_text([]) }, qr/\Acontent must be a string/, 'as_text: any other reference dies');
     is(PAGI::Response::Text->encode_text("Jos\x{e9}"), "Jos\xc3\xa9", 'encode_text: characters as UTF-8 bytes');
     like(dies { PAGI::Response::Text->encode_text("\x{D800}") }, qr/does not map to UTF-8/,
         "encode_text: a character UTF-8 can't carry dies");

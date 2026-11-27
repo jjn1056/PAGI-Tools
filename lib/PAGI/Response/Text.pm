@@ -5,7 +5,7 @@ use warnings;
 use parent 'PAGI::Response';
 use Carp ();
 use Encode ();
-use overload ();
+use PAGI::Utils ();
 
 # The body: the content made into text, then encoded as UTF-8.
 sub prepare_body {
@@ -17,10 +17,7 @@ sub prepare_body {
 # stringifies is its string. Any other reference isn't text.
 sub as_text {
     my ($self, $content) = @_;
-    return '' unless defined $content;
-    Carp::croak('content must be text: pass a string, or an object that stringifies')
-        if ref $content && !overload::Method($content, '""');
-    return "$content";
+    return PAGI::Utils::as_string($content, 'content') // '';
 }
 
 # Characters as UTF-8 bytes. A character UTF-8 can't carry (a lone

@@ -5,17 +5,15 @@ use warnings;
 use parent 'PAGI::Response';
 use Carp ();
 use Encode ();
-use overload ();
+use PAGI::Utils ();
 
 my %REDIRECT = map { $_ => 1 } qw(301 302 303 307 308);
 
 sub prepare {
     my ($self, $args) = @_;
-    my $url = $args->{url};
-    Carp::croak('url must be a string, or an object that stringifies')
-        if ref $url && !overload::Method($url, '""');
+    my $url = PAGI::Utils::as_string($args->{url}, 'url');
     Carp::croak('url is required: where to send the client')
-        unless defined $url && length "$url";
+        unless defined $url && length $url;
     Carp::croak('a redirect has no body: give url, not content') if exists $args->{content};
     for my $header (@{ $args->{headers} // [] }) {
         (my $name = $header->[0]) =~ tr/A-Z/a-z/;

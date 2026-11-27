@@ -36,7 +36,7 @@ subtest 'a content type of your own' => sub {
 };
 
 subtest 'content that is not text dies at new' => sub {
-    like dies { PAGI::Response::HTML->new(content => []) }, qr/\Acontent must be text: /,
+    like dies { PAGI::Response::HTML->new(content => []) }, qr/\Acontent must be a string, or an object that stringifies at \Q${\ __FILE__}\E line/,
         'a plain reference says what to give';
 };
 

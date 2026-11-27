@@ -104,6 +104,12 @@ subtest 'an empty file' => sub {
 subtest 'what new refuses' => sub {
     like dies { PAGI::Response::File->new }, qr/\Apath is required: /, 'no path';
     like dies { PAGI::Response::File->new(path => 'report.pdf') }, qr/\Apath must be absolute: /, 'a relative path';
+    like dies { PAGI::Response::File->new(path => []) },
+        qr/\Apath must be a string, or an object that stringifies at \Q${\ __FILE__}\E line/,
+        'a reference: says what to give, at your line';
+    like dies { PAGI::Response::File->new(path => '/x', filename => {}) },
+        qr/\Afilename must be a string, or an object that stringifies at \Q${\ __FILE__}\E line/,
+        'a filename reference too';
     like dies { PAGI::Response::File->new(path => "/srv/a\0b") }, qr/\Apath contains a NUL byte/, 'a NUL byte';
     like dies { PAGI::Response::File->new(path => $report, filename => "a\nb") },
         qr/\Afilename contains a control character/, 'a control character in the filename';
