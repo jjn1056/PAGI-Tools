@@ -39,12 +39,14 @@ subtest 'a type you give is sent as given' => sub {
         'application/problem+json', 'yours, with no charset added');
 };
 
-my $PLAIN = qr/\AJSON content must be plain data \(hashes, arrays, strings, numbers, booleans\): flatten objects first, or give your response a json_encoder that converts them \(/;
+# What the encoder dies with, on every backend JSON::MaybeXS picks: its own
+# words, not ours.
+my $OBJECT = qr/\Aencountered object '/;
 
-subtest 'content JSON cannot carry dies at new, saying what to give' => sub {
-    like(dies { PAGI::Response::JSON->new(content => sub { 1 }) }, qr/$PLAIN.*encountered CODE/s, 'a code reference');
-    like(dies { PAGI::Response::JSON->new(content => { when => bless {}, 'Local::Plain' }) },
-        qr/$PLAIN.*encountered object/s, 'an object of a class with no subs');
+subtest 'content JSON cannot carry dies at new, with the encoder\'s own error' => sub {
+    like(dies { PAGI::Response::JSON->new(content => sub { 1 }) }, qr/\Aencountered CODE/, 'a code reference');
+    like(dies { PAGI::Response::JSON->new(content => { when => bless {}, 'Local::Plain' }) }, $OBJECT,
+        'an object of a class with no subs');
 };
 
 {
@@ -68,12 +70,12 @@ subtest 'content JSON cannot carry dies at new, saying what to give' => sub {
 }
 
 subtest 'objects are not data: each dies, the first time, whatever it has' => sub {
-    like(dies { PAGI::Response::JSON->new(content => { row => Local::Row->new }) }, $PLAIN,
+    like(dies { PAGI::Response::JSON->new(content => { row => Local::Row->new }) }, $OBJECT,
         'an object of a class with methods: dies the first time, not null');
-    like(dies { PAGI::Response::JSON->new(content => { user => Local::User->new('ada') }) }, $PLAIN,
+    like(dies { PAGI::Response::JSON->new(content => { user => Local::User->new('ada') }) }, $OBJECT,
         'an object with TO_JSON dies too: nothing is coerced');
     is(Local::User->called, 0, 'and its TO_JSON is never called');
-    like(dies { PAGI::Response::JSON->new(content => [Local::Stringy->new]) }, $PLAIN,
+    like(dies { PAGI::Response::JSON->new(content => [Local::Stringy->new]) }, $OBJECT,
         'an object that stringifies: not stringified');
 };
 
@@ -92,10 +94,37 @@ subtest 'objects are not data: each dies, the first time, whatever it has' => su
 subtest 'an encoder of your own that converts objects' => sub {
     require JSON::PP;
     is(Local::ObjectJSON->new(content => [Local::User->new('ada')])->body, '[{"name":"ada"}]', 'through TO_JSON');
-    like(dies { Local::ObjectJSON->new(content => [Local::Row->new]) }, $PLAIN, 'one without TO_JSON still dies');
+    like(dies { Local::ObjectJSON->new(content => [Local::Row->new]) }, $OBJECT, 'one without TO_JSON still dies');
     my $exception = bless { reason => 'gone' }, 'Local::Exception';
     is(dies { Local::ObjectJSON->new(content => [Local::Refusing->new($exception)]) }, exact_ref($exception),
         "an exception object its TO_JSON throws goes on as it is");
+};
+
+{
+    package Local::FriendlyJSON;    # the POD's example of encode_json, as written
+    use parent -norequire, 'PAGI::Response::JSON';
+    sub encode_json {
+        my ($self, $data) = @_;
+        my $json = eval { $self->SUPER::encode_json($data) };
+        return $json if defined $json;
+        die "Send plain data: flatten objects first ($@)";
+    }
+}
+
+subtest 'encode_json: the hook every body is encoded through' => sub {
+    is(PAGI::Response::JSON->new(content => { a => 1 })->encode_json([1, 'two']), '[1,"two"]',
+        'the content as JSON, with json_encoder');
+    is(Local::FriendlyJSON->new(content => { a => 1 })->body, '{"a":1}', 'a subclass of it encodes as before');
+    like(dies { Local::FriendlyJSON->new(content => [Local::Row->new]) },
+        qr/\ASend plain data: flatten objects first \(encountered object '/, 'and can say its own thing on failure');
+};
+
+subtest 'JSON::MaybeXS is loaded only when the default encoder is made' => sub {
+    my $perl = $^X;
+    my $loaded = `"$perl" -Ilib -e "use PAGI::Response::JSON; print \\\$INC{'JSON/MaybeXS.pm'} ? 'yes' : 'no'"`;
+    is $loaded, 'no', 'not by loading the class';
+    $loaded = `"$perl" -Ilib -e "use PAGI::Response::JSON; PAGI::Response::JSON->json_encoder; print \\\$INC{'JSON/MaybeXS.pm'} ? 'yes' : 'no'"`;
+    is $loaded, 'yes', 'by json_encoder';
 };
 
 subtest 'booleans are data' => sub {

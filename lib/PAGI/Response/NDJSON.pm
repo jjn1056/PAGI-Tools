@@ -10,10 +10,17 @@ sub default_content_type { return 'application/x-ndjson' }
 # JSON's settings, so the two formats encode alike.
 sub json_encoder { return PAGI::Response::JSON->json_encoder }
 
-# JSON's encoding, and its error when an item isn't plain data.
+# One item: its JSON, then a newline.
 sub format_item {
     my ($self, $item) = @_;
-    return PAGI::Response::JSON::_encode($self->json_encoder, $item) . "\n";
+    return $self->encode_json($item) . "\n";
+}
+
+# An item as JSON, with json_encoder, as PAGI::Response::JSON's does. A
+# failure is the encoder's own error; a subclass overrides this to say more.
+sub encode_json {
+    my ($self, $data) = @_;
+    return $self->json_encoder->encode($data);
 }
 
 1;
@@ -52,10 +59,11 @@ give one. Everything else, the body, the writer, the end and C<on_close>, is
 Stream's.
 
 Items are plain data, as L<PAGI::Response::JSON>'s content is: an object,
-whatever methods it has, or a code reference, dies in the body with JSON's
-message, and the stream ends C<failed>, as any body that dies does. Turn an
-object into data before you write it, or give the response an encoder that
-converts objects (L</json_encoder>).
+whatever methods it has, or a code reference, dies in the body with the
+encoder's own error, and the stream ends C<failed>, as any body that dies
+does. Turn an object into data before you write it, give the response an
+encoder that converts objects (L</json_encoder>), or say something of your
+own when one fails (L</encode_json>).
 
 NDJSON is also Stream's example of a format: a default type and a
 C<format_item>. See L<PAGI::Response::Stream/SUBCLASSING> to make one of your
@@ -67,7 +75,15 @@ own.
 
     my $line = $response->format_item($value);
 
-C<$value> as JSON from C<json_encoder>, then a newline.
+C<$value> as JSON from L</encode_json>, then a newline.
+
+=head2 encode_json
+
+    my $json = $response->encode_json($item);
+
+C<$item> as JSON, with L</json_encoder>, as L<PAGI::Response::JSON/encode_json>
+does: a failure is the encoder's own error. Override it, as shown there, to
+say more, or handle a failure some other way.
 
 =head2 json_encoder
 

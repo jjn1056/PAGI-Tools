@@ -3,8 +3,6 @@ package PAGI::Response::JSON;
 use v5.24;
 use warnings;
 use parent 'PAGI::Response';
-use Carp ();
-use JSON::MaybeXS ();
 
 # The encoder the body is made with, a new one each time, so changing one changes no
 # other response. UTF-8 bytes, as a body must be. allow_nonref: the body may
@@ -12,9 +10,11 @@ use JSON::MaybeXS ();
 # array, and not every backend JSON::MaybeXS picks allows that by default.
 # No object conversion: content is plain data, and an object dies, on every
 # backend. (convert_blessed would try TO_JSON, but Cpanel::JSON::XS then
-# sends the first object of a class without one as null.) A subclass gives
-# its own.
+# sends the first object of a class without one as null.) JSON::MaybeXS is
+# loaded here, not when the class is, so a subclass with an encoder of its
+# own needn't have it.
 sub json_encoder {
+    require JSON::MaybeXS;
     return JSON::MaybeXS->new(utf8 => 1, allow_nonref => 1);
 }
 
@@ -22,22 +22,14 @@ sub json_encoder {
 # content JSON can't carry dies there. undef is null.
 sub prepare_body {
     my ($self, $args) = @_;
-    return _encode($self->json_encoder, $args->{content});
+    return $self->encode_json($args->{content});
 }
 
-# Content as JSON with the encoder given, or a croak that says what JSON
-# takes and how to send objects, with the encoder's own words after. An
-# exception object (from an encoder of your own) goes on as it is.
-# NDJSON encodes its items with this too.
-sub _encode {
-    my ($encoder, $content) = @_;
-    my $json = eval { $encoder->encode($content) };
-    return $json if defined $json;
-    my $error = $@;
-    die $error if ref $error;
-    $error =~ s/ at \S+ line \d+\.?\n?\z//;
-    Carp::croak('JSON content must be plain data (hashes, arrays, strings, numbers, booleans): '
-        . "flatten objects first, or give your response a json_encoder that converts them ($error)");
+# Data as JSON, with json_encoder. A failure is the encoder's own error;
+# a subclass that wants to say more, or something else, overrides this.
+sub encode_json {
+    my ($self, $data) = @_;
+    return $self->json_encoder->encode($data);
 }
 
 # JSON is UTF-8 by definition (RFC 8259), so the type names no charset.
@@ -96,9 +88,9 @@ none) for C<null>, nested as deep as you like. Strings are characters,
 encoded as UTF-8. Object members come in no particular order, so don't rely
 on the bytes being the same from one run to the next.
 
-An object isn't data, so it dies at C<new>, the same on every JSON backend:
-JSON doesn't call its C<TO_JSON> or use its string. Turn it into data
-yourself, saying what it shows:
+An object isn't data, so it dies at C<new>, the same on every JSON backend,
+with the encoder's own error: JSON doesn't call its C<TO_JSON> or use its
+string. Turn it into data yourself, saying what it shows:
 
     PAGI::Response::JSON->new(content => { user => { name => $user->name } });   # not the password
 
@@ -129,21 +121,43 @@ C<application/problem+json> say, with no charset added.
 
     my $body = $response->prepare_body($args);
 
-The content as JSON, in UTF-8 bytes, as described under L</content>,
-encoded with L</json_encoder>.
+The content as JSON, in UTF-8 bytes, as described under L</content>, from
+L</encode_json>.
+
+=head2 encode_json
+
+    my $json = $response->encode_json($data);
+
+C<$data> as JSON, with L</json_encoder>. Every body is encoded through it.
+When the encoder fails, it dies with the encoder's own error, which names
+what it couldn't encode. A subclass that wants to say more, or handle the
+failure some other way, overrides it:
+
+    package FriendlyJSON {
+        use v5.40;
+        use parent 'PAGI::Response::JSON';
+
+        sub encode_json ($self, $data) {
+            my $json = eval { $self->SUPER::encode_json($data) };
+            return $json if defined $json;
+            die "Send plain data: flatten objects first ($@)";
+        }
+    }
 
 =head2 json_encoder
 
     my $encoder = PAGI::Response::JSON->json_encoder;
 
-The L<JSON::MaybeXS> object C<prepare_body> encodes with: C<utf8> and
+The L<JSON::MaybeXS> object L</encode_json> encodes with: C<utf8> and
 C<allow_nonref>. It's a new one each time, so changing the one you're given
-changes no response. A subclass that wants its own settings, sorted keys
-say, gives its own:
+changes no response. JSON::MaybeXS is loaded when this is called, not when
+the class is, so a subclass with an encoder of its own needn't have it. A
+subclass that wants its own settings, sorted keys say, gives its own:
 
     package SortedJSON {
         use v5.40;
         use parent 'PAGI::Response::JSON';
+        use JSON::MaybeXS ();
 
         sub json_encoder ($self) {
             return JSON::MaybeXS->new(utf8 => 1, allow_nonref => 1, canonical => 1);
@@ -168,9 +182,6 @@ time:
         }
     }
 
-When an encoder fails, the response dies saying what JSON takes, with the
-encoder's own words after. An exception object an encoder of yours throws,
-from a C<TO_JSON> say, goes on as it is.
 
 =head2 default_content_type
 

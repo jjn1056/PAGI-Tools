@@ -57,7 +57,7 @@ subtest 'an item that is not plain data ends the stream failed' => sub {
     }))->stream('/')->response;
     is $outcome, 'failed', 'an object, even with TO_JSON: outcome failed, not converted';
     is $res->content, qq({"ok":1}\n), 'the items before it were sent';
-    like $res->exception, qr/\AJSON content must be plain data/, "and JSON's message";
+    like $res->exception, qr/\Aencountered object '/, "and the encoder's own error";
 
     undef $outcome;
     $res = get(PAGI::Response::NDJSON->new(body => async sub {
@@ -67,6 +67,24 @@ subtest 'an item that is not plain data ends the stream failed' => sub {
     }));
     is $outcome, 'failed', 'a code reference: outcome failed';
     ok defined $res->exception, 'and the error reaches the caller';
+};
+
+{
+    package Local::FriendlyNDJSON;
+    use parent -norequire, 'PAGI::Response::NDJSON';
+    sub encode_json {
+        my ($self, $data) = @_;
+        my $json = eval { $self->SUPER::encode_json($data) };
+        return $json if defined $json;
+        die "Send plain data ($@)";
+    }
+}
+
+subtest 'encode_json: the hook each item is encoded through' => sub {
+    my $res = PAGI::Test::Client->new(app => Local::FriendlyNDJSON->new(body => writes({ ok => 1 }, Local::Point->new)))
+        ->stream('/')->response;
+    is $res->content, qq({"ok":1}\n), 'items encode as before';
+    like $res->exception, qr/\ASend plain data \(encountered object '/, "and a subclass says its own thing on failure";
 };
 
 subtest 'json_encoder: a subclass picks its settings' => sub {
