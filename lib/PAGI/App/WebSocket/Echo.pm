@@ -3,7 +3,6 @@ package PAGI::App::WebSocket::Echo;
 use v5.24;
 use warnings;
 use parent 'PAGI::App';
-use Class::Tiny qw(on_connect on_disconnect);
 use Future::AsyncAwait;
 
 # Accepts the connection, then sends back each message as it came, text as
@@ -18,7 +17,6 @@ async sub call {
     my $event = await $receive->();
     return unless $event->{type} eq 'websocket.connect';
     await $send->({ type => 'websocket.accept' });
-    $self->on_connect->($scope) if $self->on_connect;
 
     # The session, run until the connection ends: the client closes, the
     # connection fails, or the server ends it. An echo would end the same
@@ -36,11 +34,9 @@ async sub call {
         }
     });
 
-    # An echo never ends a session itself, so there's no Close of ours to
-    # send: the session ended with the connection. What the client sent, if
-    # anything, is on the connection, and disconnect_reason says why it
-    # ended otherwise.
-    $self->on_disconnect->($scope, $conn->close_code, $conn->close_reason) if $self->on_disconnect;
+    # No Close of ours to send: an echo never ends a session itself, and
+    # this point is reached only once the connection has ended. A client's
+    # Close is answered by the server.
     return;
 }
 
@@ -81,52 +77,19 @@ bytes as bytes, and that it closes cleanly.
 It reads the client's C<websocket.connect>, accepts, then sends each message
 back as it came, text as text and bytes as bytes, until the connection ends:
 the client closes it, it fails, or the server ends it. It never closes the
-connection itself. A client gone before the accept (its first event is
-C<websocket.disconnect>, not C<websocket.connect>) is left alone: nothing is
-sent, and neither callback is called. It refuses any scope but C<websocket>.
+connection itself, and needs no Close of its own: it returns only once the
+connection has ended, and the server answers a client's Close. A client gone
+before the accept (its first event is C<websocket.disconnect>, not
+C<websocket.connect>) is left alone: nothing is sent. It refuses any scope
+but C<websocket>.
 
 The session runs in C<pagi.connection>'s C<run_until_end>, as every
 WebSocket session does (see L<PAGI::Spec::Www>). An app that closes the
 connection itself sends its C<websocket.close> after that call, only if
 C<< $conn->is_connected >> is still true.
 
-=head1 CONSTRUCTOR ARGUMENTS
-
-Both are optional.
-
-=over 4
-
-=item on_connect
-
-A code reference, called with the scope once the connection is accepted.
-
-=item on_disconnect
-
-A code reference, called once the connection has ended, with the scope, then
-the close code and the reason the client sent: C<close_code> and
-C<close_reason> from the scope's C<pagi.connection>. When no Close came from
-the client, because the connection failed or the server ended it, they're
-C<1006> and undef, and C<< $scope->{'pagi.connection'}->disconnect_reason >>
-says why.
-
-=back
-
-=head1 COOKBOOK
-
-=head2 Seeing who comes and goes
-
-The two callbacks are enough to log connections while you test a client:
-
-    use v5.40;
-    use PAGI::App::WebSocket::Echo;
-
-    PAGI::App::WebSocket::Echo->new(
-        on_connect    => sub ($scope) { say "connected: $scope->{path}" },
-        on_disconnect => sub ($scope, $code, $reason) {
-            my $why = $scope->{'pagi.connection'}->disconnect_reason;
-            say "closed: $code", defined $reason ? " ($reason)" : '', defined $why ? ", $why" : '';
-        },
-    );
+It takes no arguments. To do more, watch connections come and go, say, copy
+it: it's short, and written to be the shape a WebSocket app starts from.
 
 =head1 SEE ALSO
 

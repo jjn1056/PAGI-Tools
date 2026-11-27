@@ -6,7 +6,7 @@ use PAGI::Test::Client;
 
 use PAGI::App::WebSocket::Echo;
 
-sub client { PAGI::Test::Client->new(app => PAGI::App::WebSocket::Echo->new(@_)) }
+sub client { PAGI::Test::Client->new(app => PAGI::App::WebSocket::Echo->new) }
 
 subtest 'a PAGI::App' => sub {
     isa_ok(PAGI::App::WebSocket::Echo->new, ['PAGI::App'], 'the object');
@@ -30,37 +30,27 @@ subtest 'echoes bytes as bytes' => sub {
     });
 };
 
-subtest 'on_connect gets the scope once the connection is accepted' => sub {
-    my $got;
-    client(on_connect => sub { $got = shift })->websocket('/chat', sub { });
-    is $got->{path}, '/chat', 'the scope';
+subtest 'the client closes: the session ends cleanly' => sub {
+    my $ws = client()->websocket('/');
+    ok lives { $ws->close(1001, 'going away') }, 'no error from the app';
+    ok $ws->is_closed, 'closed';
+    is [$ws->close_code, $ws->close_reason], [1001, 'going away'], "the client's own Close";
 };
 
-subtest 'on_disconnect when the client closes: its code and reason' => sub {
-    my @got;
-    my $ws = client(on_disconnect => sub { @got = @_ })->websocket('/chat');
-    $ws->close(1001, 'going away');
-    is $got[0]{path}, '/chat', 'the scope';
-    is [@got[1, 2]], [1001, 'going away'], "the client's close code and reason";
+subtest 'the connection fails: the session ends without an error' => sub {
+    my $ws = client()->websocket('/');
+    ok lives { $ws->simulate_abnormal_close(reason => 'read_error') }, 'no error from the app';
+    ok $ws->is_closed, 'closed';
 };
 
-subtest 'on_disconnect when the connection fails: 1006, and why on the connection' => sub {
-    my @got;
-    my $ws = client(on_disconnect => sub { @got = @_ })->websocket('/');
-    $ws->simulate_abnormal_close(reason => 'read_error');
-    is [@got[1, 2]], [1006, undef], 'no Close from the client: 1006 and no reason';
-    is $got[0]{'pagi.connection'}->disconnect_reason, 'read_error', "and the connection says why";
-};
-
-subtest 'a client gone before the accept: nothing sent, no callbacks' => sub {
-    my (@sent, $called);
-    my $app = PAGI::App::WebSocket::Echo->new(on_connect => sub { $called++ }, on_disconnect => sub { $called++ });
+subtest 'a client gone before the accept: nothing sent' => sub {
+    my @sent;
     ok lives {
-        $app->to_app->({ type => 'websocket' }, sub { Future->done({ type => 'websocket.disconnect', code => 1006 }) },
+        PAGI::App::WebSocket::Echo->new->to_app->({ type => 'websocket' },
+            sub { Future->done({ type => 'websocket.disconnect', code => 1006 }) },
             sub { push @sent, shift; Future->done })->get;
     }, 'it returns, without an error';
     is \@sent, [], 'no accept';
-    is $called, undef, 'neither callback: it never connected';
 };
 
 subtest 'refuses anything but a WebSocket' => sub {
